@@ -54,11 +54,16 @@ def wer(reference: str, hypothesis: str) -> float:
 
 # --- runner ----------------------------------------------------------------
 
-def run_backend(name: str, wav: Path, model: str, language: str | None) -> tuple[list[dict], float, float]:
-    from scribeloop_core.pipeline.asr import ChunkedFasterWhisper
+def run_backend(
+    name: str, wav: Path, model: str, model_dir: str | None, language: str | None
+) -> tuple[list[dict], float, float, float]:
+    """Returns (chunks, elapsed_s, first_chunk_s, audio_duration_s)."""
+    from scribeloop_core.pipeline.asr import ChunkedFasterWhisper, SherpaOnnxStreaming
 
     if name == "faster-whisper":
         backend = ChunkedFasterWhisper(model_size=model, language=language or None)
+    elif name == "sherpa-onnx":
+        backend = SherpaOnnxStreaming(model_dir=model_dir or _default_sherpa_dir())
     else:
         raise SystemExit(f"backend {name!r} not wired yet (available: {available_backends()})")
 
@@ -66,25 +71,36 @@ def run_backend(name: str, wav: Path, model: str, language: str | None) -> tuple
     chunks: list[dict] = []
     started = time.perf_counter()
     first_ts: float | None = None
+    audio_s = 0.0
     for frame in source.frames():
+        audio_s = (frame.t_ms + 100) / 1000.0  # last frame's end = file duration
         out = backend.feed(frame)
         if out and first_ts is None:
             first_ts = time.perf_counter() - started
         chunks.extend(out)
-    chunks.extend(backend.flush())
+    tail = backend.flush()
+    if tail and first_ts is None:
+        first_ts = time.perf_counter() - started
+    chunks.extend(tail)
     elapsed = time.perf_counter() - started
+    backend.close()
+    return chunks, elapsed, (first_ts or 0.0), audio_s
 
-    duration_ms = sum((c["end_ms"] - c["start_ms"]) for c in chunks)
-    # audio duration is better taken from the source timeline:
-    audio_ms = frame.t_ms + 100 if chunks else 0
-    return chunks, elapsed, (first_ts or 0.0), audio_ms / 1000.0
+
+def _default_sherpa_dir() -> str:
+    root = Path(__file__).resolve().parents[1]
+    return str(root / "models" / "sherpa-onnx-streaming-zipformer-en-2023-06-26")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wav", required=True, type=Path)
     parser.add_argument("--backend", default="faster-whisper", choices=available_backends())
-    parser.add_argument("--model", default="small")
+    parser.add_argument("--model", default="small", help="whisper model size (faster-whisper)")
+    parser.add_argument(
+        "--model-dir", default=None,
+        help="sherpa-onnx model dir (default: models/sherpa-onnx-streaming-zipformer-en-2023-06-26)",
+    )
     parser.add_argument("--language", default=None)
     parser.add_argument("--reference", type=Path, default=None,
                         help="ground-truth transcript for WER (§7 scoring protocol)")
@@ -94,18 +110,20 @@ def main() -> None:
         raise SystemExit(f"no such file: {args.wav}")
 
     chunks, elapsed, first_ts, audio_s = run_backend(
-        args.backend, args.wav, args.model, args.language
+        args.backend, args.wav, args.model, args.model_dir, args.language
     )
-    text = " ".join(c["text"] for c in chunks)
+    finals = [c for c in chunks if c["is_final"]]
+    partials = [c for c in chunks if not c["is_final"]]
+    text = " ".join(c["text"] for c in finals)
 
-    print(f"backend:        {args.backend} ({args.model})")
+    print(f"backend:        {args.backend} ({args.model if args.backend == 'faster-whisper' else args.model_dir or 'default model dir'})")
     print(f"audio duration: {audio_s:.1f} s")
     print(f"wall time:      {elapsed:.1f} s  ->  {audio_s / max(elapsed, 1e-9):.2f}x realtime")
     print(f"first chunk:    {first_ts:.2f} s after start")
-    print(f"chunks:         {len(chunks)}")
+    print(f"finals:         {len(finals)}   partials: {len(partials)}")
     if args.reference and args.reference.exists():
-        print(f"WER:            {wer(args.reference.read_text(encoding='utf-8'), text):.1%}")
-    print("--- transcript preview ---")
+        print(f"WER (finals):   {wer(args.reference.read_text(encoding='utf-8'), text):.1%}")
+    print("--- transcript (finals) ---")
     print(text[:600])
 
 

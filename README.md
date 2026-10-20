@@ -36,10 +36,17 @@ run on any dev machine using `WavFileSource` (WAV replay). The **platform captur
 (`macos_client` — Swift tap helper; `linux_pipewire` — GStreamer) are implemented and
 validated on their target OSes per Phase 0a. `capture/native/` holds the Swift helpers.
 
-## Phase 0a checklist (from ARCHITECTURE.md §8)
+## Phase 0a tasks (from ARCHITECTURE.md §8)
 
+- [x] Repo on GitHub (CI runs tests + import smoke on ubuntu/macos/windows)
 - [ ] Signed & notarized macOS build records loopback PCM; permission attributes to the Tauri bundle
-- [ ] ASR bake-off: `python scripts/bakeoff.py --wav <file> --backend faster-whisper` (+ sherpa-onnx, whisper.cpp)
+- [ ] ASR bake-off:
+      ```bash
+      python scripts/download_models.py sherpa-streaming-zipformer-en   # ~160 MB, into models/
+      python scripts/bakeoff.py --wav <meeting.wav> --backend sherpa-onnx
+      python scripts/bakeoff.py --wav <meeting.wav> --backend faster-whisper --model tiny
+      ```
+      (whisper.cpp / Moonshine measured on macOS/Linux hosts or separate harnesses)
 - [ ] Tauri vs pure-Python packaging decision (incl. GStreamer/PyGObject in AppImage/deb, llama-cpp-python wheels)
 - [ ] Online-diarization decision (diart → near-online chunked → DIY)
 - [ ] SQLCipher + sqlite-vec coexistence check; vec0 delete-scrub check
