@@ -1,0 +1,36 @@
+"""macOS capture client — talks to the Swift Core Audio tap helper.
+
+The Swift helper (``native/macos_tap``) owns the process-tap IOProc realtime
+callback (Python's GIL/GC must not sit on that thread — ARCHITECTURE.md §2.3)
+and pushes 16 kHz mono PCM to us over a local pipe. This module turns that
+byte stream into ``AudioFrame`` objects.
+
+macOS only — implemented and validated on a macOS host in Phase 0a
+(Signed & notarized build; ``NSAudioCaptureUsageDescription`` must live in the
+Tauri bundle — the responsible process; no public preflight API, so detect
+silent frames and guide the user).
+"""
+from __future__ import annotations
+
+from typing import Iterator
+
+from .source import AudioFrame
+
+
+class MacOSTapSource:
+    """Core Audio process-tap source (macOS 14.2+), via the Swift helper."""
+
+    stream = "loopback"
+
+    def __init__(self, pid_or_bundle_ids: list[str] | None = None) -> None:
+        """Target specific processes (e.g. the meeting app) or None for system-wide."""
+        raise NotImplementedError(
+            "MacOSTapSource is implemented on macOS hosts in Phase 0a — "
+            "see capture/native/macos_tap/ and ARCHITECTURE.md §2/§9."
+        )
+
+    def frames(self) -> Iterator[AudioFrame]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError

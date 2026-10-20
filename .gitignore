@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Runtime data — NEVER commit recordings, transcripts, or model weights
+audio/*
+!audio/.gitkeep
+data/
+models/
+*.wav
+*.flac
+
+# Env & secrets
+.env
+*.token
+
+# Pip logs from the detached-install workflow
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
