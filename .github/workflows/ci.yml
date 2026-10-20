@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Core is platform-independent (tests use WAV replay, no audio hardware) —
+    # ARCHITECTURE.md §3/§8. Platform capture (macOS tap / Linux GStreamer)
+    # is validated on real hosts, not in CI.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (core + dev — ML extras deferred until the bake-off needs them)
+        run: pip install -e ".[dev]"
+      - name: Tests
+        run: pytest -q
+      - name: Import smoke (full module tree)
+        run: python scripts/smoke_imports.py
