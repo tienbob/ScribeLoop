@@ -21,7 +21,13 @@ dependencies = [
     # ML stack (Phase 0a bake-off participants)
     "faster-whisper>=1.0",
     "silero-vad>=5.1",
-    "sqlite-vec>=0.1.6",
+    "sqlite-vec==0.1.9",
+    # PyAV is a transitive dep of faster-whisper (which passes
+    # av.open(..., metadata_errors="ignore")). PyAV 19.0.0 removed that
+    # kwarg and faster-whisper has no upper bound, so the resolver can pick a
+    # broken combo that breaks decode_audio(). Cap below 19 until upstream
+    # faster-whisper adapts (or drops the arg).
+    "av>=11,<19",
 ]
 
 [project.optional-dependencies]

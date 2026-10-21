@@ -49,5 +49,5 @@ validated on their target OSes per Phase 0a. `capture/native/` holds the Swift h
       (whisper.cpp / Moonshine measured on macOS/Linux hosts or separate harnesses)
 - [ ] Tauri vs pure-Python packaging decision (incl. GStreamer/PyGObject in AppImage/deb, llama-cpp-python wheels)
 - [ ] Online-diarization decision (diart → near-online chunked → DIY)
-- [ ] SQLCipher + sqlite-vec coexistence check; vec0 delete-scrub check
+- [x] SQLCipher + sqlite-vec coexistence check; vec0 delete-scrub check — **both verified 2026-10-21** (SQLCipher 4.19.0 + sqlite-vec 0.1.9 coexist; vec0 deletes scrub vector bytes under `secure_delete=ON` + WAL TRUNCATE checkpoint). Harness: `scripts/check_vec.py`; tests: `tests/test_vectors.py`
 - [ ] Smoke test on the second OS
