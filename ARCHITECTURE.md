@@ -22,7 +22,7 @@ System audio ──► Capture ──► VAD ──► ASR (streaming) ──►
                      │                     Event bus ──► final summary ──► Storage ──► UI
                      │                                                      │
                      │         summaries + user commands ──► Agent layer (MCP tools)
-                     └──── session recorder: full-session WAVs (offline pass at Stop; retention §3.1)
+                     └──── session recorder: encrypted per-stream SLPA (offline pass at Stop; retention §3.1)
 ```
 
 ### Meeting discovery and capture — core requirement (2026-10-22)
@@ -30,7 +30,10 @@ System audio ──► Capture ──► VAD ──► ASR (streaming) ──►
 ScribeLoop must automatically detect likely active meetings/calls and capture their
 local audio, starting with **Microsoft Teams and Slack huddles**, then Zoom and
 browser meetings such as Google Meet and Teams web. This is **Phase 1 scope**, not
-Phase 4 polish. These are required targets, not currently verified integrations.
+Phase 4 polish. These are required targets, not currently verified integrations. The first metadata-only
+macOS observer, candidate state machine, and shared-clock contract are implemented;
+UI integration and real-call validation remain pending. See
+[discovery implementation](docs/MEETING_DETECTION.md).
 See [the detection and capture specification](docs/MEETING_CAPTURE.md).
 
 Detection observes app/process and audio-activity metadata; an open app alone is
@@ -61,7 +64,7 @@ yet; the current UI remains public-fixture replay only.
 | **Event bus**           | Decoupled pipeline stages                                    | In-process `asyncio` queues first; Redis/NATS later if we split processes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | **Storage**             | Sessions, transcripts, speakers, summaries; semantic search  | SQLite (+ WAL, SQLCipher) + `sqlite-vec` (SQLCipher+sqlite-vec coexistence verified in Phase 0 — §6); Markdown export (plaintext by design)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Agent (Phase 3)**     | Tool use: notes, calendar, todos                             | Function-calling loop + **MCP (Model Context Protocol)** servers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **App shell / UI**      | Settings, live transcript, summaries                         | **Tauri v2** (Rust shell + web UI) with Python core as sidecar over local WebSocket                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **App shell / UI**      | Settings, live transcript, summaries                         | Local v0: **FastAPI + browser UI**; Tauri shell/sidecar packaging deferred                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 ### 2.1 Why this stack
 
@@ -97,10 +100,11 @@ scribeloop/
 │   ├── capture/
 │   │   ├── source.py          # AudioSource protocol (pulls PCM frames)
 │   │   ├── native/
-│   │   │   ├── macos_tap/     # Swift helper: Core Audio tap IOProc → PCM pipe
+│   │   │   ├── macos_observer/ # implemented metadata-only process observer
 │   │   │   └── macos_sck/     # Swift helper: ScreenCaptureKit fallback
 │   │   ├── macos_client.py    # talks to the Swift helper over a local pipe
-│   │   └── linux_pipewire.py  # GStreamer pipewiresrc/pulsesrc → appsink (pulled)
+│   │   └── linux_pipewire.py  # placeholder: planned GStreamer appsink source
+│   ├── meetings/              # metadata contracts, detector, macOS observer client
 │   ├── pipeline/
 │   │   ├── vad.py             # silero VAD gating
 │   │   ├── asr.py             # streaming ASR adapter
@@ -121,8 +125,7 @@ scribeloop/
 │   │   ├── loop.py            # tool-calling agent loop
 │   │   └── mcp_tools.py       # MCP client → notes/calendar tools
 │   └── api/                   # local WS/HTTP server: loopback-only + per-launch token (§6)
-├── shell/                     # Tauri app (Rust + TS UI)
-└── audio/                     # session recorder: one WAV per stream (loopback/mic)
+└── data/                      # local artifacts; recorder integration still pending
 ```
 
 ### 3.1 Core data model (SQLite)
@@ -135,7 +138,7 @@ CREATE TABLE sessions (
   source TEXT, title TEXT, status TEXT,
   consent_confirmed INTEGER DEFAULT 0);
 
--- one row per captured stream ('loopback' | 'mic'): two WAVs per session
+-- one row per captured stream ('loopback' | 'mic'): separate encrypted SLPA files
 CREATE TABLE session_streams (
   id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id),
   stream TEXT, audio_path TEXT,
@@ -215,7 +218,7 @@ CREATE TABLE events (
   level TEXT, type TEXT, payload_json TEXT);
 ```
 
-**Delete semantics**: deletion is hard — no soft-delete column; rows are `DELETE`d with `secure_delete=ON`. Because WAL retains deleted content until checkpoint, every purge finishes with `wal_checkpoint(TRUNCATE)`; a full `VACUUM` is reserved for bulk migrations (mostly redundant under `secure_delete` and expensive on large DBs). **Phase 0 check (verified 2026-10-21)**: deleting from `sqlite-vec` `vec0` tables with `secure_delete=ON` followed by `wal_checkpoint(TRUNCATE)` **does scrub** vector bytes from the raw DB file — verified by a byte-level scan for a distinctive float pattern after delete (`scripts/check_vec.py`, `tests/test_vectors.py`). The rebuild-into-fresh-table fallback is unnecessary. **Audio is crypto-shredded**: each session's WAVs are encrypted with a per-session key from the keystore; deleting a session deletes the key (reliable on SSDs, where file overwrite is not guaranteed).
+**Delete semantics**: deletion is hard — no soft-delete column; rows are `DELETE`d with `secure_delete=ON`. Because WAL retains deleted content until checkpoint, every purge finishes with `wal_checkpoint(TRUNCATE)`; a full `VACUUM` is reserved for bulk migrations (mostly redundant under `secure_delete` and expensive on large DBs). **Phase 0 check (verified 2026-10-21)**: deleting from `sqlite-vec` `vec0` tables with `secure_delete=ON` followed by `wal_checkpoint(TRUNCATE)` **does scrub** vector bytes from the raw DB file — verified by a byte-level scan for a distinctive float pattern after delete (`scripts/check_vec.py`, `tests/test_vectors.py`). The rebuild-into-fresh-table fallback is unnecessary. **Audio is crypto-shredded**: each session's SLPA streams share a per-session key from the keystore. Key deletion prevents new locked reads, subject to unlocked readers and backups; the authorized deletion/retention workflow is still pending. See docs/SECURE_STORAGE.md.
 
 "Forget this person" deletes their embeddings (via `source_session_id`), unlinks `session_speakers` rows, anonymizes their labels in retained transcripts (`[deleted speaker]`), scrubs their labels in `speaker_remaps`, redacts their mentions in `events.payload_json`, flags summaries for redaction review, purges their RAG chunk text, and reminds the user that Markdown exports are plaintext and may still contain their name (§6).
 
@@ -230,7 +233,7 @@ CREATE TABLE events (
 ### Flow 1 — Live session (the core loop)
 
 1. **Discover and start**: automatic detection presents a meeting candidate with app, capture scope, and microphone selection; user confirms recording consent and hits Record (manual Record/hotkey remains available) → shell asks core to open a session. A visible **recording indicator** stays active for the whole session (consent flag recorded on the session — §6).
-2. **Capture**: platform source yields 16 kHz mono PCM in ~100 ms frames; the **session recorder** writes the complete WAV (required by the offline pass). Mid-session device changes (Bluetooth headset, sample-rate switch) are caught via OS device notifications: the source re-opens, resamples, the recorder continues in the same session, and the event is logged — the session survives.
+2. **Capture**: platform source yields 16 kHz mono PCM in ~100 ms frames; the **session recorder** writes full-timeline encrypted SLPA streams (decrypted incrementally for the offline pass; no plaintext session WAV). Mid-session device changes (Bluetooth headset, sample-rate switch) are caught via OS device notifications: the source re-opens, resamples, the recorder continues in the same session, and the event is logged — the session survives.
 3. **VAD**: silero gates frames; silence discarded, speech spans time-stamped.
 4. **Streaming ASR**: Whisper + a **LocalAgreement-style confirmation policy** (a partial is confirmed when consecutive decode passes agree) — or a native streaming model (sherpa-onnx Zipformer), per the Phase 0 bake-off. Word/segment timestamps retained.
 5. **Online diarization**: initial implementation uses near-online community-1 on overlapping 30–60 s chunks; labels arrive delayed. Cross-chunk identities and actual delay require validation.
@@ -313,7 +316,7 @@ CREATE TABLE events (
 **Local API security** (core ↔ shell on localhost)
 
 - Bind to `127.0.0.1` only; **random per-launch bearer token** handed to the shell out-of-band. Browsers cannot set `Authorization` headers on WebSockets, so the mechanism is **first-message auth**: the client sends the token as its first WebSocket frame; the server closes the connection on mismatch. The **`Host` header is validated** against a fixed allowlist (DNS-rebinding defense). Stronger alternative where available: a **Unix domain socket** owned by the shell process, proxied to the UI.
-- **The UI is an attack surface**: transcripts and summaries are untrusted text rendered in a webview that holds the API token. Everything renders as **sanitized text — no raw HTML**; remote images and auto-fetched links are **blocked** in rendered Markdown (a classic exfiltration path); Tauri runs a **strict CSP**.
+- **The UI is an attack surface**: transcripts and summaries are untrusted text rendered in a webview that holds the API token. Everything renders as **sanitized text — no raw HTML**; remote images and auto-fetched links are **blocked** in rendered Markdown (a classic exfiltration path); the current browser UI serves a **strict CSP**; a future Tauri shell must preserve it.
 - Agent MCP servers are local processes with scoped tool permissions; cloud egress only via explicitly enabled tools.
 
 ## 7. Evaluation plan

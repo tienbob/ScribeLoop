@@ -12,7 +12,7 @@ milestones with acceptance gates; these milestones are not yet implemented.
 
 ## Requirement change — automatic meeting detection
 
-**Required, not yet implemented:** detect active Microsoft Teams calls and Slack
+**Partially implemented; real-call support unverified:** detect active Microsoft Teams calls and Slack
 huddles automatically, then support Zoom and browser meetings. Offer a source
 confirmation prompt and capture meeting output plus a separate microphone stream
 so the conversation includes the user's speech. Detection does not authorize
@@ -22,6 +22,11 @@ This moves discovery and basic dual-stream capture into Phase 1; they are no
 longer deferred polish/microphone features. The existing replay milestone remains
 delivered, but does not satisfy this requirement. Implementation must follow
 [meeting detection and capture acceptance](MEETING_CAPTURE.md).
+
+The first [discovery increment](MEETING_DETECTION.md) delivers a metadata-only
+macOS observer, installed-app registry, candidate state machine, diagnostic CLI,
+and shared-clock/source contracts. Host output activity is visible; candidate UI, live-call validation,
+microphone capture, and the encrypted recorder are still pending.
 
 ## Delivered
 
@@ -101,9 +106,15 @@ session actions and transcript snapshots require WebSocket authentication.
 
 ## Verification
 
+- Meeting discovery foundation: native observer build and metadata-only host
+  check passed (25 bundled processes, one output-active); actual call detection
+  and microphone activity remain unvalidated. See [details](MEETING_DETECTION.md).
+
 - Native Keychain-backed encrypted API: 20 s public replay, 7 confirmed segments,
   successful reconnect, and storage-mode indicator verified in Brave.
-- Full local suite: **122 passing tests**; changed Python code passes Ruff.
+- Full local suite: **152 passing tests** after the discovery increment; changed
+  Python code passes Ruff. Frontend replay regressions and 43-module application
+  import smoke also pass.
 - ASGI/WebSocket tests use deterministic ASR to verify authorization, malformed
   origins/hosts, consent, fixture access, persistence, non-persistence of partials,
   single active replay, stop, model failure, reconnect, and restart recovery.

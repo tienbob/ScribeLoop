@@ -1,7 +1,11 @@
 # Phase 1 implementation plan — meeting detection and capture
 
 Created **2026-10-22** from the [code audit](PHASE_1_PLAN_AUDIT.md) and
-[revised requirements](MEETING_CAPTURE.md). Status: **planned, not implemented**.
+[revised requirements](MEETING_CAPTURE.md). Status: **implementation in progress**.
+Progress: M1 contracts/native query and the pure detector portion of M2 are
+implemented; host output activity is visible, but input visibility and real-call
+feasibility remain unverified. See [the first increment](MEETING_DETECTION.md). No complete milestone
+or meeting-app support is claimed from this foundation.
 Each milestone should be a reviewable commit on a `feature/...` branch, with
 implementation, relevant tests, and a documentation status update together.
 

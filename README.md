@@ -84,11 +84,14 @@ Full-meeting MOSS runs are deferred during development.
 and other supported meetings, then offer consented capture of meeting audio and
 separate microphone audio. This is planned Phase 1 work, not implemented support.
 See [meeting detection and capture](docs/MEETING_CAPTURE.md).
+The first [metadata-only discovery foundation](docs/MEETING_DETECTION.md) is now
+implemented; candidate UI and integrated meeting recording remain pending.
 
 The first vertical slice connects bounded public WAV replay to cached local ASR,
 SQLite session history, and an authenticated browser transcript UI. The replay
 milestone is audited; encrypted database/keystore and audio-container primitives
-are now implemented, with 122 local tests plus frontend regressions. See
+are now implemented. With the discovery foundation, 152 local tests and frontend
+regressions pass. See
 [Phase 1 implementation and next steps](docs/PHASE_1.md).
 
 ```bash

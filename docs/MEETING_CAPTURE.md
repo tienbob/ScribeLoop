@@ -1,7 +1,9 @@
 # Automatic meeting detection and audio capture
 
 Requirement recorded **2026-10-22**, before implementation changes. Status:
-**planned; no meeting detector or integrated live recorder delivered**.
+**partially implemented**: a metadata-only observer and candidate state machine
+exist ([implementation and limits](MEETING_DETECTION.md)). No candidate UI,
+validated active-call integration, or integrated live recorder is delivered.
 
 ## Product behavior
 
