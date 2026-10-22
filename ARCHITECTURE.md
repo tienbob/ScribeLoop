@@ -330,7 +330,7 @@ CREATE TABLE events (
 
 ## 8. Phased roadmap
 
-**Phase 1 started (2026-10-22):** public WAV replay → cached Whisper chunked ASR →
+**Phase 1 replay milestone audited (2026-10-22; full MVP still open):** public WAV replay → cached Whisper chunked ASR →
 confirmed SQLite segments → authenticated browser transcript UI is implemented.
 Real recordings remain disabled until encryption is integrated; VAD/LocalAgreement,
 speaker attribution, native recorder integration, and full resume remain pending.

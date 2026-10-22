@@ -1,12 +1,14 @@
 # Phase 1 — public replay vertical slice (2026-10-22)
 
-Status: started. First slice implemented; full MVP exit criteria are not met.
+Status: **public replay milestone audited and finalized** (2026-10-22).
+The full Phase 1 MVP remains incomplete; its remaining requirements are listed below.
 Phase 0's deferred validation gates remain tracked separately.
 
 ## Delivered
 
 - [x] Loopback-only FastAPI server with first-message WebSocket token auth,
-  five-second authentication timeout, Host/Origin checks, CSP and no-store headers.
+  five-second authentication and send timeouts, strict text-frame/Host/Origin checks,
+  CSP and no-store headers.
 - [x] Browser notebook with configured sample selection, authorization checkbox,
   start/stop controls, active replay indicator, session history, timestamped text,
   error/empty states, and ephemeral partial text.
@@ -51,6 +53,12 @@ No new recorded audio is created: replay references the existing public WAV.
 
 Session states: loading → replaying → completed/stopped/failed. On restart,
 previously loading/replaying rows become interrupted; confirmed text remains.
+Terminal events are published after the worker has closed and the active slot is
+released, so an immediate next replay is accepted. Storage failures stop the
+producer, report an unavailable state, and disable new replay until server restart.
+If that failure also prevents writing the failed status, restart recovery marks
+the last durable active state interrupted. No failed write is reported as saved.
+
 Stop is cooperative between frames/decodes; it cannot interrupt a currently blocked
 model load or inference call. A future isolated worker must handle hard cancellation.
 
@@ -67,7 +75,7 @@ session actions and transcript snapshots require WebSocket authentication.
 
 ## Verification
 
-- Full local suite: **74 passing tests**; changed Python code passes Ruff.
+- Full local suite: **92 passing tests**; changed Python code passes Ruff.
 - ASGI/WebSocket tests use deterministic ASR to verify authorization, malformed
   origins/hosts, consent, fixture access, persistence, non-persistence of partials,
   single active replay, stop, model failure, reconnect, and restart recovery.
@@ -78,7 +86,47 @@ session actions and transcript snapshots require WebSocket authentication.
   new replay, authorize/start, and stop with visible stopped state. All transcript
   content is inserted with `textContent`, never interpreted as HTML.
 
-## Next work
+## Audit fixes and acceptance
+
+- [x] Removed/replaced/oversized fixture and source/model cleanup failures terminate
+  cleanly instead of stranding a loading session. Fixture bounds are rechecked
+  before model loading; this is not protection against a hostile local filesystem.
+- [x] Terminal state waits for worker cleanup and frees the active slot before
+  publication; restarting immediately on the same socket is covered.
+- [x] Validate partial and confirmed model output before persistence/broadcast:
+  finite confidence, valid UTF-8, bounded text, ordered timestamps within audio.
+- [x] Reject malformed origins, binary/oversized protocol frames, and invalid text;
+  explicitly close auth timeouts. Bound blocked socket sends and cancel the sibling
+  receive/send task when either finishes.
+- [x] A storage failure stops the worker and disables replay; queued work is not
+  flushed into a failed consumer. Error text does not expose backend/private paths.
+- [x] UI partials are scoped to sessions; disconnected controls cannot issue Stop;
+  storage-unavailable state disables Start. Node regressions execute the actual
+  UI script with a minimal DOM/socket harness (not a substitute for browser layout QA).
+- [x] Fix CI smoke dependency mismatch: default smoke imports all 35 application
+  modules; optional `--full-ml` requires separately installed diarization/Sherpa
+  extras. Add frontend regression execution to CI. No remote CI run is claimed.
+- [x] Build a Python wheel and verify all three UI assets are included. This is
+  not a frozen desktop installer or signing validation.
+- [x] Audited real-model check: 20 s public audio, 7 saved confirmed segments,
+  timestamps within bounds, active slot released, and exact row count restored
+  after reconnect. Local aggregate report: `data/phase1/audit-smoke.json`.
+
+```bash
+.venv/bin/pytest -q
+node tests/frontend_replay.mjs
+.venv/bin/python scripts/smoke_imports.py
+# Optional, when diarization and Sherpa extras are installed:
+.venv/bin/python scripts/smoke_imports.py --full-ml
+```
+
+No known unresolved audit defect remains in the scoped public replay milestone.
+Stop/model-load cancellation is still cooperative; hard interruption needs an
+isolated worker. Public-fixture declarations rely on the local operator, not
+license detection. The plaintext store is not approved for real meetings.
+The following full-MVP items are not waived by this audit.
+
+## Remaining Phase 1 MVP work
 
 1. Encrypted database/audio storage and OS-keystore lifecycle before new real audio.
 2. VAD integration with recorder-timeline preservation; LocalAgreement partial and

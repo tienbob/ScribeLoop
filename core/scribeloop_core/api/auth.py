@@ -24,6 +24,8 @@ def new_token() -> str:
 
 def host_allowed(host: str) -> bool:
     """Validate the Host header against the allowlist (DNS-rebinding defense)."""
+    if not host or any(ord(char) <= 32 or ord(char) >= 127 for char in host):
+        return False
     try:
         parsed = urlsplit('//' + host)
         port = parsed.port
@@ -38,4 +40,24 @@ def check_first_message(message: str | bytes, token: str) -> bool:
     """First-message auth for WebSocket clients (constant-time compare)."""
     if isinstance(message, bytes):
         message = message.decode("utf-8", errors="replace")
-    return secrets.compare_digest(message.strip().encode('utf-8'), token.encode('utf-8'))
+    try:
+        return secrets.compare_digest(message.strip().encode('utf-8'), token.encode('utf-8'))
+    except UnicodeError:
+        return False
+
+
+def origin_allowed(origin: str | None, host: str) -> bool:
+    """No Origin is permitted for token-authenticated native clients; browser
+    origins must be well-formed and match the serving authority exactly.
+    """
+    if origin is None:
+        return True
+    if any(ord(char) <= 32 or ord(char) >= 127 for char in origin):
+        return False
+    try:
+        parsed = urlsplit(origin)
+        return (parsed.scheme in {'http', 'https'} and parsed.netloc == host
+                and host_allowed(parsed.netloc) and not parsed.path
+                and not parsed.query and not parsed.fragment)
+    except ValueError:
+        return False

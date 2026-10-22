@@ -78,10 +78,11 @@ Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.
 
-## Phase 1: replay workspace (started)
+## Phase 1: replay milestone audited; full MVP in progress
 
 The first vertical slice connects bounded public WAV replay to cached local ASR,
-SQLite session history, and an authenticated browser transcript UI. See
+SQLite session history, and an authenticated browser transcript UI. The replay
+milestone is audited and finalized with 92 local tests plus frontend regressions. See
 [Phase 1 implementation and next steps](docs/PHASE_1.md).
 
 ```bash

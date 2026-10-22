@@ -9,24 +9,26 @@ import argparse
 import asyncio
 import contextlib
 import json
+import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
 
 import soundfile as sf
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..pipeline.replay import ReplayRunner
 from ..storage.db import connect, migrate
 from ..storage.sessions import SessionStore
-from .auth import check_first_message, host_allowed, new_token
+from .auth import check_first_message, host_allowed, new_token, origin_allowed
 
 STATIC = Path(__file__).parent / 'static'
+AUTH_TIMEOUT_S = 5
+SEND_TIMEOUT_S = 5
 
 
 class StartReplay(BaseModel):
@@ -35,6 +37,14 @@ class StartReplay(BaseModel):
     fixture: str = Field(min_length=1, max_length=64)
     title: str = Field(default='Untitled replay', min_length=1, max_length=160)
     consent_confirmed: bool = Field(strict=True)
+
+    @field_validator('title', 'fixture')
+    @classmethod
+    def valid_text(cls, value):
+        value.encode('utf-8')
+        if not value.strip():
+            raise ValueError('Empty field')
+        return value
 
 
 def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[FastAPI, str]:
@@ -76,8 +86,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[F
         try:
             yield
         finally:
-            await app.state.runner.close()
-            conn.close()
+            try:
+                await app.state.runner.close()
+            finally:
+                conn.close()
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
@@ -113,69 +125,92 @@ def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[F
     @app.websocket('/ws')
     async def websocket(ws: WebSocket):
         host = ws.headers.get('host', '')
-        origin = ws.headers.get('origin')
-        if not host_allowed(host) or (origin is not None and
-                (urlsplit(origin).scheme not in {'http', 'https'} or urlsplit(origin).netloc != host)):
+        if not host_allowed(host) or not origin_allowed(ws.headers.get('origin'), host):
             await ws.close(code=1008)
             return
         await ws.accept()
         queue = asyncio.Queue(maxsize=128)
-        sender = None
+        sender = reader = None
+
+        async def text_frame(limit):
+            frame = await ws.receive()
+            if frame['type'] == 'websocket.disconnect':
+                raise WebSocketDisconnect(frame.get('code', 1000))
+            text = frame.get('text')
+            if not isinstance(text, str) or len(text) > limit:
+                await ws.close(code=1008)
+                raise WebSocketDisconnect(1008)
+            return text
+
+        async def send(event):
+            await asyncio.wait_for(ws.send_json(event), timeout=SEND_TIMEOUT_S)
+
         try:
-            message = await asyncio.wait_for(ws.receive_text(), timeout=5)
-            if len(message) > 256 or not check_first_message(message, token):
+            message = await asyncio.wait_for(text_frame(256), timeout=AUTH_TIMEOUT_S)
+            if not check_first_message(message, token):
                 await ws.close(code=1008)
                 return
             clients.add(queue)
             store = app.state.store
-            await ws.send_json({'type': 'snapshot', 'fixtures': fixture_rows,
-                'sessions': store.list(), 'active_id': app.state.runner.active_id,
-                'segments': {s['id']: store.segments(s['id']) for s in store.list()}})
+            history = store.list()
+            await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                'sessions': history, 'active_id': app.state.runner.active_id,
+                'replay_available': not app.state.runner.unavailable,
+                'segments': {s['id']: store.segments(s['id']) for s in history}})
 
             async def send_events():
                 while True:
                     event = await queue.get()
-                    await ws.send_json(event)
+                    await send(event)
                     if event['type'] == 'reconnect_required':
                         await ws.close(code=1013)
                         return
 
+            async def receive_commands():
+                while True:
+                    try:
+                        raw = await text_frame(4096)
+                        command = json.loads(raw)
+                        if not isinstance(command, dict):
+                            raise TypeError('Expected an object')
+                        if command.get('action') == 'start':
+                            request = StartReplay.model_validate(command)
+                            if not request.consent_confirmed:
+                                raise ValueError('Confirm authorization before replay')
+                            if request.fixture not in fixtures:
+                                raise ValueError('Unknown public fixture')
+                            session = app.state.runner.start(request.fixture, request.title,
+                                                              fixtures[request.fixture])
+                            await publish({'type': 'session', 'session': session})
+                        elif command.get('action') == 'stop':
+                            app.state.runner.stop(command.get('session_id'))
+                        else:
+                            raise ValueError('Unknown command')
+                    except (ValueError, ValidationError, TypeError, sqlite3.Error):
+                        if queue.full():
+                            await ws.close(code=1013)
+                            return
+                        queue.put_nowait({'type': 'error', 'message':
+                            'Request rejected. Check authorization, fixture, and active replay.'})
+
             sender = asyncio.create_task(send_events())
-            while True:
-                try:
-                    raw = await ws.receive_text()
-                    if len(raw) > 4096:
-                        raise ValueError('Command too large')
-                    command = json.loads(raw)
-                    if not isinstance(command, dict):
-                        raise TypeError('Expected an object')
-                    if command.get('action') == 'start':
-                        request = StartReplay.model_validate(command)
-                        if not request.consent_confirmed:
-                            raise ValueError('Confirm authorization before replay')
-                        if request.fixture not in fixtures:
-                            raise ValueError('Unknown public fixture')
-                        session = app.state.runner.start(request.fixture, request.title,
-                                                          fixtures[request.fixture])
-                        await publish({'type': 'session', 'session': session})
-                    elif command.get('action') == 'stop':
-                        app.state.runner.stop(command.get('session_id'))
-                    else:
-                        raise ValueError('Unknown command')
-                except (ValueError, ValidationError, TypeError):
-                    if queue.full():
-                        await ws.close(code=1013)
-                        return
-                    queue.put_nowait({'type': 'error', 'message':
-                        'Request rejected. Check authorization, fixture, and active replay.'})
-        except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError, KeyError):
+            reader = asyncio.create_task(receive_commands())
+            done, _ = await asyncio.wait({sender, reader}, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        except asyncio.TimeoutError:
+            with contextlib.suppress(WebSocketDisconnect, RuntimeError, asyncio.TimeoutError):
+                await asyncio.wait_for(ws.close(code=1008 if sender is None else 1013), timeout=1)
+        except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
             clients.discard(queue)
-            if sender:
-                sender.cancel()
-                with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
-                    await sender
+            for task in (sender, reader):
+                if task:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, WebSocketDisconnect,
+                                             RuntimeError, asyncio.TimeoutError):
+                        await task
 
     return app, token
 

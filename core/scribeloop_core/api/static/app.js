@@ -3,10 +3,14 @@ const $ = id => document.getElementById(id);
 let key = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
-let stopPending = false;
+let stopPending = false, authenticated = false, replayAvailable = true;
+const partials = new Map();
 let socket, activeId = null, selectedId = null, sessions = new Map(), segments = new Map();
 const liveStates = new Set(['loading', 'replaying']);
-function send(value) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
+function send(value) {
+  if (authenticated && socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify(value)); return true; }
+  return false;
+}
 function notice(text) { $('notice').textContent = text; $('notice').hidden = !text; }
 function renderHistory() {
   $('history').replaceChildren();
@@ -27,9 +31,11 @@ function render() {
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));
   $('stop').hidden = !activeId;
-  $('stop').disabled = stopPending;
+  $('stop').disabled = stopPending || !authenticated;
   $('stop').textContent = stopPending ? 'Stopping…' : 'Stop replay';
-  $('start').disabled = Boolean(activeId) || socket?.readyState !== WebSocket.OPEN || !$('fixture').value;
+  $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !$('fixture').value;
+  $('partial').textContent = partials.get(selectedId) || '';
+  if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
   else $('start').textContent = 'Start replay ↗';
   const rows = segments.get(selectedId) || [];
@@ -38,7 +44,7 @@ function render() {
     $('transcript').replaceChildren();
     if (!rows.length) {
       const p = document.createElement('p'); p.className = 'partial';
-      p.textContent = session?.status === 'failed' ? 'Replay failed. Verify that the local ASR model is cached; no download is started automatically.' : liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No confirmed words in this replay.';
+      p.textContent = !replayAvailable ? 'Replay stopped because storage is unavailable. Restart the local server.' : session?.status === 'failed' ? 'Replay failed. Check the configured public sample and cached ASR model; no download starts automatically.' : liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No confirmed words in this replay.';
       $('transcript').append(p);
     }
     rows.forEach(row => {
@@ -51,14 +57,16 @@ function render() {
   }
 }
 function connect() {
-  if (!key) { $('unlock').showModal(); return; }
+  if (!key) { if (!$('unlock').open) $('unlock').showModal(); return; }
   $('connection').textContent = 'Connecting…';
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   socket.onopen = () => socket.send(key);
   socket.onmessage = event => {
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
+      authenticated = true; replayAvailable = data.replay_available !== false; partials.clear();
       $('connection').textContent = '● Connected locally';
+      if (!replayAvailable) notice('Replay storage is unavailable. Restart the local server.');
       sessions = new Map(data.sessions.map(s => [s.id,s]));
       segments = new Map(Object.entries(data.segments)); activeId = data.active_id;
       selectedId = activeId || (sessions.has(selectedId) ? selectedId : data.sessions[0]?.id) || null;
@@ -69,27 +77,31 @@ function connect() {
     } else if (data.type === 'session') {
       sessions.set(data.session.id,data.session);
       if (liveStates.has(data.session.status)) { activeId=data.session.id; selectedId=activeId; }
-      else { if (activeId === data.session.id) { activeId=null; stopPending=false; } $('partial').textContent=''; }
+      else { if (activeId === data.session.id) { activeId=null; stopPending=false; } partials.delete(data.session.id); }
       render();
     } else if (data.type === 'segment') {
       const rows=segments.get(data.session_id)||[];
       if (!rows.some(r => r.id === data.segment.id)) rows.push(data.segment);
-      segments.set(data.session_id,rows); $('partial').textContent=''; render();
+      segments.set(data.session_id,rows); partials.delete(data.session_id); render();
     } else if (data.type === 'partial') {
+      partials.set(data.session_id, data.segment.text);
       if (selectedId === data.session_id) $('partial').textContent=data.segment.text;
-    } else if (data.type === 'error') notice(data.message);
+    } else if (data.type === 'replay_unavailable') {
+      replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
+    } else if (data.type === 'error') { stopPending=false; notice(data.message); render(); }
     else if (data.type === 'reconnect_required') notice('The connection fell behind. Reconnecting restores saved text.');
   };
   socket.onclose = event => {
-    $('connection').textContent='Disconnected'; $('start').disabled=true;
-    if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); $('unlock').showModal(); }
+    authenticated=false; stopPending=false; partials.clear(); render();
+    $('connection').textContent='Disconnected';
+    if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
     else notice('Connection lost. Reload this page and enter your launch key to restore saved sessions.');
   };
   socket.onerror = () => notice('Could not connect to the local server. Check that it is running.');
 }
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
 $('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('title').value,consent_confirmed:$('consent').checked}); };
-$('stop').onclick = () => { send({action:'stop',session_id:activeId}); stopPending=true; render(); };
+$('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
 $('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('title').value='Development listening session'; $('consent').checked=false; $('partial').textContent=''; notice(''); render(); $('title').focus(); };
 $('fixture').onchange = render;
 connect();

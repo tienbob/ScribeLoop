@@ -18,6 +18,7 @@ class FakeASR:
     def __init__(self):
         self.frames = 0
         self.closed = False
+        self.flushed = False
 
     def feed(self, frame):
         self.frames += 1
@@ -26,6 +27,7 @@ class FakeASR:
                  'is_final': self.frames != 1}]
 
     def flush(self):
+        self.flushed = True
         return []
 
     def close(self):
@@ -186,3 +188,156 @@ def test_only_one_active_replay_and_stop(setup):
     ('user@127.0.0.1',False),('127.0.0.1:bad',False),('127.0.0.1/evil',False)])
 def test_host_parser(host, expected):
     assert host_allowed(host) is expected
+
+
+def test_fixture_removed_after_startup_finishes_instead_of_hanging(setup):
+    app, token, _, backends, wav = setup
+    wav.unlink()
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        ws.send_text(token)
+        ws.receive_json()
+        start(ws)
+        assert until_terminal(ws)[-1]['session']['status'] == 'failed'
+        assert backends == []
+        # A same-socket restart must be accepted immediately after terminal state.
+        sf.write(wav, np.zeros(4800, dtype=np.float32), 16000)
+        start(ws)
+        assert until_terminal(ws)[-1]['session']['status'] == 'completed'
+
+
+@pytest.mark.parametrize('bad_chunk', [
+    {'text':'bad', 'start_ms':0, 'end_ms':100, 'is_final':False, 'confidence':float('nan')},
+    {'text':'bad', 'start_ms':0, 'end_ms':301, 'is_final':True},
+    {'text':'bad', 'start_ms':100, 'end_ms':50, 'is_final':True},
+    {'text':' ', 'start_ms':0, 'end_ms':100, 'is_final':False},
+    {'text':'bad', 'start_ms':0, 'end_ms':100, 'is_final':True, 'language':'bad\ud800'},
+])
+def test_invalid_model_output_fails_without_broadcast_or_storage(setup, bad_chunk):
+    _, _, database, _, wav = setup
+
+    class BadASR(FakeASR):
+        def feed(self, frame):
+            return [bad_chunk]
+
+    app, token = create_app(database=database, fixtures={'public':wav}, backend_factory=BadASR)
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        ws.send_text(token)
+        ws.receive_json()
+        start(ws)
+        events = until_terminal(ws)
+        assert events[-1]['session']['status'] == 'failed'
+        assert not any(e['type'] in {'partial','segment'} for e in events)
+    with sqlite3.connect(database) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM segments').fetchone()[0] == 0
+
+
+def test_cleanup_failure_does_not_lock_replay_slot(setup):
+    _, _, database, _, wav = setup
+
+    class BadCleanup(FakeASR):
+        def close(self):
+            raise RuntimeError('cleanup failed')
+
+    app, token = create_app(database=database, fixtures={'public':wav}, backend_factory=BadCleanup)
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        ws.send_text(token)
+        ws.receive_json()
+        for _ in range(2):
+            start(ws)
+            assert until_terminal(ws)[-1]['session']['status'] == 'failed'
+
+
+@pytest.mark.parametrize('origin', ['http://[', 'null', 'http://127.0.0.1/path',
+                                    'http://127.0.0.1?query', 'http://127.0.0.1#fragment'])
+def test_malformed_origins_are_rejected(setup, origin):
+    app, *_ = setup
+    with TestClient(app, base_url='http://127.0.0.1') as client, pytest.raises(WebSocketDisconnect), \
+            client.websocket_connect('ws://127.0.0.1/ws', headers={'origin':origin}):
+        pass
+
+
+def test_authentication_timeout_closes_socket(setup, monkeypatch):
+    monkeypatch.setattr('scribeloop_core.api.server.AUTH_TIMEOUT_S', .03)
+    app, token, *_ = setup
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_json()
+        assert exc.value.code == 1008
+
+
+@pytest.mark.parametrize('authorized', [False, True])
+def test_binary_protocol_frames_close_cleanly(setup, authorized):
+    app, token, *_ = setup
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        if authorized:
+            ws.send_text(token)
+            ws.receive_json()
+        ws.send_bytes(b'binary')
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_json()
+        assert exc.value.code == 1008
+
+
+def test_surrogate_title_is_rejected_without_database_failure(setup):
+    app, token, *_ = setup
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        ws.send_text(token)
+        ws.receive_json()
+        ws.send_json({'action':'start', 'fixture':'public', 'title':'bad\ud800', 'consent_confirmed':True})
+        assert ws.receive_json()['type'] == 'error'
+        start(ws)
+        assert until_terminal(ws)[-1]['session']['status'] == 'completed'
+
+
+def test_storage_failure_stops_worker_and_requires_restart(setup, monkeypatch):
+    app, token, _, backends, _ = setup
+
+    def broken_append(self, *args):
+        raise sqlite3.OperationalError('disk full private path')
+
+    monkeypatch.setattr(SessionStore, 'append', broken_append)
+    with TestClient(app, base_url='http://127.0.0.1') as client:
+        with authenticated(client, token) as ws:
+            ws.send_text(token)
+            ws.receive_json()
+            start(ws)
+            for _ in range(10):
+                event = ws.receive_json()
+                if event['type'] == 'replay_unavailable':
+                    break
+            else:
+                pytest.fail('Storage failure did not stop replay')
+            assert 'private path' not in str(event)
+            assert backends[0].closed
+            assert not backends[0].flushed
+            start(ws)
+            assert ws.receive_json()['type'] == 'error'
+        with authenticated(client, token) as ws:
+            ws.send_text(token)
+            snapshot = ws.receive_json()
+            assert snapshot['replay_available'] is False
+            assert snapshot['active_id'] is None
+
+
+def test_blocked_socket_send_times_out_without_hanging_shutdown(setup, monkeypatch):
+    import asyncio
+
+    from fastapi import WebSocket
+
+    original = WebSocket.send_json
+
+    async def blocked(self, data, *args, **kwargs):
+        if data['type'] != 'snapshot':
+            await asyncio.sleep(10)
+        return await original(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(WebSocket, 'send_json', blocked)
+    monkeypatch.setattr('scribeloop_core.api.server.SEND_TIMEOUT_S', .03)
+    app, token, *_ = setup
+    with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
+        ws.send_text(token)
+        ws.receive_json()
+        start(ws)
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_json()
+        assert exc.value.code == 1013
