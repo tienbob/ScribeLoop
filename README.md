@@ -32,8 +32,8 @@ pytest
 ## Platform note (development on Windows)
 
 The pipeline, storage, LLM client, tests, and bake-off harness are platform-independent and
-run on any dev machine using `WavFileSource` (WAV replay). The macOS ScreenCaptureKit fallback and Python transport now build locally; actual
-capture is blocked by Screen Recording permission on the test host. The preferred
+run on any dev machine using `WavFileSource` (WAV replay). The macOS ScreenCaptureKit fallback and Python transport build locally; silent
+and controlled-tone host capture pass after enabling Screen Recording permission. The preferred
 Core Audio tap and Linux GStreamer source remain placeholders.
 `capture/native/` holds the Swift helper source.
 

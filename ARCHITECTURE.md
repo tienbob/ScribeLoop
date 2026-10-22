@@ -331,8 +331,9 @@ CREATE TABLE events (
 ## 8. Phased roadmap
 
 **2026-10-22 local-development handoff:** native ScreenCaptureKit fallback compiles,
-framed transport and health diagnostics are implemented, and 62 tests pass. Actual
-capture was denied by macOS TCC; signing was explicitly deferred by the user.
+framed transport and health diagnostics are implemented, and 62 tests pass. Basic
+native silence and controlled-tone capture pass after the user enabled macOS TCC
+permission; signing was explicitly deferred by the user.
 Original Phase 0 exit criteria remain unmet where listed in the
 [closeout and deferred gates](docs/PHASE_0_CLOSEOUT.md). This is a scoped development
 handoff, not release or target sign-off.

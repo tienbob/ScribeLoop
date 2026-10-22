@@ -1,6 +1,7 @@
 # Phase 0a capture validation — 2026-10-22
 
-Status: local capture implementation delivered; native validation deferred.
+Status: local capture implementation and basic host capture verified; signed-app
+and full device/source-change validation remain deferred.
 See [Phase 0 handoff](PHASE_0_CLOSEOUT.md). Phase 0b remains closed.
 
 ## Completed implementation
@@ -29,6 +30,7 @@ per stream on a consumer thread, never inside a native realtime audio callback.
 
 - [x] Implement and compile ScreenCaptureKit fallback helper and framed Python transport.
 - [x] Exercise partial packets, invalid data, timestamps, stderr errors, and child cleanup.
+- [x] Verify native silence detection and nonzero controlled-tone capture after permission grant.
 - [ ] Implement the preferred Core Audio process-tap helper.
 - [x] Wire silence/recovery events into the native diagnostic consumer.
 - [ ] Connect events to the future product recording UI.
@@ -43,6 +45,10 @@ per stream on a consumer thread, never inside a native realtime audio callback.
 The signed-build exit criterion remains unchecked. This work completes the silence
 monitor component, not native capture or the whole Phase 0a spike.
 
-Native capture attempt returned macOS TCC permission denial before successful
-audio delivery. No real-capture pass is claimed. New transport tests bring the
+Initial native capture returned TCC permission denial. After the user enabled
+permission, a five-second silence check passed (including its health warning),
+and an eight-second check with a two-second synthetic tone captured nonzero
+PCM (RMS 0.00156436, peak 0.00450415). No captured audio was saved.
+Basic host signal delivery now passes; signed attribution and source-change
+behavior remain unverified. New transport tests bring the
 full suite to **62 passing tests**; helper build and import smoke also pass.

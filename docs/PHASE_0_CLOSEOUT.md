@@ -2,8 +2,8 @@
 
 The local implementation checkpoint is ready for handoff to Phase 1. This is not
 an assertion that the original Phase 0 exit criteria have passed. The user
-explicitly deferred signing; real capture was attempted but blocked by macOS
-Screen Recording permission. Phase 0b's earlier scoped closeout remains unchanged.
+explicitly deferred signing; after the user enabled Screen Recording permission,
+native capture succeeded on both silence and controlled-tone checks. Phase 0b's earlier scoped closeout remains unchanged.
 
 ## Working defaults and implementation decisions
 
@@ -13,7 +13,7 @@ Screen Recording permission. Phase 0b's earlier scoped closeout remains unchange
 | Live ASR | Keep Whisper-family chunked decoding as the Phase 1 starting point; do not promote Sherpa on speed alone | Whisper-tiny 34.10% vs Sherpa 57.85% exploratory whole-meeting WER; neither proves the live accuracy/latency targets. LocalAgreement remains to implement |
 | Offline speaker turns | Community-1 candidate | Five-minute diagnostic DER 27.57% original / 27.94% Opus; no validated hybrid word attribution |
 | Delayed live speaker labels | Choose near-online chunked community-1 for the first Phase 1 implementation | Reuses the locally working pipeline and embedding family. Avoid adding diart compatibility dependencies now. Stable cross-chunk identities and delay still need implementation/measurement |
-| macOS development capture | Implemented ScreenCaptureKit fallback through a native helper | Compiles locally; pipe, timeout, errors, timestamps, silence events, and cleanup tested. Actual capture blocked by TCC. Core Audio process taps remain the preferred future path |
+| macOS development capture | Implemented ScreenCaptureKit fallback through a native helper | Compiles locally; pipe, timeout, errors, timestamps, silence events, and cleanup tested. Silence and controlled-tone capture passed after enabling TCC permission. Core Audio process taps remain the preferred future path |
 | v0 host | Start with the pure-Python FastAPI/browser fallback; keep native capture separate | Existing Python environment is 1.3 GB, MOSS weights about 1.8 GB; adding Tauri does not remove ML payload. This is a development scope decision, not a frozen-installer size measurement |
 | LLM provider for initial integration | Use the existing OpenAI-compatible external local-provider interface | Embedded llama-cpp-python wheels and memory coexistence are not validated. External Ollama memory must be budgeted separately |
 | Storage | SQLite + sqlite-vec; SQLCipher coexistence verified | Delete-scrub verification passed; full encrypted application lifecycle remains Phase 1 |
@@ -36,9 +36,14 @@ experimental controls, not supported product configurations.
 .venv/bin/python scripts/check_native_capture.py --consent-confirmed --duration-s 5
 ```
 
-The first command passed locally. The second was attempted and returned:
-“The user declined TCCs for application, window, display capture.” No successful
-capture or permission-prompt attribution is claimed. ScreenCaptureKit needs
+The build passed locally. The initial native attempt returned a TCC denial. After
+the user enabled permission, the five-second check delivered 5.0 s of silent PCM
+and emitted `prolonged_silence` at 5000 ms. An eight-second retry with two seconds
+of controlled 440 Hz tone delivered nonzero PCM: RMS 0.00156436, peak 0.00450415,
+wall time 8.20 s. No captured audio was saved; the generated playback WAV was
+removed. Aggregate evidence is local in `data/native/capture-validation-tone.json`.
+This verifies basic native signal delivery, not calibrated fidelity or signed-app
+permission attribution. ScreenCaptureKit needs
 Screen Recording permission; it is not the narrower process-tap permission.
 The helper is a development executable, not a signed/notarized distribution.
 
@@ -48,7 +53,8 @@ and [audio channel configuration](https://developer.apple.com/documentation/scre
 ## Explicit deferred gates
 
 - Developer ID signing, notarization, responsible-app prompt attribution, and
-  successful host capture/permission-denial/recovery/source-change validation.
+  full host permission-denial/recovery/source-change validation. Basic silent and
+  nonzero signal delivery now pass.
   No valid signing identity is installed; signing was deferred by the user.
 - Linux capture and packaging checks on a real second-OS host. The CI matrix is
   configured, but no new remote CI or second-OS run is claimed in this closeout.
