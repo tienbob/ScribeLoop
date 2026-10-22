@@ -180,3 +180,44 @@ async def test_real_microphone_selection_permission_and_disconnection():
     devices = CaptureDevices(available=True, permission='denied')
     with pytest.raises(ValueError, match='Microphone'):
         await service.select(scope='application', app_id=APP.app_id, microphone_id='usb-mic')
+
+
+async def test_manual_mode_refreshes_devices_without_activity_observer():
+    import asyncio
+
+    events = asyncio.Queue()
+    devices = CaptureDevices(available=True, permission='authorized', microphones=(
+        MicrophoneDevice(id='usb', name='USB', is_default=True),))
+
+    async def publish(event):
+        await events.put(event)
+
+    service = DiscoveryService(publish, devices_provider=lambda: devices, poll_s=.01)
+    await service.start()
+    try:
+        assert (await events.get())['discovery']['microphones'][1]['id'] == 'usb'
+        devices = CaptureDevices(available=True, permission='denied')
+        event = await asyncio.wait_for(events.get(), timeout=.5)
+        assert event['discovery']['status'] == 'disabled'
+        assert event['discovery']['permission'] == 'denied'
+        assert len(event['discovery']['microphones']) == 1
+    finally:
+        await service.close()
+
+
+async def test_app_registry_failure_does_not_leave_old_device_permission():
+    service, clock, _, _, _ = await setup_service()
+    devices = CaptureDevices(available=True, permission='authorized')
+    service._devices_provider = lambda: devices
+    clock.now = 4.0
+    await service.refresh()
+    assert service.snapshot()['permission'] == 'authorized'
+
+    def broken():
+        raise OSError('Installation registry is unavailable')
+
+    service._apps_provider = broken
+    devices = CaptureDevices(available=True, permission='denied')
+    clock.now = 5.0
+    await service.refresh()
+    assert service.snapshot()['permission'] == 'denied'

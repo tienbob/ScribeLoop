@@ -36,6 +36,11 @@ def test_device_metadata_without_permission_prompt(monkeypatch):
     {'version': True}, {'permission': 'granted'}, {'running_bundle_ids': 'example.teams'},
     {'running_bundle_ids': [123]}, {'microphones': [{'id': 'usb-mic'}]},
     {'microphones': PAYLOAD['microphones'] * 2}, {'raw_audio': 'forbidden'},
+    {'microphones': {}},
+    {'microphones': [{'id': ' ', 'name': 'USB', 'is_default': True}]},
+    {'microphones': [{'id': 'default', 'name': 'Alias collision', 'is_default': True}]},
+    {'microphones': [*PAYLOAD['microphones'],
+                     {'id': 'other', 'name': 'Other', 'is_default': True}]},
 ])
 def test_bad_device_protocol_is_unavailable(monkeypatch, changes):
     state = mock_query(monkeypatch, {**PAYLOAD, **changes})

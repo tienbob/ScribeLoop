@@ -9,7 +9,7 @@ let socket, activeId = null, selectedId = null, sessions = new Map(), segments =
 const liveStates = new Set(['loading', 'replaying']);
 let discovery = {status:'disabled', apps:[], microphones:[], candidates:[]};
 let sourceRequest = 0, pendingSource = null, chosenSource = null;
-let renderedCandidates = '';
+let renderedCandidates = '', renderedApps = '', renderedMicrophones = '';
 let microphoneNeedsChoice = false;
 function send(value) {
   if (authenticated && socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify(value)); return true; }
@@ -22,7 +22,7 @@ function clearSource(message = 'Choose manually if automatic discovery misses a 
 }
 function chooseSource(candidate = null) {
   const value = $('meeting-source').value;
-  if (!value || !authenticated) return;
+  if (!value || !authenticated || !$('meeting-microphone').value || pendingSource !== null) return;
   const command = {action:'select_source', request_id:++sourceRequest,
     scope:value === 'system' ? 'system' : 'application',
     app_id:value === 'system' ? null : value.slice(4),
@@ -38,18 +38,26 @@ function updateDiscovery(value) {
   discovery = value || {status:'disabled', apps:[], microphones:[], candidates:[]};
   const oldSource = $('meeting-source').value;
   const oldMic = $('meeting-microphone').value;
-  $('meeting-source').replaceChildren();
+  const appsState = JSON.stringify(discovery.apps);
+  const microphonesState = JSON.stringify(discovery.microphones);
   const option = (element,value,text) => {
     const item=document.createElement('option'); item.value=value; item.textContent=text; element.append(item);
   };
-  option($('meeting-source'),'','Choose an app or audio scope');
-  discovery.apps.forEach(app => option($('meeting-source'),`app:${app.id}`,app.name + (app.kind === 'browser' ? ' · all browser audio' : '') + (app.running === false ? ' · not running' : '')));
-  option($('meeting-source'),'system','All system audio · includes other apps');
+  if (appsState !== renderedApps) {
+    renderedApps = appsState;
+    $('meeting-source').replaceChildren();
+    option($('meeting-source'),'','Choose an app or audio scope');
+    discovery.apps.forEach(app => option($('meeting-source'),`app:${app.id}`,app.name + (app.kind === 'browser' ? ' · all browser audio' : '') + (app.running === false ? ' · not running' : '')));
+    option($('meeting-source'),'system','All system audio · includes other apps');
+  }
   const validSource = oldSource === 'system' || discovery.apps.some(app => `app:${app.id}` === oldSource);
   $('meeting-source').value = validSource ? oldSource : '';
-  $('meeting-microphone').replaceChildren();
-  option($('meeting-microphone'),'','Choose a microphone');
-  discovery.microphones.forEach(mic => option($('meeting-microphone'),mic.id,mic.name + (mic.enumerated ? '' : ' · not checked')));
+  if (microphonesState !== renderedMicrophones) {
+    renderedMicrophones = microphonesState;
+    $('meeting-microphone').replaceChildren();
+    option($('meeting-microphone'),'','Choose a microphone');
+    discovery.microphones.forEach(mic => option($('meeting-microphone'),mic.id,mic.name + (mic.enumerated ? '' : ' · not checked')));
+  }
   const missingMic = oldMic && !discovery.microphones.some(mic => mic.id === oldMic);
   if (missingMic) microphoneNeedsChoice = true;
   $('meeting-microphone').value = microphoneNeedsChoice ? '' :
@@ -79,7 +87,7 @@ function renderDiscovery() {
     disabled:'Automatic discovery is off. You can still choose a source manually.'
   };
   $('discovery-status').textContent = !authenticated ? 'Connect to see meeting sources.' : statuses[discovery.status] || statuses.unavailable;
-  const candidateState=JSON.stringify([authenticated,pendingSource !== null,discovery.status,discovery.candidates]);
+  const candidateState=JSON.stringify([authenticated,pendingSource !== null,!!$('meeting-microphone').value,discovery.status,discovery.candidates]);
   if (candidateState === renderedCandidates) return; // Keep keyboard focus during transcript updates.
   renderedCandidates=candidateState;
   $('meeting-candidates').replaceChildren();
@@ -95,7 +103,7 @@ function renderDiscovery() {
     content.append(title,evidence);
     const actions=document.createElement('div'); actions.className='candidate-actions';
     const choose=document.createElement('button'); choose.type='button'; choose.textContent='Use source';
-    choose.disabled=!authenticated || !candidate.selectable || discovery.status !== 'available' || pendingSource !== null;
+    choose.disabled=!$('meeting-microphone').value || !authenticated || !candidate.selectable || discovery.status !== 'available' || pendingSource !== null;
     choose.onclick=() => { $('meeting-source').value=`app:${candidate.app_id}`; clearSource(); chooseSource(candidate); };
     const dismiss=document.createElement('button'); dismiss.type='button'; dismiss.textContent='Dismiss';
     dismiss.disabled=!authenticated;
@@ -201,8 +209,8 @@ function connect() {
     else if (data.type === 'reconnect_required') notice('The connection fell behind. Reconnecting restores saved text.');
   };
   socket.onclose = event => {
-    authenticated=false; stopPending=false; partials.clear(); render();
-    clearSource('Connection lost. Reconnect and choose the source again.');
+    authenticated=false; stopPending=false; partials.clear();
+    clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
     else notice('Connection lost. Reload this page and enter your launch key to restore saved sessions.');

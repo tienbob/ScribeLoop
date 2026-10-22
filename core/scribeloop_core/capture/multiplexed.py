@@ -30,18 +30,11 @@ class MultiplexedPCMSource(PCMProcessSource):
 
     def frames(self):
         import subprocess
-        import tempfile
-
-        if self._started or self._closed:
-            raise RuntimeError('Capture source is single-use')
-        self._started = True
+        self._start_process(stdin=subprocess.PIPE)
         previous_end = {}
         seen = set()
         last_received = {stream: time.monotonic() for stream in self.expected_streams}
-        self._stderr = tempfile.TemporaryFile()  # noqa: SIM115 - child-owned diagnostic
         try:
-            self._process = subprocess.Popen(self.command, stdout=subprocess.PIPE,
-                stderr=self._stderr, stdin=subprocess.PIPE, bufsize=0)
             prefix = self._read(ORIGIN.size, allow_eof=True)
             if self._closed:
                 return
@@ -56,7 +49,8 @@ class MultiplexedPCMSource(PCMProcessSource):
                 raise ValueError('Invalid shared-clock origin')
             self.clock = SessionClock(origin)
             while not self._closed:
-                header = self._read(PACKET.size, allow_eof=True)
+                deadline = min(last_received.values()) + self.timeout_s
+                header = self._read(PACKET.size, allow_eof=True, deadline=deadline)
                 if self._closed:
                     return
                 if not header:
@@ -70,7 +64,7 @@ class MultiplexedPCMSource(PCMProcessSource):
                     if (count != 0 or tag != 255 or reserved != b'\0\0\0' or timestamp != 0
                             or seen != set(self.expected_streams)):
                         raise ValueError('Invalid stream completion')
-                    if self._read(1, allow_eof=True):
+                    if self._read(1, allow_eof=True, deadline=deadline):
                         raise ValueError('Unexpected bytes after stream completion')
                     try:
                         status = self._process.wait(timeout=self.timeout_s)
@@ -87,7 +81,7 @@ class MultiplexedPCMSource(PCMProcessSource):
                 self.clock.milliseconds(timestamp)  # Reject frames before the shared origin.
                 if stream in previous_end and timestamp < previous_end[stream] - 500_000:
                     raise ValueError('Capture timestamps overlap or move backwards')
-                payload = self._read(count * 4)
+                payload = self._read(count * 4, deadline=deadline)
                 if self._closed:
                     return
                 pcm = np.frombuffer(payload, dtype='<f4').astype(np.float32)
@@ -96,9 +90,9 @@ class MultiplexedPCMSource(PCMProcessSource):
                 previous_end[stream] = timestamp + count * 1_000_000_000 // SAMPLE_RATE
                 seen.add(stream)
                 now = time.monotonic()
-                last_received[stream] = now
                 if any(now - value > self.timeout_s for value in last_received.values()):
                     raise TimeoutError('A selected capture stream stalled')
+                last_received[stream] = now
                 for index in range(0, count, FRAME_SAMPLES):
                     yield AudioFrame(pcm[index:index + FRAME_SAMPLES], stream,
                         self.clock.milliseconds(timestamp + index * 1_000_000_000 // SAMPLE_RATE),
@@ -111,15 +105,16 @@ class MultiplexedPCMSource(PCMProcessSource):
 
     def request_stop(self):
         """Ask native capture to stop and drain; keep consuming until SLE2."""
-        if self._closed or self._process is None or self._process.stdin.closed:
-            return False
-        try:
-            self._process.stdin.write(b'STOP\n')
-            self._process.stdin.flush()
-            self._process.stdin.close()
-            return True
-        except OSError:
-            return False
+        with self._lifecycle_lock:
+            if self._closed or self._process is None or self._process.stdin.closed:
+                return False
+            try:
+                self._process.stdin.write(b'STOP\n')
+                self._process.stdin.flush()
+                self._process.stdin.close()
+                return True
+            except OSError:
+                return False
 
     def monitored_frames(self, on_health):
         try:
@@ -129,8 +124,3 @@ class MultiplexedPCMSource(PCMProcessSource):
                 yield frame
         finally:
             self.close()
-
-    def close(self):
-        super().close()
-        if self._process and self._process.stdin:
-            self._process.stdin.close()

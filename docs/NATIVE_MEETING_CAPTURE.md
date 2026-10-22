@@ -7,6 +7,9 @@ physical capture/alignment and real Teams/Slack routing remain unverified.**
 The API still accepts no recording command. M4 must connect encrypted recording
 before real meetings are captured.
 
+[M3 audit and fixes](NATIVE_CAPTURE_AUDIT.md) cover lifecycle races, resampling,
+stream deadlines, metadata refresh, and source-selection regressions.
+
 ## Build and check without recording
 
 ```bash
@@ -16,7 +19,7 @@ before real meetings are captured.
 ```
 
 The diagnostic generates two five-minute 440 Hz streams in the native helper,
-converts 48 kHz stereo and 44.1 kHz mono in irregular-sized chunks to 16 kHz mono float32, and checks the
+converts 48 kHz stereo and 44.1 kHz mono using full-second and irregular-sized chunks to 16 kHz mono float32, and checks the
 real child-pipe parser. It opens no audio devices, requests no permission, and
 writes no audio file. The optional report contains aggregate numbers only.
 This is accelerated conversion/transport verification, not live capture, ASR

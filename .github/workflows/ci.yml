@@ -33,3 +33,8 @@ jobs:
         run: node tests/frontend_replay.mjs
       - name: Import smoke (application module tree)
         run: python scripts/smoke_imports.py
+      - name: Native meeting capture build and generated signals
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/build_capture.py --kind meeting
+          python scripts/check_meeting_capture.py

@@ -90,3 +90,14 @@ def test_startup_denial_reports_native_reason_instead_of_truncated_audio(tmp_pat
     with pytest.raises(RuntimeError, match='Microphone access is not authorized'):
         list(source.frames())
     assert source._process.poll() == 1
+
+
+def test_late_packet_cannot_reset_expired_stream_deadline(tmp_path):
+    # A late mic packet must not reset its expired deadline before it is checked.
+    initial = PREFIX + packet(0, 0) + packet(1, 0)
+    body = (f'time.sleep(.12)\nsys.stdout.buffer.write({packet(0, 100)!r}); sys.stdout.flush()\n'
+            f'time.sleep(.12)\nsys.stdout.buffer.write({packet(1, 100)!r}); sys.stdout.flush()\n'
+            f'sys.stdout.buffer.write({END!r}); sys.stdout.flush()\n')
+    source = MultiplexedPCMSource(helper(tmp_path, initial, body), timeout_s=.2)
+    with pytest.raises(TimeoutError, match='stalled'):
+        list(source.frames())

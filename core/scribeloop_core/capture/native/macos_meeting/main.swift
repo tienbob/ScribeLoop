@@ -65,17 +65,22 @@ final class PacketWriter {
     }
 
     func audio(_ pcm: AVAudioPCMBuffer, stream: UInt8, timestamp: UInt64) {
-        guard pcm.frameLength > 0, pcm.frameLength <= 16000, let channel = pcm.floatChannelData?[0] else {
+        // A valid one-second input plus converter-buffered samples can exceed
+        // one protocol packet. Fragment the output rather than reject/drop it.
+        guard pcm.frameLength > 0, pcm.frameLength <= 16064, let channel = pcm.floatChannelData?[0] else {
             fail("Invalid converted audio frame")
         }
-        var packet = Data("SLP2".utf8)
-        var count = UInt32(pcm.frameLength).littleEndian
-        var ns = timestamp.littleEndian
-        withUnsafeBytes(of: &count) { packet.append(contentsOf: $0) }
-        packet.append(contentsOf: [stream, 0, 0, 0])
-        withUnsafeBytes(of: &ns) { packet.append(contentsOf: $0) }
-        packet.append(Data(bytes: channel, count: Int(pcm.frameLength) * 4))
-        write(packet)
+        for offset in stride(from: 0, to: Int(pcm.frameLength), by: 16000) {
+            let length = min(16000, Int(pcm.frameLength) - offset)
+            var packet = Data("SLP2".utf8)
+            var count = UInt32(length).littleEndian
+            var ns = (timestamp + UInt64(offset) * 1_000_000_000 / 16000).littleEndian
+            withUnsafeBytes(of: &count) { packet.append(contentsOf: $0) }
+            packet.append(contentsOf: [stream, 0, 0, 0])
+            withUnsafeBytes(of: &ns) { packet.append(contentsOf: $0) }
+            packet.append(Data(bytes: channel.advanced(by: offset), count: length * 4))
+            write(packet)
+        }
     }
 
     func finish() {
@@ -129,13 +134,36 @@ final class Resampler {
     }
 
     func push(_ buffer: AVAudioPCMBuffer, timestamp: UInt64, writer: PacketWriter, stream: UInt8) {
+        guard buffer.format == input, buffer.frameLength > 0,
+              buffer.frameLength <= AVAudioFrameCount(input.sampleRate) else {
+            fail("Capture format changed or packet oversized; restart the source")
+        }
         if origin == nil { origin = timestamp }
         let expected = origin! + UInt64(Double(inputSamples) * 1_000_000_000 / input.sampleRate)
         guard abs(Int64(timestamp) - Int64(expected)) <= 2_000_000 else {
             fail("Audio clock discontinuity or drift exceeded 2 ms; restart the source")
         }
         inputSamples += UInt64(buffer.frameLength)
-        send(convert(buffer), writer: writer, stream: stream)
+        // Bound converter input requests even when hardware delivers a full second.
+        // Large buffers can exceed the converter's requested input and lose a tail.
+        var offset: AVAudioFrameCount = 0
+        while offset < buffer.frameLength {
+            let count = min(1024, buffer.frameLength - offset)
+            let chunk = AVAudioPCMBuffer(pcmFormat: input, frameCapacity: count)!
+            chunk.frameLength = count
+            let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+            let destination = UnsafeMutableAudioBufferListPointer(chunk.mutableAudioBufferList)
+            for index in 0..<source.count {
+                let stride = Int(source[index].mDataByteSize) / Int(buffer.frameLength)
+                guard let from = source[index].mData, let to = destination[index].mData else {
+                    fail("Missing PCM channel data")
+                }
+                to.copyMemory(from: from.advanced(by: Int(offset) * stride),
+                              byteCount: Int(count) * stride)
+            }
+            send(convert(chunk), writer: writer, stream: stream)
+            offset += count
+        }
     }
 
     func send(_ pcm: AVAudioPCMBuffer, writer: PacketWriter, stream: UInt8) {
@@ -355,26 +383,29 @@ struct MeetingCapture {
                        AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100,
                                      channels: 1, interleaved: false)!]
         let converters = formats.map { Resampler($0) }
-        for packet in 0..<3000 {
+        var positions: [Int] = [0, 0]
+        // Ten full-second input buffers plus 290 s of irregular small chunks.
+        for packet in 0..<2910 {
             for track in 0..<2 {
                 let format = formats[track]
-                let count = Int(format.sampleRate) / 10
+                let count = Int(format.sampleRate) / (packet < 10 ? 1 : 10)
                 // Exercise irregular hardware-like chunks, not only exact 100 ms blocks.
                 var start = 0
                 while start < count {
-                    let length = min(track == 0 ? 4096 : 1024, count - start)
+                    let length = packet < 10 ? count - start : min(track == 0 ? 4096 : 1024, count - start)
                     let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(length))!
                     pcm.frameLength = AVAudioFrameCount(length)
                     for channel in 0..<Int(format.channelCount) {
                         for sample in 0..<length {
-                            pcm.floatChannelData![channel][sample] = Float(0.1 * sin(2 * Double.pi * 440 * Double(packet * count + start + sample) / format.sampleRate))
+                            pcm.floatChannelData![channel][sample] = Float(0.1 * sin(2 * Double.pi * 440 * Double(positions[track] + start + sample) / format.sampleRate))
                         }
                     }
-                    let timestamp = base + UInt64(Double(packet * count + start) * 1_000_000_000 / format.sampleRate)
+                    let timestamp = base + UInt64(Double(positions[track] + start) * 1_000_000_000 / format.sampleRate)
                                     + UInt64(track) * 150_000_000
                     converters[track].push(pcm, timestamp: timestamp, writer: writer, stream: UInt8(track))
                     start += length
                 }
+                positions[track] += count
             }
         }
         for track in 0..<2 { converters[track].finish(writer: writer, stream: UInt8(track)) }

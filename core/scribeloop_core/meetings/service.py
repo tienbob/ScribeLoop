@@ -13,14 +13,15 @@ from .detector import MeetingDetector
 
 
 class DiscoveryService:
-    def __init__(self, publish, *, observer=None, apps_provider=lambda: (),
+    def __init__(self, publish, *, observer=None, apps_provider=None,
                  devices_provider=None, clock=time.monotonic, poll_s=1, freshness_s=5, debounce_s=3):
         for value in (poll_s, freshness_s, debounce_s):
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError('Discovery intervals must be finite and positive')
         self._publish = publish
         self._observer = observer
-        self._apps_provider = apps_provider
+        self._apps_provider = apps_provider or (lambda: ())
+        self._has_providers = observer is not None or apps_provider is not None or devices_provider is not None
         self._devices_provider = devices_provider
         self._devices = CaptureDevices(available=False, permission='not_checked')
         self._clock = clock
@@ -37,7 +38,7 @@ class DiscoveryService:
 
     async def start(self):
         await self.refresh()
-        if self._observer is not None:
+        if self._has_providers:
             self._task = asyncio.create_task(self._run())
 
     async def close(self):
@@ -77,9 +78,10 @@ class DiscoveryService:
 
     async def refresh(self):
         async with self._lock:
+            # Input-device health must refresh even when installation lookup fails.
+            await self._load_devices()
             try:
                 await self._load_apps()
-                await self._load_devices()
                 if self._observer is not None:
                     snapshot = await asyncio.to_thread(self._observer.snapshot)
                     self._detector.update(snapshot)
@@ -111,7 +113,7 @@ class DiscoveryService:
             'microphones': [{'id': 'default', 'name': 'System default microphone',
                              'enumerated': any(row.is_default for row in self._devices.microphones)},
                             *[{'id': row.id, 'name': row.name, 'enumerated': True}
-                              for row in self._devices.microphones]],
+                              for row in sorted(self._devices.microphones, key=lambda row: row.id)]],
             'candidates': [
                 {'id': self._incarnation + ':' + candidate.id,
                  'app_id': candidate.app_id, 'name': candidate.name, 'kind': candidate.kind,

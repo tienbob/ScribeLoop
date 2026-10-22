@@ -11,6 +11,7 @@ import select
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -37,18 +38,36 @@ class PCMProcessSource:
         self._stderr = None
         self._closed = False
         self._started = False
+        self._lifecycle_lock = threading.RLock()
 
-    def _read(self, count: int, *, allow_eof: bool = False) -> bytes:
-        deadline = time.monotonic() + self.timeout_s
+    def _start_process(self, *, stdin):
+        # Closing must not miss a child that Popen has created but not returned.
+        with self._lifecycle_lock:
+            if self._started or self._closed:
+                raise RuntimeError('Capture source is single-use')
+            self._started = True
+            self._stderr = tempfile.TemporaryFile()  # noqa: SIM115 - owned by close()
+            try:
+                self._process = subprocess.Popen(self.command, stdout=subprocess.PIPE,
+                    stderr=self._stderr, stdin=stdin, bufsize=0)
+            except BaseException:
+                self.close()
+                raise
+
+    def _read(self, count: int, *, allow_eof: bool = False, deadline: float | None = None) -> bytes:
+        deadline = min(deadline if deadline is not None else float('inf'),
+                       time.monotonic() + self.timeout_s)
         data = bytearray()
         while len(data) < count and not self._closed:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError('Native capture stalled: no complete audio packet received')
+                raise TimeoutError('Native capture stream stalled: no complete audio packet received')
             ready, _, _ = select.select([self._process.stdout], [], [], remaining)
             if not ready:
                 continue
             chunk = os.read(self._process.stdout.fileno(), count - len(data))
+            if self._closed:
+                return b''
             if not chunk:
                 if allow_eof and not data:
                     return b''
@@ -57,23 +76,19 @@ class PCMProcessSource:
         return bytes(data)
 
     def _diagnostic(self) -> str:
-        if self._stderr is None:
-            return ''
-        self._stderr.seek(0, os.SEEK_END)
-        size = self._stderr.tell()
-        self._stderr.seek(max(0, size - 2048))
-        return self._stderr.read().decode('utf-8', errors='replace').strip()
+        with self._lifecycle_lock:
+            if self._stderr is None:
+                return ''
+            self._stderr.seek(0, os.SEEK_END)
+            size = self._stderr.tell()
+            self._stderr.seek(max(0, size - 2048))
+            return self._stderr.read().decode('utf-8', errors='replace').strip()
 
     def frames(self) -> Iterator[AudioFrame]:
-        if self._started or self._closed:
-            raise RuntimeError('Capture source is single-use')
-        self._started = True
-        self._stderr = tempfile.TemporaryFile()  # noqa: SIM115 - owned by close(), like the child
+        self._start_process(stdin=subprocess.DEVNULL)
         origin = None
         previous_end = None
         try:
-            self._process = subprocess.Popen(self.command, stdout=subprocess.PIPE,
-                stderr=self._stderr, stdin=subprocess.DEVNULL, bufsize=0)
             while not self._closed:
                 header = self._read(HEADER.size, allow_eof=True)
                 if self._closed:
@@ -101,6 +116,9 @@ class PCMProcessSource:
                 for i in range(0, count, FRAME_SAMPLES):
                     yield AudioFrame(pcm[i:i+FRAME_SAMPLES], self.stream,
                         round((pts - origin + i / SAMPLE_RATE) * 1000), time.monotonic())
+        except (OSError, ValueError):
+            if not self._closed:
+                raise
         finally:
             self.close()
 
@@ -115,18 +133,23 @@ class PCMProcessSource:
             self.close()
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._process is not None:
-            if self._process.poll() is None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=2)
-            self._process.stdout.close()
-        if self._stderr is not None:
-            self._stderr.close()
-            self._stderr = None
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                if self._process is not None and self._process.poll() is None:
+                    self._process.terminate()
+                    try:
+                        self._process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self._process.kill()
+                        self._process.wait(timeout=2)
+            finally:
+                if self._process is not None:
+                    self._process.stdout.close()
+                    if self._process.stdin:
+                        self._process.stdin.close()
+                if self._stderr is not None:
+                    self._stderr.close()
+                    self._stderr = None
