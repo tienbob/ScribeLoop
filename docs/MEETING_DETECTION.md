@@ -5,7 +5,9 @@ typed discovery/source contracts, pure candidate state machine, diagnostic CLI,
 and shared host-clock mapper. The second increment adds the authenticated
 discovery service, candidate/dismissal UI, and manual source selection. These
 implement M2's service/UI from the [plan](PHASE_1_IMPLEMENTATION_PLAN.md), but
-do not establish real-call Teams/Slack support. No recording path is enabled.
+do not establish real-call Teams/Slack support. The third increment adds native
+device enumeration and [mic/output source primitives](NATIVE_MEETING_CAPTURE.md).
+No API/UI recording path is enabled.
 
 ## Run the metadata diagnostic
 
@@ -44,9 +46,12 @@ discovery; tests explicitly inject a deterministic service when needed.
   or explicitly choose **All system audio · includes other apps**. No app or
   whole-system scope is implicitly selected. Apps need not be in a live call to
   save this source preference; actual capture must revalidate running sources.
-- Microphone choice currently offers only **System default microphone · not
-  checked**. This is a source preference, not device enumeration, permission
-  approval, or confirmed microphone availability. Those remain M3 work.
+- Microphone choice includes enumerated physical devices and a system-default
+  preference. The native helper reports authorization without requesting access;
+  the UI shows denied/restricted/authorized/not-yet-granted/unknown states. Missing
+  enumeration falls back to an unverified default preference. A removed selected
+  microphone clears confirmation and requires a new choice, never silent fallback.
+  These controls do not grant permission or confirm successful PCM capture.
 - A selection acknowledgement is private to the requesting connection. Its
   request ID prevents an old reply from replacing a newer preference. Preferences
   and dismissal state stay in memory; reconnect requires source confirmation
@@ -70,7 +75,8 @@ versioned Chromium Helpers layouts. It matches exact bundle IDs, never string
 prefixes or names of arbitrary running processes. This is not publisher-signature
 verification and does not prove per-app output routing. Apps in other directories
 can be supplied through the registry's explicit roots parameter. The UI enumerates
-installed app choices; actual running capture/device enumeration remains pending.
+installed app choices with running/not-running status and physical mic devices.
+Per-app capture coverage still requires real-call validation.
 
 The registry recognizes installation paths for Teams, Teams classic, Slack,
 Zoom, Brave, Chrome, Safari, and Firefox. A missing installation contributes no
@@ -120,8 +126,9 @@ state into interrupted; resuming transcription never resumes microphone capture.
 milliseconds, retaining offsets and gaps without float precision loss. Native
 adapters must convert device timestamps into that clock and account for drift.
 Python receipt time and independently zeroed source clocks cannot substitute.
-The existing SLP1 capture adapter remains unchanged; wiring/versioning the native
-capture timestamps and implementing microphone capture belong to M3.
+The legacy SLP1 diagnostic retains its relative clock. M3's new SLC2/SLP2 native
+meeting source wires both streams to one host-clock origin; see the
+[protocol and validation](NATIVE_MEETING_CAPTURE.md).
 
 ## Verification and next work
 
@@ -141,8 +148,8 @@ capture timestamps and implementing microphone capture belong to M3.
   dismissal/new episodes, mute/output-only ambiguity, browsers, multiple
   candidates, observer gaps/failures, malformed metadata, explicit capture scope,
   and shared-clock offsets.
-- Verification: **162 tests passed** in the full local suite, frontend replay and
-  meeting-discovery regressions passed, 44 application modules passed import smoke, and changed
+- Verification: **193 tests passed** in the full local suite, frontend replay and
+  meeting-discovery regressions passed, 46 application modules passed import smoke, and changed
   Python code passed Ruff. Native metadata helper compilation passed separately.
 - API/service checks cover auth, stale/foreign IDs, private acknowledgements,
   shared dismissal, observer/registry failures, source validation, and reconnect.
@@ -155,6 +162,7 @@ capture timestamps and implementing microphone capture belong to M3.
   is claimed. Candidate interaction is covered with deterministic API/JS tests.
 
 Next: establish input-activity visibility and real Teams/Slack metadata traces.
-Implement microphone capture, common-clock native adapters, and device/source
-checks (M3), followed by encrypted recorder integration (M4). Signing and original
+Native mic/common-clock adapters now have generated-signal checks; physical
+validation remains open (host mic access is denied). Next connect the encrypted
+recorder and explicit permission/session flow (M4). Signing and original
 Phase 0 release-validation gates remain deferred as documented.

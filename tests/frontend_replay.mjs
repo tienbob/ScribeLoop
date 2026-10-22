@@ -112,6 +112,18 @@ assert.equal(get('select-source').disabled,false);
 deliver({type:'discovery',discovery:{...discovery,apps:[],candidates:[]}});
 assert.equal(get('meeting-source').value,'');
 assert.equal(get('select-source').disabled,true);
+deliver({type:'discovery',discovery:{...discovery,permission:'denied',
+  microphones:[...discovery.microphones,{id:'usb-mic',name:'USB <literal>',enumerated:true}]}});
+assert.match(get('microphone-permission').textContent,/denied/);
+get('meeting-source').value='system'; get('meeting-source').onchange();
+get('meeting-microphone').value='usb-mic'; get('meeting-microphone').onchange();
+get('source-form').onsubmit({preventDefault(){}});
+assert.equal(JSON.parse(socket.sent.at(-1)).microphone_id,'usb-mic');
+deliver({type:'discovery',discovery});
+assert.equal(get('meeting-microphone').value,'','Disconnected mic must not silently become the default');
+assert.equal(get('select-source').disabled,true);
+deliver({type:'discovery',discovery});
+assert.equal(get('meeting-microphone').value,'','Require a new choice after subsequent refreshes too');
 socket.readyState=3; socket.onclose({code:1006});
 assert.equal(get('meeting-source').disabled,true);
 assert.equal(get('select-source').disabled,true);

@@ -5,7 +5,10 @@ Created **2026-10-22** from the [code audit](PHASE_1_PLAN_AUDIT.md) and
 Progress: M1 contracts/native query and M2's detector/service/authenticated UI are
 implemented. Host output activity is visible, but input visibility and real-call
 feasibility remain unverified. See [discovery status](MEETING_DETECTION.md).
-Real-app/OS acceptance remains open; no meeting-app support is claimed yet.
+M3 native mic/output, device enumeration, shared-clock transport, and graceful
+drain are implemented and pass five-minute generated-signal checks. Physical
+alignment and real-app/OS acceptance remain open; host microphone access is
+denied. See [native status](NATIVE_MEETING_CAPTURE.md).
 Each milestone should be a reviewable commit on a `feature/...` branch, with
 implementation, relevant tests, and a documentation status update together.
 
@@ -77,6 +80,12 @@ ambiguity, repeated/dismissed/multiple candidates, app exit, observer failure,
 and reconnect snapshots. Manual selection still works with discovery unavailable.
 
 ## M3 — Separate capture sources and aligned timestamps
+
+Implementation delivered locally (2026-10-22); physical acceptance is open.
+The native helper and Python adapters preserve independent tracks, resample
+48/44.1 kHz generated input, retain a 150 ms offset over five minutes, and drain
+all samples on Stop. Device metadata lists three microphones with denied access.
+No physical mic capture or real meeting routing/alignment is claimed.
 
 Addresses audit findings 2 and 7.
 
@@ -193,8 +202,9 @@ distinguish delivered local macOS capability from full Phase 1 completion.
 
 ## Next implementation increment
 
-Proceed to **M3**: enumerate actual capture/microphone devices, implement the
-native mic source and common-clock adapters, and verify offsets with controlled
-signals. Keep real recording disabled until M4 connects the encrypted recorder.
+Proceed to **M4**: connect the native sources to the recorder-first encrypted
+lifecycle, explicit permission/consent UI, and coordinated Stop/failure handling.
+Keep real recording disabled until that complete lifecycle is ready. Then perform
+controlled hardware checks to close M3's outstanding physical acceptance gate.
 Continue real Teams/Slack metadata feasibility checks as installations and
 controlled calls become available; do not infer them from source-selection success.

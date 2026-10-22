@@ -10,6 +10,7 @@ const liveStates = new Set(['loading', 'replaying']);
 let discovery = {status:'disabled', apps:[], microphones:[], candidates:[]};
 let sourceRequest = 0, pendingSource = null, chosenSource = null;
 let renderedCandidates = '';
+let microphoneNeedsChoice = false;
 function send(value) {
   if (authenticated && socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify(value)); return true; }
   return false;
@@ -42,14 +43,19 @@ function updateDiscovery(value) {
     const item=document.createElement('option'); item.value=value; item.textContent=text; element.append(item);
   };
   option($('meeting-source'),'','Choose an app or audio scope');
-  discovery.apps.forEach(app => option($('meeting-source'),`app:${app.id}`,app.name + (app.kind === 'browser' ? ' · all browser audio' : '')));
+  discovery.apps.forEach(app => option($('meeting-source'),`app:${app.id}`,app.name + (app.kind === 'browser' ? ' · all browser audio' : '') + (app.running === false ? ' · not running' : '')));
   option($('meeting-source'),'system','All system audio · includes other apps');
   const validSource = oldSource === 'system' || discovery.apps.some(app => `app:${app.id}` === oldSource);
   $('meeting-source').value = validSource ? oldSource : '';
   $('meeting-microphone').replaceChildren();
-  discovery.microphones.forEach(mic => option($('meeting-microphone'),mic.id,mic.name + (mic.verified ? '' : ' · not checked')));
-  $('meeting-microphone').value = discovery.microphones.some(mic => mic.id === oldMic) ? oldMic : discovery.microphones[0]?.id || '';
+  option($('meeting-microphone'),'','Choose a microphone');
+  discovery.microphones.forEach(mic => option($('meeting-microphone'),mic.id,mic.name + (mic.enumerated ? '' : ' · not checked')));
+  const missingMic = oldMic && !discovery.microphones.some(mic => mic.id === oldMic);
+  if (missingMic) microphoneNeedsChoice = true;
+  $('meeting-microphone').value = microphoneNeedsChoice ? '' :
+    discovery.microphones.some(mic => mic.id === oldMic) ? oldMic : discovery.microphones[0]?.id || '';
   if (oldSource && !validSource) clearSource('The selected app is no longer available. Choose another source.');
+  if (missingMic) clearSource('The selected microphone is unavailable. Confirm another microphone.');
   if (chosenSource?.candidate_id && (discovery.status !== 'available' || !discovery.candidates.some(candidate => candidate.id === chosenSource.candidate_id && candidate.selectable))) {
     clearSource('That suggestion is no longer current. Choose a source manually.');
   }
@@ -57,6 +63,12 @@ function updateDiscovery(value) {
 }
 function renderDiscovery() {
   $('record-meeting').disabled = true; // No recording command exists in this increment.
+  $('microphone-permission').textContent = {
+    authorized:'Microphone access is authorized for the native helper. Recording remains off.',
+    denied:'Microphone access is denied. Source selection does not request or change permission.',
+    restricted:'Microphone access is restricted. Recording remains off.',
+    not_determined:'Microphone access has not been granted. No permission request is made during discovery.'
+  }[discovery.permission] || 'Microphone access has not been checked.';
   $('meeting-source').disabled = !authenticated;
   $('meeting-microphone').disabled = !authenticated;
   $('select-source').disabled = !authenticated || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
@@ -165,7 +177,7 @@ function connect() {
         clearSource('That suggestion is no longer current. Choose a source manually.'); renderDiscovery(); return;
       }
       pendingSource=null; chosenSource=data.source;
-      $('source-status').textContent=`Selected: ${data.source.name} + system default microphone. No recording started.`;
+      $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
     } else if (data.type === 'session') {
       sessions.set(data.session.id,data.session);
@@ -204,6 +216,6 @@ $('new-session').onclick = () => { if (activeId) { selectedId=activeId; render()
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { clearSource(); renderDiscovery(); };
-$('meeting-microphone').onchange = () => { clearSource(); renderDiscovery(); };
+$('meeting-microphone').onchange = () => { microphoneNeedsChoice = !$('meeting-microphone').value; clearSource(); renderDiscovery(); };
 renderDiscovery();
 connect();

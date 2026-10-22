@@ -49,3 +49,16 @@ JSON snapshot. It never opens a tap, audio stream, or microphone. Missing metada
 is incomplete/unavailable, not proof of idle apps. Run the bounded diagnostic with
 `python scripts/check_meeting_detection.py --duration-s 10`; see
 [discovery status and limits](../../../../docs/MEETING_DETECTION.md).
+
+## macos_meeting/ — separate mic/output and common host clock
+
+Build with `python scripts/build_capture.py --kind meeting`. AVFoundation supplies
+the microphone and SCK supplies explicitly scoped output. `--devices` reads
+metadata only; capture modes require consent and existing microphone authorization.
+The source is not connected to the UI recorder yet. SLC2/SLP2 framing preserves
+separate tracks and shared host timestamps; `STOP\n` drains conversion tails and
+finishes with SLE2. Full/closed pipes fail rather than blocking native capture.
+
+`python scripts/check_meeting_capture.py` runs five-minute **generated signals**,
+not hardware capture. See [native capture status and protocol](../../../../docs/NATIVE_MEETING_CAPTURE.md)
+for supported formats, current denied mic access, and unverified physical gates.

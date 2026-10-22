@@ -58,7 +58,7 @@ class CaptureSelection(MetadataModel):
 
     @model_validator(mode='after')
     def valid(self):
-        if not self.microphone_device_id.strip():
+        if not self.microphone_device_id.strip() or self.microphone_device_id.startswith('-'):
             raise ValueError('Microphone selection must not be blank')
         if (self.scope == 'application') != bool(self.bundle_ids):
             raise ValueError('Application scope requires bundles; system scope forbids them')

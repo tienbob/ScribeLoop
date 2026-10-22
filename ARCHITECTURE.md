@@ -44,7 +44,10 @@ per-app capture; whole-system capture requires an explicit scope selection.
 Output capture contains remote participants but usually omits the user's own
 microphone. **Separate microphone and meeting-output streams are now required in
 Phase 1** for a complete conversation, with a common timestamp reference and
-separate encrypted storage. A microphone can contain multiple people; label it
+separate encrypted storage. Native mic/output source primitives and a shared-clock
+transport are implemented with generated-signal checks; physical alignment and
+encrypted recorder integration remain open (docs/NATIVE_MEETING_CAPTURE.md).
+A microphone can contain multiple people; label it
 "Microphone" unless attribution is validated. Phase 2c retains advanced echo
 cancellation and attribution work. None of this capture integration is delivered
 yet; audio input remains public-fixture replay only, alongside source-selection UI.

@@ -1,8 +1,8 @@
-"""Shared host-clock mapping contract for future native multi-stream capture.
+"""Shared host-clock mapping used by SLC2/SLP2 native multi-stream capture.
 
 Adapters must convert device timestamps into the same monotonic host nanoseconds
 before calling this mapper. A device clock or Python receipt time cannot be
-substituted. Existing SLP1 adapters are intentionally unchanged until M3.
+substituted. Legacy SLP1 diagnostics retain their single-source relative clock.
 """
 from dataclasses import dataclass
 

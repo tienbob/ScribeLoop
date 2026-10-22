@@ -15,7 +15,8 @@
 <div id="meeting-candidates" class="meeting-candidates" aria-label="Possible meetings"></div>
 <form id="source-form"><div class="source-fields"><label>MEETING AUDIO<select id="meeting-source"><option value="">Choose an app or audio scope</option></select></label><label>MICROPHONE<select id="meeting-microphone"><option value="default">System default · not checked</option></select></label></div><div class="source-actions"><button id="select-source" type="submit" disabled>Use selected source ↗</button><button id="record-meeting" type="button" disabled aria-describedby="recording-unavailable">Record unavailable</button></div></form>
 <p id="source-status" class="source-status" role="status">Choose manually if automatic discovery misses a call.</p>
-<p id="recording-unavailable" class="scope">Source selection only. No audio is captured. Microphone access has not been checked; recording will require consent when capture is enabled.</p>
+<p id="microphone-permission" class="scope" role="status">Microphone access has not been checked.</p>
+<p id="recording-unavailable" class="scope">Source selection only. No audio is captured. Recording will require consent when the encrypted recorder is enabled.</p>
 </section>
 <form id="replay-form"><div class="form-top"><label>SESSION TITLE<input id="title" maxlength="160" value="Development listening session" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span>↗</span></button></div><p class="scope">This development slice replays existing audio. Microphone and meeting recording are not enabled.</p></form>
 <div id="notice" role="alert" hidden></div>

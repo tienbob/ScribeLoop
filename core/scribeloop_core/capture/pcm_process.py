@@ -115,6 +115,8 @@ class PCMProcessSource:
             self.close()
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         if self._process is not None:
             if self._process.poll() is None:

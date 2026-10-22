@@ -1,5 +1,6 @@
 """Discovery UI state stays ephemeral, fresh, and independent of recording."""
 import pytest
+from scribeloop_core.capture.devices import CaptureDevices, MicrophoneDevice
 from scribeloop_core.meetings.contracts import ActivitySnapshot, AppIdentity, ProcessActivity
 from scribeloop_core.meetings.service import DiscoveryService
 
@@ -160,3 +161,22 @@ async def test_background_task_shutdown():
     task = service._task
     await service.close()
     assert task.done() and service._task is None
+
+
+async def test_real_microphone_selection_permission_and_disconnection():
+    service, clock, _, _, _ = await setup_service()
+    mic = MicrophoneDevice(id='usb-mic', name='USB <literal>', is_default=True)
+    devices = CaptureDevices(available=True, permission='denied', microphones=(mic,),
+                              running_bundle_ids=(APP.app_id,))
+    service._devices_provider = lambda: devices
+    clock.now = 4.0
+    await service.refresh()
+    state = service.snapshot()
+    assert state['permission'] == 'denied' and state['apps'][0]['running'] is True
+    assert state['microphones'][1]['id'] == 'usb-mic'
+    # Saving a preference is allowed; it neither grants access nor opens PCM.
+    choice = await service.select(scope='application', app_id=APP.app_id, microphone_id='usb-mic')
+    assert choice['microphone_name'] == mic.name and choice['recording_enabled'] is False
+    devices = CaptureDevices(available=True, permission='denied')
+    with pytest.raises(ValueError, match='Microphone'):
+        await service.select(scope='application', app_id=APP.app_id, microphone_id='usb-mic')

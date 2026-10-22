@@ -91,7 +91,9 @@ pending. Source selection captures no audio; Record is disabled.
 The first vertical slice connects bounded public WAV replay to cached local ASR,
 SQLite session history, and an authenticated browser transcript UI. The replay
 milestone is audited; encrypted database/keystore and audio-container primitives
-are now implemented. With the discovery UI, 162 local tests and frontend
+are now implemented. Native mic/output sources, device enumeration, and shared
+timestamps also have generated-signal validation ([status](docs/NATIVE_MEETING_CAPTURE.md)).
+With this increment, 193 local tests and frontend
 regressions pass. See
 [Phase 1 implementation and next steps](docs/PHASE_1.md).
 

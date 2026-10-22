@@ -9,14 +9,15 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['capture', 'observer'], default='capture')
+    parser.add_argument('--kind', choices=['capture', 'observer', 'meeting'], default='capture')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if sys.platform != 'darwin':
         parser.error('This helper requires macOS and the Xcode command-line tools')
     root = Path(__file__).resolve().parents[1]
-    name = 'macos_sck' if args.kind == 'capture' else 'macos_observer'
-    binary = 'scribeloop-sck' if args.kind == 'capture' else 'scribeloop-observer'
+    name, binary = {'capture': ('macos_sck', 'scribeloop-sck'),
+                    'observer': ('macos_observer', 'scribeloop-observer'),
+                    'meeting': ('macos_meeting', 'scribeloop-meeting')}[args.kind]
     source = root / 'core/scribeloop_core/capture/native' / name / 'main.swift'
     output = (args.output or root / 'data/native' / binary).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

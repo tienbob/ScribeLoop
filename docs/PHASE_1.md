@@ -9,7 +9,8 @@ The [codebase audit against the revised plan](PHASE_1_PLAN_AUDIT.md) records
 missing meeting functionality, integration risks, and implementation order.
 The [implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md) defines seven ordered
 milestones with acceptance gates; discovery foundations and M2 service/UI are
-implemented, while native recording and full acceptance remain pending.
+implemented, alongside M3 native source/clock primitives. Integrated encrypted
+recording and physical capture acceptance remain pending.
 
 ## Requirement change — automatic meeting detection
 
@@ -28,15 +29,19 @@ The first [discovery increment](MEETING_DETECTION.md) delivers a metadata-only
 macOS observer, installed-app registry, candidate state machine, diagnostic CLI,
 and shared-clock/source contracts. The second increment adds authenticated
 candidate/dismissal controls and manual app/system-source selection. Host output
-activity is visible; real-call validation, microphone capture, and the encrypted
-recorder are still pending.
+activity is visible. The third increment adds native microphone/output sources,
+real device enumeration, and shared-clock transport ([details](NATIVE_MEETING_CAPTURE.md)).
+Real-call/physical capture validation and the encrypted recorder remain pending.
 
 ## Delivered
 
 - [x] Authenticated metadata discovery and source-selection UI: candidates with
   evidence/ambiguity, dismissal, manual fallback, freshness/installation checks,
   private request-correlated selection acknowledgement, and disabled Record.
-  Only the unverified system-default mic preference is offered; no PCM opens.
+  Enumerated microphone preferences and permission states are shown; no PCM opens.
+- [x] Native mic-only/dual capture primitives, common-clock framing, resampling,
+  nonblocking transport, and graceful drain. Five-minute generated-signal checks
+  pass; microphone access is denied on this host and physical capture is unverified.
 
 - [x] Loopback-only FastAPI server with first-message WebSocket token auth,
   five-second authentication and send timeouts, strict text-frame/Host/Origin checks,
@@ -120,9 +125,9 @@ session actions and transcript snapshots require WebSocket authentication.
 
 - Native Keychain-backed encrypted API: 20 s public replay, 7 confirmed segments,
   successful reconnect, and storage-mode indicator verified in Brave.
-- Full local suite: **162 passing tests** after the second discovery increment; changed
+- Full local suite: **193 passing tests** after the third increment; changed
   Python code passes Ruff. Frontend replay/discovery regressions and the
-  44-module application import smoke also pass.
+  46-module application import smoke also pass.
 - ASGI/WebSocket tests use deterministic ASR to verify authorization, malformed
   origins/hosts, consent, fixture access, persistence, non-persistence of partials,
   single active replay, stop, model failure, reconnect, and restart recovery.

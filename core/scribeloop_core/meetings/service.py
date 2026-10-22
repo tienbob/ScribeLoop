@@ -7,19 +7,22 @@ import math
 import time
 from uuid import uuid4
 
+from ..capture.devices import CaptureDevices
 from .contracts import ActivitySnapshot, AppIdentity, CaptureSelection
 from .detector import MeetingDetector
 
 
 class DiscoveryService:
     def __init__(self, publish, *, observer=None, apps_provider=lambda: (),
-                 clock=time.monotonic, poll_s=1, freshness_s=5, debounce_s=3):
+                 devices_provider=None, clock=time.monotonic, poll_s=1, freshness_s=5, debounce_s=3):
         for value in (poll_s, freshness_s, debounce_s):
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError('Discovery intervals must be finite and positive')
         self._publish = publish
         self._observer = observer
         self._apps_provider = apps_provider
+        self._devices_provider = devices_provider
+        self._devices = CaptureDevices(available=False, permission='not_checked')
         self._clock = clock
         self._poll_s = poll_s
         self._freshness_s = freshness_s
@@ -62,10 +65,21 @@ class DiscoveryService:
         # Installation metadata can be read without a working activity observer.
         self._replace_apps(await asyncio.to_thread(self._apps_provider))
 
+    async def _load_devices(self):
+        if self._devices_provider:
+            try:
+                devices = await asyncio.to_thread(self._devices_provider)
+                if not isinstance(devices, CaptureDevices):
+                    raise TypeError('Invalid device provider response')
+                self._devices = devices
+            except Exception:  # noqa: BLE001 - device discovery must not disable manual choices
+                self._devices = CaptureDevices(available=False, permission='not_checked')
+
     async def refresh(self):
         async with self._lock:
             try:
                 await self._load_apps()
+                await self._load_devices()
                 if self._observer is not None:
                     snapshot = await asyncio.to_thread(self._observer.snapshot)
                     self._detector.update(snapshot)
@@ -88,12 +102,16 @@ class DiscoveryService:
             'status': ('disabled' if self._observer is None else
                        'available' if available else 'unavailable'),
             'recording_enabled': False,
-            'permission': 'not_checked',
-            'apps': [{'id': app.app_id, 'name': app.name, 'kind': app.kind}
+            'permission': self._devices.permission,
+            'devices_available': self._devices.available,
+            'apps': [{'id': app.app_id, 'name': app.name, 'kind': app.kind,
+                      'running': app.app_id in self._devices.running_bundle_ids
+                      if self._devices.available else None}
                      for app in self._apps],
-            # Actual device enumeration/permission checks are part of M3.
             'microphones': [{'id': 'default', 'name': 'System default microphone',
-                             'verified': False}],
+                             'enumerated': any(row.is_default for row in self._devices.microphones)},
+                            *[{'id': row.id, 'name': row.name, 'enumerated': True}
+                              for row in self._devices.microphones]],
             'candidates': [
                 {'id': self._incarnation + ':' + candidate.id,
                  'app_id': candidate.app_id, 'name': candidate.name, 'kind': candidate.kind,
@@ -124,8 +142,10 @@ class DiscoveryService:
                 await self._load_apps()
             except Exception:  # noqa: BLE001 - sanitize installation-provider failures
                 raise ValueError('Cannot verify selected installation') from None
+            await self._load_devices()
             await self._broadcast()
-            if microphone_id != 'default':
+            microphone = next((row for row in self._devices.microphones if row.id == microphone_id), None)
+            if microphone_id != 'default' and microphone is None:
                 raise ValueError('Microphone is not available')
             app = next((app for app in self._apps if app.app_id == app_id), None)
             if scope == 'application' and app is None:
@@ -143,16 +163,20 @@ class DiscoveryService:
             return {'scope': selection.scope, 'app_id': app_id,
                     'name': app.name if app else 'All system audio',
                     'microphone_id': microphone_id, 'candidate_id': candidate_id,
+                    'microphone_name': microphone.name if microphone else 'System default microphone',
                     'recording_enabled': False}
 
 
 def native_discovery(publish):
+    from ..capture.devices import macos_capture_devices
     from .macos import MacOSActivityObserver, installed_apps
 
-    return DiscoveryService(publish, observer=MacOSActivityObserver(), apps_provider=installed_apps)
+    return DiscoveryService(publish, observer=MacOSActivityObserver(), apps_provider=installed_apps,
+                            devices_provider=macos_capture_devices)
 
 
 def manual_discovery(publish):
+    from ..capture.devices import macos_capture_devices
     from .macos import installed_apps
 
-    return DiscoveryService(publish, apps_provider=installed_apps)
+    return DiscoveryService(publish, apps_provider=installed_apps, devices_provider=macos_capture_devices)
