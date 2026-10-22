@@ -21,8 +21,10 @@ def main():
     source = root / 'core/scribeloop_core/capture/native' / name / 'main.swift'
     output = (args.output or root / 'data/native' / binary).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    metadata = (['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+                 '-Xlinker', str(source.parent / 'Info.plist')] if args.kind == 'meeting' else [])
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-O', '-module-cache-path',
-                    str(root / 'data/native/swift-cache'), str(source), '-o', str(output)], check=True)
+                    str(root / 'data/native/swift-cache'), str(source), *metadata, '-o', str(output)], check=True)
     subprocess.run([str(output), '--version'], check=True)
 
 

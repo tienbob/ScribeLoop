@@ -1,5 +1,9 @@
 # Meeting discovery — observer and authenticated source UI
 
+**Update:** an opt-in encrypted five-minute Brave call test is now connected.
+See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
+M2/M3 verification below describes those increments before this integration.
+
 Implemented **2026-10-22**: metadata-only macOS observer, installed-app registry,
 typed discovery/source contracts, pure candidate state machine, diagnostic CLI,
 and shared host-clock mapper. The second increment adds the authenticated
@@ -7,7 +11,7 @@ discovery service, candidate/dismissal UI, and manual source selection. These
 implement M2's service/UI from the [plan](PHASE_1_IMPLEMENTATION_PLAN.md), but
 do not establish real-call Teams/Slack support. The third increment adds native
 device enumeration and [mic/output source primitives](NATIVE_MEETING_CAPTURE.md).
-No API/UI recording path is enabled.
+The initial encrypted API/UI recording test is documented above.
 
 ## Run the metadata diagnostic
 
@@ -56,8 +60,9 @@ discovery; tests explicitly inject a deterministic service when needed.
   request ID prevents an old reply from replacing a newer preference. Preferences
   and dismissal state stay in memory; reconnect requires source confirmation
   again. No session/audio/transcript row is created by these controls.
-- Record is always disabled, and no recording command exists. Neither candidate
-  detection, selecting a source, nor dismissing it opens PCM or grants consent.
+- Record is available only in the encrypted native development test after source
+  confirmation, microphone authorization, and consent. Neither candidate detection,
+  selecting a source, nor dismissing it opens PCM or grants consent.
   Replay controls and existing session history continue to work independently.
 
 ## Signals and boundaries

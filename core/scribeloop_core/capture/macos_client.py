@@ -2,8 +2,7 @@
 
 The original SCK helper has local permission/tone checks. The meeting helper adds
 AVFoundation mic capture and host-clock mapping, verified with generated signals
-only; physical alignment and signed distribution remain pending. Native recording
-is not connected to the UI until the encrypted recorder lifecycle is ready.
+only; physical alignment and signed distribution remain pending. An opt-in encrypted five-minute recording test is connected to the local UI.
 """
 from __future__ import annotations
 
@@ -72,7 +71,7 @@ class MacOSScreenAudioSource:
 class MacOSMeetingAudioSource:
     """Explicit consented native mic + app/system output; never writes audio files.
 
-    The recorder/API is not wired to this source until M4. Construction alone
+    The encrypted development recorder uses this source. Construction alone
     does not open audio; iterating frames starts the native helper.
     """
 

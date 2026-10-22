@@ -85,8 +85,9 @@ and other supported meetings, then offer consented capture of meeting audio and
 separate microphone audio. This is planned Phase 1 work, not implemented support.
 See [meeting detection and capture](docs/MEETING_CAPTURE.md).
 The [metadata discovery and authenticated source UI](docs/MEETING_DETECTION.md)
-are now implemented; integrated meeting recording and real-call validation remain
-pending. Source selection captures no audio; Record is disabled.
+are now implemented; real-call validation remains pending. Source selection captures no audio. An opt-in encrypted five-minute
+[Brave call test](docs/BROWSER_CALL_TEST.md) supports explicit Record/Stop and local
+transcript notes; live routing still needs validation.
 
 The first vertical slice connects bounded public WAV replay to cached local ASR,
 SQLite session history, and an authenticated browser transcript UI. The replay

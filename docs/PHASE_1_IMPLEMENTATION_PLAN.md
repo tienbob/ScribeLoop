@@ -208,3 +208,12 @@ Keep real recording disabled until that complete lifecycle is ready. Then perfor
 controlled hardware checks to close M3's outstanding physical acceptance gate.
 Continue real Teams/Slack metadata feasibility checks as installations and
 controlled calls become available; do not infer them from source-selection success.
+
+
+### M4 development test increment — 2026-10-22
+
+The [Brave call test](BROWSER_CALL_TEST.md) now wires the native helper to
+independent encrypted stream writers, authenticated consent/Record/Stop, persisted
+stream metadata, and post-Stop local transcript notes. This is ready for a short
+physical routing test once OS microphone permission is enabled. Full M4 acceptance
+is still pending; M5 recovery/catch-up and M6 production attribution remain open.

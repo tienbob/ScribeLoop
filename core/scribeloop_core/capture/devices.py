@@ -67,3 +67,14 @@ def macos_capture_devices(helper_path: Path | None = None) -> CaptureDevices:
             microphones=rows, running_bundle_ids=tuple(bundles))
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
         return CaptureDevices(available=False, permission='not_checked')
+
+
+def request_microphone_access(helper_path=None):
+    """Explicit user action only; no devices/streams are opened here."""
+    helper = Path(helper_path or 'data/native/scribeloop-meeting').resolve()
+    try:
+        result = subprocess.run([str(helper), '--request-microphone-access'],
+                                capture_output=True, timeout=60, check=True)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError('Microphone permission request failed; check System Settings') from None
+    return result.stdout.decode().strip()

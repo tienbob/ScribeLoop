@@ -1,11 +1,15 @@
 # Native meeting capture — M3 implementation
 
+**Update:** an opt-in encrypted five-minute Brave call test is now connected.
+See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
+M2/M3 verification below describes those increments before this integration.
+
 Implemented **2026-10-22**: read-only microphone/running-app enumeration, native
 AVFoundation mic capture, SCK meeting output, common host-clock transport,
 resampling, bounded writes, and graceful drain. **Generated-signal checks pass;
 physical capture/alignment and real Teams/Slack routing remain unverified.**
-The API still accepts no recording command. M4 must connect encrypted recording
-before real meetings are captured.
+The encrypted development API now accepts explicit consented Record/Stop for
+five-minute tests; see the current test instructions above.
 
 [M3 audit and fixes](NATIVE_CAPTURE_AUDIT.md) cover lifecycle races, resampling,
 stream deadlines, metadata refresh, and source-selection regressions.

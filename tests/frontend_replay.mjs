@@ -31,7 +31,7 @@ class Socket {
 vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf8'),{
   document:{getElementById:get,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
   WebSocket:Socket,location:{hash:'#token=test-launch-key',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
-  history:{replaceState(){fragmentRemoved=true;}}, setTimeout, URLSearchParams,
+  history:{replaceState(){fragmentRemoved=true;}}, setTimeout, setInterval:()=>null, URLSearchParams,
 });
 const socket=sockets[0];
 socket.readyState=Socket.OPEN;
@@ -137,4 +137,33 @@ assert.equal(get('meeting-source').disabled,true);
 assert.equal(get('select-source').disabled,true);
 assert.equal(get('record-meeting').disabled,true);
 assert.ok(socket.sent.slice(1).every(text=>!['record','start_recording'].includes(JSON.parse(text).action)));
+// Encrypted recording is an explicit, consented action; discovery never starts it.
+const sentBeforeRecording = socket.sent.length;
+socket.readyState=Socket.OPEN;
+snapshot({...discovery,permission:'authorized'});
+assert.equal(get('record-meeting').disabled,true,'Old snapshots cannot enable recording');
+deliver({type:'snapshot',fixtures:[],sessions:[],active_id:null,segments:{},notes:{},
+  recording_available:true,storage:'encrypted',discovery:{...discovery,permission:'authorized'}});
+get('meeting-source').value='system'; get('meeting-source').onchange();
+get('meeting-microphone').value='default'; get('meeting-microphone').onchange();
+get('source-form').onsubmit({preventDefault(){}});
+const request=JSON.parse(socket.sent.at(-1));
+deliver({type:'source_selected',request_id:request.request_id,source:{scope:'system',app_id:null,
+  microphone_id:'default',name:'All system audio'}});
+assert.equal(get('record-meeting').disabled,true);
+get('record-consent').checked=true; get('record-consent').onchange();
+assert.equal(get('record-meeting').disabled,false);
+get('record-meeting').onclick();
+assert.equal(JSON.parse(socket.sent.at(-1)).action,'record');
+assert.equal(JSON.parse(socket.sent.at(-1)).consent_confirmed,true);
+assert.equal(get('record-meeting').disabled,true,'Prevent double Record');
+deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'recording',started_at:Date.now()}});
+assert.equal(get('stop').textContent,'Stop recording');
+assert.equal(get('record-consent').checked,false);
+deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'processing',started_at:Date.now()}});
+assert.equal(get('stop').hidden,true);
+assert.equal(get('record-meeting').disabled,true);
+deliver({type:'notes',session_id:'meeting',notes:'<script>literal notes</script>'});
+assert.equal(get('meeting-notes').textContent,'<script>literal notes</script>');
+assert.ok(socket.sent.length > sentBeforeRecording);
 console.log('Frontend replay and meeting discovery regressions passed');

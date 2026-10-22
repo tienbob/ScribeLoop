@@ -1,6 +1,7 @@
-"""Phase 1 public-fixture session persistence. Real-recording encryption is pending."""
+"""Replay and encrypted meeting session metadata; connections stay on the API thread."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from uuid import uuid4
@@ -13,7 +14,7 @@ class SessionStore:
     def recover(self):
         with self.conn:
             self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=? "
-                              "WHERE status IN ('loading','replaying')", (self._now(),))
+                              "WHERE status IN ('loading','replaying','preparing','recording','stopping','processing')", (self._now(),))
             self.conn.execute('UPDATE session_streams SET ended_at=(' 
                 'SELECT ended_at FROM sessions WHERE id=session_streams.session_id) '
                 "WHERE ended_at IS NULL AND session_id IN (SELECT id FROM sessions WHERE status='interrupted')")
@@ -34,7 +35,7 @@ class SessionStore:
         return self.get(session_id)
 
     def transition(self, session_id: str, status: str):
-        terminal = status in {'completed', 'stopped', 'failed', 'interrupted'}
+        terminal = status in {'completed', 'stopped', 'failed', 'interrupted', 'processing'}
         now = self._now()
         with self.conn:
             self.conn.execute('UPDATE sessions SET status=?, ended_at=? WHERE id=?',
@@ -44,10 +45,12 @@ class SessionStore:
                                   (now, session_id))
         return self.get(session_id)
 
-    def append(self, session_id: str, chunk: dict):
+    def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback'):
+        if stream not in {'loopback', 'mic'}:
+            raise ValueError('Unknown transcript stream')
         if not chunk['is_final']:
             return None
-        row = {'id': uuid4().hex, 'session_id': session_id, 'stream': 'loopback',
+        row = {'id': uuid4().hex, 'session_id': session_id, 'stream': stream,
                'start_ms': int(chunk['start_ms']), 'end_ms': int(chunk['end_ms']),
                'text': chunk['text'], 'language': chunk.get('language'),
                'confidence': chunk.get('confidence'), 'source': 'stream', 'revision': 1}
@@ -69,3 +72,44 @@ class SessionStore:
     def segments(self, session_id: str):
         return [dict(row) for row in self.conn.execute(
             'SELECT * FROM segments WHERE session_id=? ORDER BY start_ms, rowid', (session_id,))]
+
+    def create_recording(self, title, metadata):
+        session_id = uuid4().hex
+        now = self._now()
+        with self.conn:
+            self.conn.execute('INSERT INTO sessions '
+                '(id,started_at,source,title,status,consent_confirmed) VALUES (?,?,?,?,?,1)',
+                (session_id, now, 'meeting', title, 'preparing'))
+            for stream in ('mic', 'loopback'):
+                self.conn.execute('INSERT INTO session_streams '
+                    '(id,session_id,stream,sample_rate,started_at) VALUES (?,?,?,?,?)',
+                    (uuid4().hex, session_id, stream, 16000, now))
+            self.conn.execute('INSERT INTO events (session_id,ts,level,type,payload_json) '
+                'VALUES (?,?,?,?,?)', (session_id, now, 'info', 'recording_selection', json.dumps(metadata)))
+        return self.get(session_id)
+
+    def set_audio_paths(self, session_id, audio):
+        with self.conn:
+            for stream in ('mic', 'loopback'):
+                self.conn.execute('UPDATE session_streams SET audio_path=? WHERE session_id=? AND stream=?',
+                    (str(audio.path(session_id, stream)), session_id, stream))
+
+    def create_transcript_notes(self, session_id):
+        rows = self.segments(session_id)
+        content = 'Conversation notes · transcript excerpts\n\n'
+        content += '\n'.join(f"[{row['start_ms']//60000}:{row['start_ms']//1000%60:02d}] "
+            f"{'Microphone' if row['stream'] == 'mic' else 'Meeting audio'}: {row['text']}" for row in rows)
+        if not rows:
+            content += 'No speech was transcribed. Check capture routing and microphone permission.'
+        with self.conn:
+            self.conn.execute('INSERT INTO summaries '
+                '(id,session_id,kind,span_start_ms,span_end_ms,content_md,actions_json,model_id,created_at) '
+                'VALUES (?,?,?,?,?,?,?,?,?)', (uuid4().hex, session_id, 'provisional', 0,
+                    max((row['end_ms'] for row in rows), default=0), content, '[]',
+                    'transcript-excerpts-v1', self._now()))
+        return content
+
+    def notes(self, session_id):
+        row = self.conn.execute('SELECT content_md FROM summaries WHERE session_id=? '
+            'ORDER BY created_at DESC,rowid DESC LIMIT 1', (session_id,)).fetchone()
+        return row['content_md'] if row else ''

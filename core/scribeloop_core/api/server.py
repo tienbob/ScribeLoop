@@ -1,7 +1,7 @@
-"""Authenticated Phase 1 public-fixture replay workspace; loopback only.
+"""Authenticated local replay and opt-in encrypted native meeting test workspace.
 
-Disk storage here is deliberately limited to explicitly configured public test
-fixtures. Real-recording capture/upload waits for the complete encrypted recorder lifecycle.
+Native recording requires SQLCipher, macOS, explicit source selection and consent.
+Uploads/cloud processing are not exposed by this server.
 """
 from __future__ import annotations
 
@@ -57,6 +57,20 @@ class SelectSource(BaseModel):
     candidate_id: str | None = Field(default=None, min_length=1, max_length=600)
 
 
+class StartRecording(SelectSource):
+    action: Literal['record']
+    title: str = Field(default='Meeting test', min_length=1, max_length=160)
+    consent_confirmed: bool = Field(strict=True)
+
+    @field_validator('title')
+    @classmethod
+    def valid_title(cls, value):
+        value.encode('utf-8')
+        if not value.strip():
+            raise ValueError('Empty title')
+        return value
+
+
 class DismissCandidate(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['dismiss_candidate']
@@ -64,7 +78,7 @@ class DismissCandidate(BaseModel):
 
 
 def create_app(*, database=None, fixtures=None, backend_factory=None,
-               storage='memory', key_store=None, discovery_factory=None) -> tuple[FastAPI, str]:
+               storage='memory', key_store=None, discovery_factory=None, recording_factory=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -112,6 +126,16 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.store = store
             app.state.runner = ReplayRunner(store, backend_factory, publish)
             app.state.storage = storage
+            app.state.recording = None
+            if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
+                from ..capture.macos_client import MacOSMeetingAudioSource
+                from ..pipeline.recording import RecordingRunner
+                from ..storage.audio import SessionAudioStore
+                from ..storage.keys import NativeKeyStore
+                audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
+                                          key_store if key_store is not None else NativeKeyStore())
+                app.state.recording = (recording_factory or RecordingRunner)(
+                    store, audio, MacOSMeetingAudioSource, publish)
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             try:
                 await app.state.discovery.start()
@@ -120,6 +144,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 try:
                     await app.state.discovery.close()
                 finally:
+                    if app.state.recording is not None:
+                        await app.state.recording.close()
                     await app.state.runner.close()
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
@@ -185,10 +211,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = app.state.store
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
-                'sessions': history, 'active_id': app.state.runner.active_id,
+                'sessions': history, 'active_id': app.state.runner.active_id or
+                    (app.state.recording.active_id if app.state.recording else None),
+                'recording_available': app.state.recording is not None,
                 'replay_available': not app.state.runner.unavailable, 'storage': app.state.storage,
                 'discovery': app.state.discovery.snapshot(),
-                'segments': {s['id']: store.segments(s['id']) for s in history}})
+                'segments': {s['id']: store.segments(s['id']) for s in history},
+                'notes': {s['id']: store.notes(s['id']) for s in history}})
 
             async def send_events():
                 while True:
@@ -207,6 +236,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
                         if command.get('action') == 'start':
+                            if app.state.recording and app.state.recording.active_id:
+                                raise ValueError('A recording is active')
                             request = StartReplay.model_validate(command)
                             if not request.consent_confirmed:
                                 raise ValueError('Confirm authorization before replay')
@@ -216,7 +247,34 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                                               fixtures[request.fixture])
                             await publish({'type': 'session', 'session': session})
                         elif command.get('action') == 'stop':
-                            app.state.runner.stop(command.get('session_id'))
+                            recorder = app.state.recording
+                            if recorder and recorder.active_id == command.get('session_id'):
+                                recorder.stop(command.get('session_id'))
+                            else:
+                                app.state.runner.stop(command.get('session_id'))
+                        elif command.get('action') == 'microphone_permission':
+                            if set(command) != {'action'} or app.state.recording is None:
+                                raise ValueError('Permission request unavailable')
+                            from ..capture.devices import request_microphone_access
+                            await asyncio.to_thread(request_microphone_access)
+                            await app.state.discovery.refresh()
+                        elif command.get('action') == 'record':
+                            request = StartRecording.model_validate(command)
+                            recorder = app.state.recording
+                            if not recorder or app.state.runner.active_id or not request.consent_confirmed:
+                                raise ValueError('Recording is not available or consent missing')
+                            source = await app.state.discovery.select(scope=request.scope,
+                                app_id=request.app_id, microphone_id=request.microphone_id,
+                                candidate_id=request.candidate_id)
+                            from ..meetings.contracts import CaptureSelection
+                            selection = CaptureSelection(scope=request.scope,
+                                bundle_ids=(source['app_id'],) if request.scope == 'application' else (),
+                                microphone_device_id=request.microphone_id)
+                            if app.state.runner.active_id:
+                                raise ValueError('A replay is active')
+                            session = recorder.start(selection, source, request.title,
+                                consent_confirmed=request.consent_confirmed)
+                            await publish({'type': 'session', 'session': session})
                         elif command.get('action') == 'select_source':
                             request = SelectSource.model_validate(command)
                             source = await app.state.discovery.select(
@@ -234,13 +292,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await app.state.discovery.dismiss(request.candidate_id)
                         else:
                             raise ValueError('Unknown command')
-                    except (ValueError, ValidationError, TypeError, *DATABASE_ERRORS):
+                    except (ValueError, ValidationError, TypeError, OSError, *DATABASE_ERRORS):
                         if queue.full():
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
                             'message': 'Source unavailable or suggestion expired. Choose again manually.'

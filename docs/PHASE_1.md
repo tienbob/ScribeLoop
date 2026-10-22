@@ -1,5 +1,9 @@
 # Phase 1 — meeting capture and live transcript MVP (2026-10-22)
 
+**Update:** an opt-in encrypted five-minute Brave call test is now connected.
+See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
+M2/M3 verification below describes those increments before this integration.
+
 Status: **public replay milestone audited and finalized** (2026-10-22).
 The encrypted-storage foundation is also implemented ([details](SECURE_STORAGE.md)).
 The full Phase 1 MVP remains incomplete; its remaining requirements are listed below.
@@ -9,8 +13,8 @@ The [codebase audit against the revised plan](PHASE_1_PLAN_AUDIT.md) records
 missing meeting functionality, integration risks, and implementation order.
 The [implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md) defines seven ordered
 milestones with acceptance gates; discovery foundations and M2 service/UI are
-implemented, alongside M3 native source/clock primitives. Integrated encrypted
-recording and physical capture acceptance remain pending.
+implemented, alongside M3 native source/clock primitives and an initial M4 encrypted
+recording test path. Full M4 acceptance and physical capture validation remain pending.
 
 ## Requirement change — automatic meeting detection
 
@@ -79,8 +83,9 @@ The terminal prints a local launch URL containing a token in its fragment. Open
 that URL: the page removes the fragment and sends the key as its first WebSocket
 message. The key stays in page memory, not local storage. After reload/restart,
 use the current launch URL/key again. Do not save this short-lived key in a browser
-password manager. The API has no arbitrary path, upload, capture, or model-selection
-endpoint. It can replay only startup-configured fixtures of at most five minutes.
+password manager. The API has no arbitrary path, upload, or model-selection endpoint. Replay uses
+only startup-configured fixtures of at most five minutes. Native recording requires
+encrypted mode, explicit source selection, and participant consent.
 
 The CLI now defaults to encrypted SQLCipher storage in the ScribeLoop platform
 user-data directory, with a key in the native OS keystore. Missing dependencies,
@@ -89,9 +94,8 @@ plaintext demo DB is left untouched. Use explicit `--storage public-demo` for
 non-sensitive test storage, or programmatic memory mode for portable tests.
 See [secure storage setup and limitations](SECURE_STORAGE.md).
 
-Public-fixture replay remains the only input. Encrypted audio primitives are
-implemented, but native recording and upload are not enabled until the recorder
-and session lifecycle use them together. No new recorded audio is created by replay.
+Public-fixture replay and the explicit encrypted native meeting test are separate
+inputs. Upload is not enabled. No new recorded audio is created by replay.
 
 ## State and transport behavior
 

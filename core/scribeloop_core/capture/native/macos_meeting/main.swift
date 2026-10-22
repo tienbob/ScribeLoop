@@ -264,6 +264,17 @@ struct MeetingCapture {
             catch { fail("Device enumeration failed") }
             return
         }
+        if args == ["--request-microphone-access"] {
+            if permission() == "not_determined" {
+                _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    AVCaptureDevice.requestAccess(for: .audio) { granted in
+                        continuation.resume(returning: granted)
+                    }
+                }
+            }
+            print(permission())
+            return
+        }
         if args == ["--self-test"] { selfTest(); return }
         guard args.contains("--consent-confirmed") else { fail("Explicit capture consent is required") }
         var microphone: String?

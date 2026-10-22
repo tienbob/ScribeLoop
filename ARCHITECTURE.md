@@ -32,7 +32,8 @@ local audio, starting with **Microsoft Teams and Slack huddles**, then Zoom and
 browser meetings such as Google Meet and Teams web. This is **Phase 1 scope**, not
 Phase 4 polish. These are required targets, not currently verified integrations. The first metadata-only
 macOS observer, candidate state machine, shared-clock contract, and authenticated
-source-selection UI are implemented; real-call validation and recording remain pending. See
+source-selection UI are implemented, alongside an opt-in encrypted five-minute
+[recording test](docs/BROWSER_CALL_TEST.md); real-call validation remains pending. See
 [discovery implementation](docs/MEETING_DETECTION.md).
 See [the detection and capture specification](docs/MEETING_CAPTURE.md).
 

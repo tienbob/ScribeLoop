@@ -4,24 +4,27 @@
 <body>
 <header><a class="wordmark" href="/">scribe<span>loop</span><i aria-hidden="true"></i></a><span class="edition">THE LISTENING ROOM <span> / </span> LOCAL DEVELOPMENT</span><span id="connection" role="status">Connecting…</span></header>
 <main>
-<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New replay</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot"></span> <span id="storage-status">Storage pending</span><br><small>Public test fixtures only</small></div></aside>
+<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New replay</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
 <section class="workspace">
 <div class="eyebrow">PHASE 01 <span>—</span> A PLACE FOR THE CONVERSATION</div>
 <div class="heading"><h1>Listen closely.<br><em>Keep the thread.</em></h1><div class="page-number" aria-hidden="true">01<span> / NOTES</span></div></div>
 <p class="intro">A local workspace for turning a conversation into something you can return to.</p>
 <section class="meeting-panel" aria-labelledby="meeting-heading">
-<div class="meeting-heading"><div><div class="section-label">MEETING DISCOVERY</div><h2 id="meeting-heading">Find the conversation.</h2></div><span class="preview-tag">Recording off</span></div>
+<div class="meeting-heading"><div><div class="section-label">MEETING DISCOVERY</div><h2 id="meeting-heading">Find the conversation.</h2></div><span id="recording-state" class="preview-tag" role="status">Recording off</span></div>
 <p id="discovery-status" class="discovery-status" role="status">Connect to see meeting sources.</p>
 <div id="meeting-candidates" class="meeting-candidates" aria-label="Possible meetings"></div>
-<form id="source-form"><div class="source-fields"><label>MEETING AUDIO<select id="meeting-source"><option value="">Choose an app or audio scope</option></select></label><label>MICROPHONE<select id="meeting-microphone"><option value="default">System default · not checked</option></select></label></div><div class="source-actions"><button id="select-source" type="submit" disabled>Use selected source ↗</button><button id="record-meeting" type="button" disabled aria-describedby="recording-unavailable">Record unavailable</button></div></form>
+<form id="source-form"><div class="source-fields"><label>MEETING AUDIO<select id="meeting-source"><option value="">Choose an app or audio scope</option></select></label><label>MICROPHONE<select id="meeting-microphone"><option value="default">System default · not checked</option></select></label></div><div class="source-actions"><button id="select-source" type="submit" disabled>Use selected source ↗</button><button id="record-meeting" type="button" disabled aria-describedby="recording-unavailable">Record meeting ↗</button></div></form>
 <p id="source-status" class="source-status" role="status">Choose manually if automatic discovery misses a call.</p>
+<button id="enable-microphone" type="button" hidden>Enable microphone access</button>
 <p id="microphone-permission" class="scope" role="status">Microphone access has not been checked.</p>
-<p id="recording-unavailable" class="scope">Source selection only. No audio is captured. Recording will require consent when the encrypted recorder is enabled.</p>
+<label class="consent"><input type="checkbox" id="record-consent"> I have permission from participants to record this call.</label>
+<p id="recording-unavailable" class="scope">Five-minute development test. Captures all audio in the selected browser plus your microphone. Use headphones. Encrypted audio stays on this machine; local transcription and transcript notes appear after Stop.</p>
 </section>
-<form id="replay-form"><div class="form-top"><label>SESSION TITLE<input id="title" maxlength="160" value="Development listening session" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span>↗</span></button></div><p class="scope">This development slice replays existing audio. Microphone and meeting recording are not enabled.</p></form>
+<form id="replay-form"><div class="form-top"><label>SESSION TITLE<input id="title" maxlength="160" value="Development listening session" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span>↗</span></button></div><p class="scope">This development slice replays existing audio. Meeting recording uses the separate consent control above.</p></form>
 <div id="notice" role="alert" hidden></div>
 <div class="transcript-header"><div><span id="activity-dot" class="activity-dot"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div><button id="stop" type="button" hidden>Stop replay</button></div>
 <div id="transcript" aria-live="polite" aria-relevant="additions"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Choose a sample above. Confirmed text appears here as it’s transcribed and stays in your notebook.</p><span class="empty-rule"></span></div></div>
+<pre id="meeting-notes" class="meeting-notes scope" aria-live="polite"></pre>
 <div id="partial" class="partial" aria-live="off"></div>
 <footer><span>WORDS, KEPT CLOSE.</span><span>Replay · local transcription · saved on this machine</span></footer>
 </section>

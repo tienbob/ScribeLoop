@@ -3,10 +3,11 @@ const $ = id => document.getElementById(id);
 let key = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
-let stopPending = false, authenticated = false, replayAvailable = true;
+let stopPending = false, authenticated = false, replayAvailable = true, recordingAvailable = false, recordPending = false;
+let notes = new Map();
 const partials = new Map();
 let socket, activeId = null, selectedId = null, sessions = new Map(), segments = new Map();
-const liveStates = new Set(['loading', 'replaying']);
+const liveStates = new Set(['loading', 'replaying', 'preparing', 'recording', 'stopping']);
 let discovery = {status:'disabled', apps:[], microphones:[], candidates:[]};
 let sourceRequest = 0, pendingSource = null, chosenSource = null;
 let renderedCandidates = '', renderedApps = '', renderedMicrophones = '';
@@ -70,11 +71,20 @@ function updateDiscovery(value) {
   renderDiscovery();
 }
 function renderDiscovery() {
-  $('record-meeting').disabled = true; // No recording command exists in this increment.
+  const processing = [...sessions.values()].some(s => s.source === 'meeting' && s.status === 'processing');
+  $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
+    !$('record-consent').checked || Boolean(activeId) || recordPending || processing || discovery.permission !== 'authorized';
+  $('record-meeting').textContent = recordPending ? 'Preparing…' : 'Record meeting ↗';
+  const active = sessions.get(activeId);
+  $('recording-state').textContent = active?.source === 'meeting' ?
+    `${active.status.toUpperCase()} · ${Math.max(0,Math.floor((Date.now()-active.started_at)/1000))}s` :
+    processing ? 'TRANSCRIBING · audio capture stopped' : 'Recording off';
+  $('enable-microphone').hidden = !recordingAvailable || discovery.permission !== 'not_determined';
+  $('enable-microphone').disabled = !authenticated || Boolean(activeId);
   $('microphone-permission').textContent = {
-    authorized:'Microphone access is authorized for the native helper. Recording remains off.',
-    denied:'Microphone access is denied. Source selection does not request or change permission.',
-    restricted:'Microphone access is restricted. Recording remains off.',
+    authorized:'Microphone access is authorized for the native helper. Recording starts only after consent and Record.',
+    denied:'Microphone access is denied. Enable Microphone access for the server’s launching app in macOS System Settings → Privacy & Security → Microphone, then refresh sources.',
+    restricted:'Microphone access is restricted. Recording starts only after consent and Record.',
     not_determined:'Microphone access has not been granted. No permission request is made during discovery.'
   }[discovery.permission] || 'Microphone access has not been checked.';
   $('meeting-source').disabled = !authenticated;
@@ -132,26 +142,27 @@ function render() {
   $('activity-dot').classList.toggle('active', Boolean(activeId));
   $('stop').hidden = !activeId;
   $('stop').disabled = stopPending || !authenticated;
-  $('stop').textContent = stopPending ? 'Stopping…' : 'Stop replay';
+  $('stop').textContent = stopPending ? 'Stopping…' : sessions.get(activeId)?.source === 'meeting' ? 'Stop recording' : 'Stop replay';
   $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !$('fixture').value;
   $('partial').textContent = partials.get(selectedId) || '';
   if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
   else $('start').textContent = 'Start replay ↗';
-  const rows = segments.get(selectedId) || [];
+  $('meeting-notes').textContent = notes.get(selectedId) || '';
+  const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   if (!rows.length && !session) $('transcript').replaceChildren(emptyTemplate.cloneNode(true));
   if (rows.length || session) {
     $('transcript').replaceChildren();
     if (!rows.length) {
       const p = document.createElement('p'); p.className = 'partial';
-      p.textContent = !replayAvailable ? 'Replay stopped because storage is unavailable. Restart the local server.' : session?.status === 'failed' ? 'Replay failed. Check the configured public sample and cached ASR model; no download starts automatically.' : liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No confirmed words in this replay.';
+      p.textContent = !replayAvailable ? 'Replay stopped because storage is unavailable. Restart the local server.' : session?.status === 'processing' ? 'Audio capture stopped. Transcribing encrypted audio locally…' : session?.source === 'meeting' && session?.status === 'failed' ? 'Meeting capture or transcription failed. Check the notice above.' : session?.status === 'failed' ? 'Replay failed. Check the configured public sample and cached ASR model; no download starts automatically.' : liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No confirmed words in this replay.';
       $('transcript').append(p);
     }
     rows.forEach(row => {
       const article = document.createElement('article'); article.className = 'segment';
       const time = document.createElement('span'); time.className = 'timestamp';
       const seconds = Math.floor(row.start_ms/1000); time.textContent = `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
-      const p = document.createElement('p'); p.textContent = row.text;
+      const p = document.createElement('p'); p.textContent = session?.source === 'meeting' ? `${row.stream === 'mic' ? 'Microphone' : 'Meeting audio'}: ${row.text}` : row.text;
       article.append(time,p); $('transcript').append(article);
     });
   }
@@ -164,7 +175,9 @@ function connect() {
   socket.onmessage = event => {
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
-      authenticated = true; replayAvailable = data.replay_available !== false; partials.clear();
+      authenticated = true; recordingAvailable = data.recording_available === true; recordPending=false;
+      notes = new Map(Object.entries(data.notes || {}));
+      replayAvailable = data.replay_available !== false; partials.clear();
       clearSource(); updateDiscovery(data.discovery);
       $('storage-status').textContent = {encrypted:'Encrypted on this machine', 'public-demo':'Public demo · unencrypted', memory:'Temporary memory'}[data.storage] || 'Storage status unavailable';
       $('connection').textContent = '● Connected locally';
@@ -187,7 +200,12 @@ function connect() {
       pendingSource=null; chosenSource=data.source;
       $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
+    } else if (data.type === 'notes') {
+      notes.set(data.session_id,data.notes); render();
+    } else if (data.type === 'recording_error') {
+      recordPending=false; notice(data.message); render();
     } else if (data.type === 'session') {
+      if (data.session.source === 'meeting') { recordPending=false; $('record-consent').checked=false; }
       sessions.set(data.session.id,data.session);
       if (liveStates.has(data.session.status)) { activeId=data.session.id; selectedId=activeId; }
       else { if (activeId === data.session.id) { activeId=null; stopPending=false; } partials.delete(data.session.id); }
@@ -203,13 +221,15 @@ function connect() {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
       if (data.context === 'meeting') {
-        if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); renderDiscovery(); }
+        recordPending=false; notice(data.message);
+        if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
+        renderDiscovery();
       } else { stopPending=false; notice(data.message); render(); }
     }
     else if (data.type === 'reconnect_required') notice('The connection fell behind. Reconnecting restores saved text.');
   };
   socket.onclose = event => {
-    authenticated=false; stopPending=false; partials.clear();
+    authenticated=false; stopPending=false; recordPending=false; partials.clear();
     clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
@@ -227,3 +247,17 @@ $('meeting-source').onchange = () => { clearSource(); renderDiscovery(); };
 $('meeting-microphone').onchange = () => { microphoneNeedsChoice = !$('meeting-microphone').value; clearSource(); renderDiscovery(); };
 renderDiscovery();
 connect();
+
+$('record-consent').onchange = renderDiscovery;
+$('record-meeting').onclick = () => {
+  if ($('record-meeting').disabled || !chosenSource) return;
+  recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
+    app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
+    candidate_id:null,title:$('title').value.trim() || 'Meeting test',
+    consent_confirmed:$('record-consent').checked});
+  renderDiscovery();
+};
+
+$('enable-microphone').onclick = () => send({action:'microphone_permission'});
+
+setInterval(() => { if (activeId) renderDiscovery(); },1000);
