@@ -6,7 +6,7 @@ Usage:
 
 Measures, per backend (§7 provisional targets):
 - throughput: audio duration vs wall time (offline pass speed)
-- WER vs an optional ground-truth transcript (Whisper-style normalization,
+- WER vs an optional ground-truth transcript (versioned Unicode normalization,
   §7 scoring protocol)
 - chunk cadence: how often confirmed text is emitted
 
@@ -16,40 +16,21 @@ harness runs on any dev machine.
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import time
 from pathlib import Path
 
+import soundfile as sf
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
 
-from scribeloop_core.capture.source import WavFileSource  # noqa: E402
-from scribeloop_core.pipeline.asr import available_backends  # noqa: E402
+from scribeloop_core.capture.source import WavFileSource
+from scribeloop_core.evaluation.metrics import normalize, score_words  # noqa: F401
+from scribeloop_core.pipeline.asr import available_backends
 
 
-# --- §7 scoring protocol: Whisper-style text normalization ----------------
-
-def normalize(text: str) -> list[str]:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9'\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text.split()
-
-
-def wer(reference: str, hypothesis: str) -> float:
-    """Word error rate via word-level Levenshtein (substitutions count 1)."""
-    ref, hyp = normalize(reference), normalize(hypothesis)
-    if not ref:
-        return 0.0 if not hyp else 1.0
-    prev = list(range(len(hyp) + 1))
-    for i, r in enumerate(ref, 1):
-        cur = [i] + [0] * len(hyp)
-        for j, h in enumerate(hyp, 1):
-            cur[j] = min(prev[j] + 1,          # deletion
-                         cur[j - 1] + 1,       # insertion
-                         prev[j - 1] + (r != h))  # substitution
-        prev = cur
-    return prev[-1] / len(ref)
+def wer(reference: str, hypothesis: str) -> float | None:
+    return score_words(reference, hypothesis).wer
 
 
 # --- runner ----------------------------------------------------------------
@@ -71,19 +52,21 @@ def run_backend(
     chunks: list[dict] = []
     started = time.perf_counter()
     first_ts: float | None = None
-    audio_s = 0.0
-    for frame in source.frames():
-        audio_s = (frame.t_ms + 100) / 1000.0  # last frame's end = file duration
-        out = backend.feed(frame)
-        if out and first_ts is None:
+    audio_s = sf.info(wav).duration
+    try:
+        for frame in source.frames():
+            out = backend.feed(frame)
+            if out and first_ts is None:
+                first_ts = time.perf_counter() - started
+            chunks.extend(out)
+        tail = backend.flush()
+        if tail and first_ts is None:
             first_ts = time.perf_counter() - started
-        chunks.extend(out)
-    tail = backend.flush()
-    if tail and first_ts is None:
-        first_ts = time.perf_counter() - started
-    chunks.extend(tail)
-    elapsed = time.perf_counter() - started
-    backend.close()
+        chunks.extend(tail)
+        elapsed = time.perf_counter() - started
+    finally:
+        backend.close()
+        source.close()
     return chunks, elapsed, (first_ts or 0.0), audio_s
 
 
@@ -122,7 +105,8 @@ def main() -> None:
     print(f"first chunk:    {first_ts:.2f} s after start")
     print(f"finals:         {len(finals)}   partials: {len(partials)}")
     if args.reference and args.reference.exists():
-        print(f"WER (finals):   {wer(args.reference.read_text(encoding='utf-8'), text):.1%}")
+        value = wer(args.reference.read_text(encoding="utf-8"), text)
+        print(f"WER (finals):   {format(value, '.1%') if value is not None else 'undefined (empty reference)'}")
     print("--- transcript (finals) ---")
     print(text[:600])
 

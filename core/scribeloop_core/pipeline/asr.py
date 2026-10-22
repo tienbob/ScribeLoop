@@ -18,10 +18,11 @@ pass (native streaming), with upshift hysteresis.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from ..capture.source import SAMPLE_RATE, AudioFrame
-
 
 # --------------------------------------------------------------------------
 # Contract
@@ -147,9 +148,14 @@ class SherpaOnnxStreaming(StreamingASR):
 
         def pick(pattern: str) -> str:
             suffix = ".int8.onnx" if int8 else ".onnx"
-            matches = [p for p in d.glob(pattern) if p.name.endswith(suffix)]
+            matches = sorted(
+                p for p in d.glob(pattern)
+                if p.name.endswith(suffix) and (int8 or not p.name.endswith(".int8.onnx"))
+            )
             if not matches:
                 raise FileNotFoundError(f"no {pattern} in {d}")
+            if len(matches) != 1:
+                raise ValueError(f"ambiguous {pattern} in {d}: {matches}")
             return str(matches[0])
 
         self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
@@ -160,6 +166,7 @@ class SherpaOnnxStreaming(StreamingASR):
             num_threads=num_threads,
             sample_rate=SAMPLE_RATE,
             feature_dim=80,
+            enable_endpoint_detection=True,
             decoding_method="greedy_search",
             provider="cpu",
         )
@@ -203,7 +210,11 @@ class SherpaOnnxStreaming(StreamingASR):
         if self._recognizer.is_endpoint(self._stream):
             if text:
                 out.append(self._chunk(text, end_ms, is_final=True))
-            self._stream = None  # next utterance gets a fresh stream
+            # Retain buffered features/lookahead at an endpoint. Replacing
+            # the stream discards audio the encoder has not consumed yet.
+            self._recognizer.reset(self._stream)
+            self._utterance_start_ms = end_ms
+            self._last_text = ""
         elif text and text != self._last_text:
             out.append(self._chunk(text, end_ms, is_final=False))
             self._last_text = text
@@ -238,6 +249,6 @@ def available_backends() -> list[str]:
         import sherpa_onnx  # noqa: F401
 
         names.append(SherpaOnnxStreaming.name)
-    except Exception:
-        pass
+    except (ImportError, OSError):
+        logging.getLogger(__name__).debug("sherpa-onnx unavailable", exc_info=True)
     return names

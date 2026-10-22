@@ -2,10 +2,10 @@
 
 Delete semantics (§3.1): hard deletes with ``secure_delete=ON``; every purge
 finishes with ``wal_checkpoint(TRUNCATE)``; full VACUUM only for bulk
-migrations. Phase 0a check: SQLCipher builds and the sqlite-vec loadable
-extension may not coexist (SQLCipher is a SQLite fork; extension loading is
-build-flag dependent) — fallback: volume encryption + app-layer BLOB
-encryption (§6).
+migrations. Phase 0a check (verified 2026-10-21, see ``scripts/check_vec.py``
+and ``tests/test_vectors.py``): SQLCipher 4.19 and the sqlite-vec 0.1.9
+loadable extension coexist — the fallback (volume encryption + app-layer BLOB
+encryption, §6) is not needed.
 """
 from __future__ import annotations
 
