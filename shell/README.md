@@ -1,13 +1,11 @@
-# shell/ — Tauri v2 app (placeholder)
+# Desktop shell — deferred for local v0
 
-Rust shell + webview UI, with the Python core as a managed sidecar over a
-local WebSocket (first-message token auth — §6).
+Phase 0 local-development decision (2026-10-22): start with the existing Python
+FastAPI core and a browser UI. Tauri scaffolding is deferred; no Rust/TS shell
+or distribution artifact is implemented here. ML payload remains multi-GB
+regardless of the host UI; installer measurements are still deferred.
 
-**Status: placeholder.** The Tauri-vs-pure-Python decision is a Phase 0a
-packaging-spike deliverable (§8 0a) — including GStreamer/PyGObject inside
-AppImage/deb and llama-cpp-python wheel availability. This directory gets
-scaffolded when that decision lands.
-
-If Tauri wins: `npm create tauri-app`, Rust shell manages the core sidecar
-process, passes the per-launch token out-of-band, and enforces a strict CSP
-(§6 "the UI is an attack surface").
+The browser UI must retain loopback-only binding, first-message token auth,
+strict CSP, and consent state. Native capture remains a separate Swift helper.
+Signing and notarized responsible-app permission attribution remain required
+before distribution. See [Phase 0 closeout](../docs/PHASE_0_CLOSEOUT.md).
