@@ -163,7 +163,7 @@ class DiscoveryService:
                 scope=scope, bundle_ids=(app.app_id,) if scope == 'application' else (),
                 microphone_device_id=microphone_id)
             return {'scope': selection.scope, 'app_id': app_id,
-                    'name': app.name if app else 'All system audio',
+                    'name': app.name if app else 'All system audio', 'kind':app.kind if app else None,
                     'microphone_id': microphone_id, 'candidate_id': candidate_id,
                     'microphone_name': microphone.name if microphone else 'System default microphone',
                     'recording_enabled': False}

@@ -101,3 +101,14 @@ reduced-motion handling, encrypted-storage status, and browser ambiguity labels.
 
 Review criteria:
 https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md
+
+## Fix implementation — in progress
+
+Keep the notebook visual direction. Add a persistent recording/status/Stop bar
+with immutable session scope from authenticated metadata, separate meeting setup
+from development replay, place consent before Record, and show precise blocking
+reasons and scope warnings. Preserve DOM focus and existing transcript nodes,
+separate timers from live announcements, expose language/reprocessing near the
+session heading, collapse transcript excerpts, improve contrast/narrow layouts,
+and provide explicit reconnect and accessible navigation/form labels. Do not open
+real capture or modify OS permissions during UI verification.

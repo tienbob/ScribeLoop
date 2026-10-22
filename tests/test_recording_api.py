@@ -64,6 +64,9 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
         assert opened == []
         ws.send_json(command())
         session = receive(ws, 'session', 'preparing')['session']
+        assert session['capture']['name']=='Brave'
+        assert session['capture']['kind']=='browser'
+        assert session['capture']['scope']=='application'
         receive(ws, 'session', 'recording')
         ws.send_json(command(request_id=2))
         receive(ws, 'error')
@@ -83,3 +86,5 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
         snapshot = ws.receive_json()
         assert 'Test call words' in snapshot['notes'][session['id']]
         assert snapshot['active_id'] is None
+        assert snapshot['sessions'][0]['capture']['name']=='Brave'
+        assert snapshot['sessions'][0]['capture']['scope']=='application'

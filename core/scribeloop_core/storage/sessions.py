@@ -64,10 +64,25 @@ class SessionStore:
 
     def get(self, session_id: str):
         row = self.conn.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
-        return dict(row) if row else None
+        return self._session(row) if row else None
+
+    def _session(self, row):
+        session = dict(row)
+        if session['source'] == 'meeting':
+            metadata = self.conn.execute(
+                "SELECT payload_json FROM events WHERE session_id=? AND type='recording_selection' "
+                'ORDER BY id LIMIT 1', (session['id'],)).fetchone()
+            capture = json.loads(metadata['payload_json']) if metadata else {}
+            session['capture'] = {key:capture.get(key) for key in (
+                'scope','name','kind','app_id','microphone_id','microphone_name')}
+            audio = self.conn.execute(
+                "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
+                'ORDER BY id LIMIT 1', (session['id'],)).fetchone()
+            session['audio_duration_ms'] = json.loads(audio['payload_json'])['audio_duration_ms'] if audio else None
+        return session
 
     def list(self):
-        return [dict(row) for row in self.conn.execute(
+        return [self._session(row) for row in self.conn.execute(
             'SELECT * FROM sessions ORDER BY started_at DESC, id DESC LIMIT 100')]
 
     def segments(self, session_id: str):
@@ -157,3 +172,10 @@ class SessionStore:
         row = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='language_locked' "
             'ORDER BY id DESC LIMIT 1', (session_id,)).fetchone()
         return json.loads(row['payload_json']) if row else None
+
+    def record_audio_duration(self, session_id, samples):
+        duration = round(max(samples.values(), default=0) * 1000 / 16000)
+        with self.conn:
+            self.conn.execute('INSERT INTO events (session_id,ts,level,type,payload_json) '
+                'VALUES (?,?,?,?,?)', (session_id,self._now(),'info','recording_complete',
+                json.dumps({'audio_duration_ms':duration})))

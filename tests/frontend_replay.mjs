@@ -7,10 +7,13 @@ import vm from 'node:vm';
 class Element {
   constructor() {
     this.children=[]; this.value=''; this.disabled=false; this.hidden=false;
-    this.textContent=''; this.open=false; this.classList={toggle() {}};
+    this.textContent=''; this.open=false; this.parentElement=null; this.attributes={}; this.classList={toggle() {}};
   }
-  append(...nodes) { this.children.push(...nodes); }
-  replaceChildren(...nodes) { this.children=[...nodes]; }
+  append(...nodes) { nodes.forEach(node=>{ if(node.parentElement) node.remove(); this.children.push(node); node.parentElement=this; }); }
+  insertBefore(node,reference) { if(node.parentElement) node.remove(); const i=reference ? this.children.indexOf(reference) : this.children.length; this.children.splice(i,0,node); node.parentElement=this; }
+  remove() { if(this.parentElement) { const p=this.parentElement; p.children.splice(p.children.indexOf(this),1); this.parentElement=null; } }
+  setAttribute(key,value) { this.attributes[key]=value; }
+  replaceChildren(...nodes) { this.children.forEach(node=>{node.parentElement=null;}); this.children=[]; this.append(...nodes); }
   cloneNode() { return new Element(); }
   showModal() { this.open=true; }
   focus() {}
@@ -21,6 +24,8 @@ const get=id => { if (!elements.has(id)) elements.set(id,new Element()); return 
 get('transcript').firstElementChild=new Element();
 get('fixture').value='public';
 get('start').disabled=true;
+get('title').value='Meeting conversation';
+get('replay-title').value='Public sample replay';
 let fragmentRemoved=false;
 const sockets=[];
 class Socket {
@@ -42,10 +47,11 @@ get('fixture').onchange();
 assert.equal(get('start').disabled,true,'Open socket is not authenticated yet');
 const session=(id,status)=>({id,status,title:id,started_at:id==='active'?2:1});
 const deliver=data=>socket.onmessage({data:JSON.stringify(data)});
-const snapshot=(discovery)=>deliver({type:'snapshot',fixtures:[{id:'public',duration_s:20}],
-  sessions:[session('active','replaying'),session('past','completed')],
-  active_id:'active',replay_available:true,storage:'public-demo',segments:{active:[],past:[]},discovery});
+const snapshot=(discovery,active=true)=>deliver({type:'snapshot',fixtures:[{id:'public',duration_s:20}],
+  sessions:[session('active',active ? 'replaying' : 'completed'),session('past','completed')],
+  active_id:active ? 'active' : null,replay_available:true,storage:'public-demo',segments:{active:[],past:[]},discovery});
 snapshot();
+const originalHistoryButton=get('history').children[0];
 assert.equal(get('storage-status').textContent,'Public demo · unencrypted');
 deliver({type:'partial',session_id:'active',segment:{text:'ephemeral words'}});
 assert.equal(get('partial').textContent,'ephemeral words');
@@ -56,6 +62,10 @@ assert.equal(get('partial').textContent,'ephemeral words');
 deliver({type:'segment',session_id:'active',segment:{id:'segment1',start_ms:0,text:'<script>literal text</script>'}});
 assert.equal(get('partial').textContent,'');
 assert.equal(get('transcript').children[0].children[1].textContent,'<script>literal text</script>');
+assert.equal(get('history').children[0],originalHistoryButton,'Preserve focused history buttons');
+const originalTranscript=get('transcript').children[0];
+deliver({type:'language_locked',session_id:'active',mode:'manual',language:'en'});
+assert.equal(get('transcript').children[0],originalTranscript,'Status updates must preserve transcript nodes');
 socket.readyState=3;
 socket.onclose({code:1006});
 assert.equal(get('start').disabled,true);
@@ -76,7 +86,7 @@ const candidate={id:'server-epoch:teams:1',app_id:'teams',name:'<script>Teams</s
 const discovery={status:'available',recording_enabled:false,
   apps:[{id:'teams',name:'Teams',kind:'meeting'},{id:'browser',name:'Browser',kind:'browser'}],
   microphones:[{id:'default',name:'System default microphone',verified:false}],candidates:[candidate]};
-snapshot(discovery);
+snapshot(discovery,false);
 assert.equal(get('record-meeting').disabled,true);
 assert.equal(get('select-source').disabled,true,'No implicit app/system selection');
 assert.equal(get('meeting-candidates').children[0].children[0].children[0].textContent,candidate.name);
@@ -140,7 +150,7 @@ assert.ok(socket.sent.slice(1).every(text=>!['record','start_recording'].include
 // Encrypted recording is an explicit, consented action; discovery never starts it.
 const sentBeforeRecording = socket.sent.length;
 socket.readyState=Socket.OPEN;
-snapshot({...discovery,permission:'authorized'});
+snapshot({...discovery,permission:'authorized'},false);
 assert.equal(get('record-meeting').disabled,true,'Old snapshots cannot enable recording');
 deliver({type:'snapshot',fixtures:[],sessions:[],active_id:null,segments:{},notes:{},
   recording_available:true,storage:'encrypted',discovery:{...discovery,permission:'authorized'}});
@@ -158,8 +168,30 @@ assert.equal(JSON.parse(socket.sent.at(-1)).action,'record');
 assert.equal(JSON.parse(socket.sent.at(-1)).consent_confirmed,true);
 assert.equal(JSON.parse(socket.sent.at(-1)).language,'auto');
 assert.equal(get('record-meeting').disabled,true,'Prevent double Record');
-deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'recording',started_at:Date.now()}});
+assert.equal(get('meeting-source').disabled,true);
+assert.equal(get('meeting-microphone').disabled,true);
+assert.match(get('scope-warning').textContent,/All system audio.*all apps/);
+deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'recording',started_at:Date.now(),capture:{scope:'application',kind:'browser',name:'Brave',microphone_name:'USB mic'}}});
 assert.equal(get('stop').textContent,'Stop recording');
+assert.equal(get('recording-bar').hidden,false);
+assert.match(get('active-scope').textContent,/All tabs in Brave.*USB mic/);
+assert.equal(get('recording-state').textContent,'RECORDING','Timer must not be inside the announcing status');
+assert.equal(get('meeting-source').disabled,true);
+const beforeLockedChoice=socket.sent.length;
+get('source-form').onsubmit({preventDefault(){}});
+assert.equal(socket.sent.length,beforeLockedChoice);
+deliver({type:'discovery',discovery:{...discovery,status:'unavailable',permission:'authorized'}});
+assert.doesNotMatch(get('discovery-status').textContent,/no audio is being captured/);
+assert.match(get('active-scope').textContent,/All tabs in Brave.*USB mic/);
+socket.readyState=3; socket.onclose({code:1006});
+assert.equal(get('recording-bar').hidden,false);
+assert.equal(get('reconnect').hidden,false);
+assert.match(get('recording-state').textContent,/unverified/);
+assert.equal(get('stop').disabled,true);
+socket.readyState=Socket.OPEN;
+deliver({type:'snapshot',fixtures:[],sessions:[{id:'meeting',source:'meeting',title:'Call',status:'recording',started_at:Date.now(),capture:{scope:'application',kind:'browser',name:'Brave',microphone_name:'USB mic'}}],
+ active_id:'meeting',segments:{meeting:[]},notes:{},storage:'encrypted',recording_available:true,discovery:{...discovery,permission:'authorized'}});
+assert.match(get('active-scope').textContent,/All tabs in Brave.*USB mic/);
 assert.equal(get('record-consent').checked,false);
 deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'processing',started_at:Date.now()}});
 assert.equal(get('stop').hidden,true);
@@ -176,4 +208,14 @@ assert.equal(get('transcript').children.at(-1).children[1].textContent,'Micropho
 deliver({type:'language_locked',session_id:'meeting',mode:'auto',language:'vi',confidence:.95});
 assert.match(get('language-status').textContent,/Detected: Tiếng Việt.*fixed/);
 assert.ok(socket.sent.length > sentBeforeRecording);
+socket.readyState=3; socket.onclose({code:1006});
+get('reconnect').onclick();
+assert.equal(sockets.length,2);
+const recovered=sockets[1]; recovered.readyState=Socket.OPEN; recovered.onopen();
+assert.equal(recovered.sent[0],'test-launch-key');
+recovered.onmessage({data:JSON.stringify({type:'snapshot',fixtures:[],sessions:[],active_id:null,
+ segments:{},notes:{},recording_available:true,storage:'encrypted',discovery})});
+assert.equal(get('reconnect').hidden,true);
+socket.onclose({code:1006});
+assert.equal(get('reconnect').hidden,true,'Ignore late events from the previous socket');
 console.log('Frontend replay and meeting discovery regressions passed');

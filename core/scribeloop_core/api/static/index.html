@@ -1,36 +1,44 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ScribeLoop — listening room</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f5f3ec"><title>ScribeLoop — listening room</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
 <body>
-<header><a class="wordmark" href="/">scribe<span>loop</span><i aria-hidden="true"></i></a><span class="edition">THE LISTENING ROOM <span> / </span> LOCAL DEVELOPMENT</span><span id="connection" role="status">Connecting…</span></header>
+<a class="skip-link" href="#workspace">Skip to conversation</a>
+<header><a class="wordmark" href="/" translate="no">scribe<span>loop</span><i aria-hidden="true"></i></a><span class="edition">THE LISTENING ROOM <span> / </span> LOCAL DEVELOPMENT</span><div class="connection-controls"><span id="connection" role="status">Connecting…</span></div></header>
+<section id="recording-bar" class="recording-bar" aria-label="Active session controls" hidden>
+<div><div class="recording-summary"><strong id="recording-state" role="status">Recording off</strong><span id="elapsed-time" aria-label="Elapsed session time" aria-live="off"></span></div><p id="active-scope"></p></div><div class="bar-actions"><button id="reconnect" type="button" hidden>Reconnect</button><button id="stop" type="button" hidden>Stop recording</button></div>
+</section>
 <main>
-<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New replay</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
-<section class="workspace">
-<div class="eyebrow">PHASE 01 <span>—</span> A PLACE FOR THE CONVERSATION</div>
-<div class="heading"><h1>Listen closely.<br><em>Keep the thread.</em></h1><div class="page-number" aria-hidden="true">01<span> / NOTES</span></div></div>
-<p class="intro">A local workspace for turning a conversation into something you can return to.</p>
+<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New meeting</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
+<section id="workspace" class="workspace" tabindex="-1">
+<div class="eyebrow">YOUR CONVERSATIONS <span>—</span> KEPT CLOSE</div>
+<div class="heading"><h1>Keep the thread.</h1><div class="page-number" aria-hidden="true">01<span> / NOTEBOOK</span></div></div>
+<p class="intro">Record a conversation. Return to its words.</p>
 <section class="meeting-panel" aria-labelledby="meeting-heading">
-<div class="meeting-heading"><div><div class="section-label">MEETING DISCOVERY</div><h2 id="meeting-heading">Find the conversation.</h2></div><span id="recording-state" class="preview-tag" role="status">Recording off</span></div>
+<div class="meeting-heading"><div><div class="section-label">NEW MEETING</div><h2 id="meeting-heading">Set up your recording.</h2></div><span class="preview-tag">5-minute test</span></div>
+<label class="meeting-title">MEETING TITLE<input id="title" name="meeting_title" maxlength="160" value="Meeting conversation" autocomplete="off" required></label>
 <p id="discovery-status" class="discovery-status" role="status">Connect to see meeting sources.</p>
 <div id="meeting-candidates" class="meeting-candidates" aria-label="Possible meetings"></div>
-<form id="source-form"><div class="source-fields"><label>MEETING AUDIO<select id="meeting-source"><option value="">Choose an app or audio scope</option></select></label><label>MICROPHONE<select id="meeting-microphone"><option value="default">System default · not checked</option></select></label></div><div class="source-actions"><button id="select-source" type="submit" disabled>Use selected source ↗</button><button id="record-meeting" type="button" disabled aria-describedby="recording-unavailable">Record meeting ↗</button></div></form>
-<p id="source-status" class="source-status" role="status">Choose manually if automatic discovery misses a call.</p>
+<form id="source-form"><div class="source-fields"><label>MEETING AUDIO<select id="meeting-source" name="meeting_source"><option value="">Choose an app or audio scope</option></select></label><label>MICROPHONE<select id="meeting-microphone" name="microphone"><option value="default">System default · not checked</option></select></label></div><div class="source-actions"><button id="select-source" type="submit" disabled>Confirm source ↗</button></div></form>
+<p id="source-status" class="source-status" role="status">Choose a source, then confirm it.</p>
 <button id="enable-microphone" type="button" hidden>Enable microphone access</button>
 <p id="microphone-permission" class="scope" role="status">Microphone access has not been checked.</p>
-<label>CONVERSATION LANGUAGE<select id="meeting-language"><option value="auto">Detect once, then keep language</option><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
-<label class="consent"><input type="checkbox" id="record-consent"> I have permission from participants to record this call.</label>
-<p id="recording-unavailable" class="scope">Five-minute development test. Captures all audio in the selected browser plus your microphone. Use headphones. Encrypted audio stays on this machine; MOSS transcribes locally after Stop. Choose the conversation language for best results.</p>
+<label class="language-choice">CONVERSATION LANGUAGE<select id="meeting-language" name="meeting_language"><option value="auto">Detect once, then keep language</option><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+<p id="scope-warning" class="scope-warning">Confirm a source to see exactly what will be captured.</p>
+<label class="consent"><input type="checkbox" id="record-consent" name="record_consent"> I have permission from participants to record this call.</label>
+<div class="record-action"><button id="record-meeting" type="button" disabled aria-describedby="record-help scope-warning">Record meeting ↗</button><p id="record-help" role="status">Connect to set up recording.</p></div>
+<p id="recording-unavailable" class="scope">Audio stays encrypted on this machine. Use headphones. Transcription starts after Stop; automatic mode identifies early speech once and keeps that language. This test stops after 5 minutes.</p>
 </section>
-<form id="replay-form"><div class="form-top"><label>SESSION TITLE<input id="title" maxlength="160" value="Development listening session" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span>↗</span></button></div><p class="scope">This development slice replays existing audio. Meeting recording uses the separate consent control above.</p></form>
+<details class="development-tools"><summary>Development audio replay</summary><form id="replay-form"><div class="form-top"><label>REPLAY TITLE<input id="replay-title" name="replay_title" maxlength="160" value="Public sample replay" autocomplete="off" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" name="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" name="replay_consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span aria-hidden="true">↗</span></button></div><p class="scope">Replay an existing public sample without opening the microphone.</p></form></details>
 <div id="notice" role="alert" hidden></div>
-<div class="transcript-header"><div><span id="activity-dot" class="activity-dot"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div><button id="stop" type="button" hidden>Stop replay</button></div>
-<div id="transcript" aria-live="polite" aria-relevant="additions"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Choose a sample above. Confirmed text appears here as it’s transcribed and stays in your notebook.</p><span class="empty-rule"></span></div></div>
-<p id="language-status" class="scope" role="status"></p>
-<button id="reprocess-meeting" type="button" hidden>Transcribe again with selected language</button>
-<pre id="meeting-notes" class="meeting-notes scope" aria-live="polite"></pre>
+<div class="transcript-header"><div><span id="activity-dot" class="activity-dot" aria-hidden="true"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div></div>
+<p id="session-progress" class="scope" role="status"></p>
+<div class="transcript-tools"><p id="language-status" class="scope" role="status"></p><div id="reprocess-controls" hidden><label>TRANSCRIPT LANGUAGE<select id="reprocess-language" name="reprocess_language"><option value="auto">Keep detected language / detect once</option><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label><button id="reprocess-meeting" type="button" hidden aria-describedby="reprocess-help">Transcribe again</button><p id="reprocess-help" class="scope">Choose a language to override detection. Your saved transcript stays available until the new pass completes.</p></div></div>
+<div id="transcript-update" class="sr-only" role="status"></div>
+<div id="transcript"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Set up a meeting above. Your transcript appears here after recording stops.</p><span class="empty-rule"></span></div></div>
+<details id="notes-section" class="notes-section" hidden><summary>Transcript excerpts</summary><p class="scope">A text copy of this transcript. These excerpts are not a generated meeting summary.</p><pre id="meeting-notes" class="meeting-notes"></pre></details>
 <div id="partial" class="partial" aria-live="off"></div>
-<footer><span>WORDS, KEPT CLOSE.</span><span>Replay · local transcription · saved on this machine</span></footer>
+<footer><span>WORDS, KEPT CLOSE.</span><span>Local recording · local transcription · saved on this machine</span></footer>
 </section>
 </main>
-<dialog id="unlock"><form method="dialog" id="unlock-form"><div class="section-label">LOCAL CONNECTION</div><h2>Open your notebook.</h2><p>Use the launch key from your local server terminal. It stays in this page’s memory.</p><label>Launch key<input id="launch-key" type="password" autocomplete="off" required></label><button type="submit">Connect ↗</button></form></dialog>
+<dialog id="unlock" aria-labelledby="unlock-title" aria-describedby="unlock-description"><form method="dialog" id="unlock-form"><div class="section-label">LOCAL CONNECTION</div><h2 id="unlock-title">Open your notebook.</h2><p id="unlock-description">Use the launch key from your local server terminal. It stays in this page’s memory.</p><label>Launch key<input id="launch-key" name="launch_key" type="password" autocomplete="off" spellcheck="false" required></label><button type="submit">Connect ↗</button></form></dialog>
 </body></html>

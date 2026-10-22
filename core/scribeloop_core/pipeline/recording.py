@@ -169,7 +169,8 @@ class RecordingRunner:
                 if self.stop_requested.is_set() and not stopping:
                     stopping = True
                     await self._state(session_id, 'stopping')
-            await capture
+            samples = await capture
+            self.store.record_audio_duration(session_id, samples)
             self.active_id = None
             await self._state(session_id, 'processing')
             if self.cancel_processing.is_set():

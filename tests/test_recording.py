@@ -88,6 +88,7 @@ async def test_encrypted_record_stop_then_stream_labelled_notes(setup):
     await asyncio.wait_for(runner.task, 3)
     assert runner.active_id is None
     assert store.get(session['id'])['status'] == 'completed'
+    assert store.get(session['id'])['audio_duration_ms'] > 0
     assert {r['stream'] for r in store.segments(session['id'])} == {'loopback','mic'}
     assert 'Microphone' in store.notes(session['id'])
     assert 'Meeting audio' in store.notes(session['id'])
