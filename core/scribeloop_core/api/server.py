@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..meetings.service import DiscoveryService
 from ..pipeline.replay import ReplayRunner
 from ..storage.db import DATABASE_ERRORS, connect, migrate
 from ..storage.sessions import SessionStore
@@ -46,8 +47,24 @@ class StartReplay(BaseModel):
         return value
 
 
+class SelectSource(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['select_source']
+    request_id: int = Field(gt=0)
+    scope: Literal['application', 'system']
+    app_id: str | None = Field(default=None, min_length=1, max_length=256)
+    microphone_id: str = Field(min_length=1, max_length=256)
+    candidate_id: str | None = Field(default=None, min_length=1, max_length=600)
+
+
+class DismissCandidate(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['dismiss_candidate']
+    candidate_id: str = Field(min_length=1, max_length=600)
+
+
 def create_app(*, database=None, fixtures=None, backend_factory=None,
-               storage='memory', key_store=None) -> tuple[FastAPI, str]:
+               storage='memory', key_store=None, discovery_factory=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -95,10 +112,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.store = store
             app.state.runner = ReplayRunner(store, backend_factory, publish)
             app.state.storage = storage
+            app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             try:
+                await app.state.discovery.start()
                 yield
             finally:
-                await app.state.runner.close()
+                try:
+                    await app.state.discovery.close()
+                finally:
+                    await app.state.runner.close()
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
@@ -165,6 +187,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
                 'sessions': history, 'active_id': app.state.runner.active_id,
                 'replay_available': not app.state.runner.unavailable, 'storage': app.state.storage,
+                'discovery': app.state.discovery.snapshot(),
                 'segments': {s['id']: store.segments(s['id']) for s in history}})
 
             async def send_events():
@@ -177,6 +200,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
             async def receive_commands():
                 while True:
+                    command = None
                     try:
                         raw = await text_frame(4096)
                         command = json.loads(raw)
@@ -193,13 +217,34 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await publish({'type': 'session', 'session': session})
                         elif command.get('action') == 'stop':
                             app.state.runner.stop(command.get('session_id'))
+                        elif command.get('action') == 'select_source':
+                            request = SelectSource.model_validate(command)
+                            source = await app.state.discovery.select(
+                                scope=request.scope, app_id=request.app_id,
+                                microphone_id=request.microphone_id,
+                                candidate_id=request.candidate_id)
+                            # Preferences are ephemeral and scoped to this connection.
+                            if queue.full():
+                                await ws.close(code=1013)
+                                return
+                            queue.put_nowait({'type': 'source_selected',
+                                              'request_id': request.request_id, 'source': source})
+                        elif command.get('action') == 'dismiss_candidate':
+                            request = DismissCandidate.model_validate(command)
+                            await app.state.discovery.dismiss(request.candidate_id)
                         else:
                             raise ValueError('Unknown command')
                     except (ValueError, ValidationError, TypeError, *DATABASE_ERRORS):
                         if queue.full():
                             await ws.close(code=1013)
                             return
-                        queue.put_nowait({'type': 'error', 'message':
+                        action = command.get('action') if isinstance(command, dict) else None
+                        meeting = (isinstance(action, str) and action
+                                   in {'select_source', 'dismiss_candidate'})
+                        queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
+                            'request_id': command.get('request_id') if meeting else None,
+                            'message': 'Source unavailable or suggestion expired. Choose again manually.'
+                            if meeting else
                             'Request rejected. Check authorization, fixture, and active replay.'})
 
             sender = asyncio.create_task(send_events())
@@ -233,6 +278,8 @@ def main():
     parser.add_argument('--storage', choices=['encrypted', 'public-demo'], default='encrypted')
     parser.add_argument('--database', type=Path)
     parser.add_argument('--port', type=int, default=8757)
+    parser.add_argument('--no-discovery', action='store_true',
+                        help='disable metadata-only automatic meeting discovery')
     args = parser.parse_args()
     if args.database is None:
         if args.storage == 'encrypted':
@@ -241,7 +288,9 @@ def main():
         else:
             args.database = Path('data/phase1/public-replays.sqlite3')
     args.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from ..meetings.service import manual_discovery, native_discovery
     app, token = create_app(database=args.database, storage=args.storage,
+                            discovery_factory=manual_discovery if args.no_discovery else native_discovery,
                             fixtures={'development-sample': args.public_fixture})
     # Fragment is not sent in HTTP requests; client removes it after reading.
     print(f'Open locally: http://127.0.0.1:{args.port}/#token={token}', file=sys.stderr)

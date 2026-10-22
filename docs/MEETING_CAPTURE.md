@@ -2,8 +2,9 @@
 
 Requirement recorded **2026-10-22**, before implementation changes. Status:
 **partially implemented**: a metadata-only observer and candidate state machine
-exist ([implementation and limits](MEETING_DETECTION.md)). No candidate UI,
-validated active-call integration, or integrated live recorder is delivered.
+exist, with authenticated candidate/dismissal UI and manual source selection
+([implementation and limits](MEETING_DETECTION.md)). Validated active-call
+integration and an integrated live recorder are not yet delivered.
 
 ## Product behavior
 

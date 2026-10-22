@@ -8,7 +8,8 @@ Phase 0's deferred validation gates remain tracked separately.
 The [codebase audit against the revised plan](PHASE_1_PLAN_AUDIT.md) records
 missing meeting functionality, integration risks, and implementation order.
 The [implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md) defines seven ordered
-milestones with acceptance gates; these milestones are not yet implemented.
+milestones with acceptance gates; discovery foundations and M2 service/UI are
+implemented, while native recording and full acceptance remain pending.
 
 ## Requirement change — automatic meeting detection
 
@@ -25,10 +26,17 @@ delivered, but does not satisfy this requirement. Implementation must follow
 
 The first [discovery increment](MEETING_DETECTION.md) delivers a metadata-only
 macOS observer, installed-app registry, candidate state machine, diagnostic CLI,
-and shared-clock/source contracts. Host output activity is visible; candidate UI, live-call validation,
-microphone capture, and the encrypted recorder are still pending.
+and shared-clock/source contracts. The second increment adds authenticated
+candidate/dismissal controls and manual app/system-source selection. Host output
+activity is visible; real-call validation, microphone capture, and the encrypted
+recorder are still pending.
 
 ## Delivered
+
+- [x] Authenticated metadata discovery and source-selection UI: candidates with
+  evidence/ambiguity, dismissal, manual fallback, freshness/installation checks,
+  private request-correlated selection acknowledgement, and disabled Record.
+  Only the unverified system-default mic preference is offered; no PCM opens.
 
 - [x] Loopback-only FastAPI server with first-message WebSocket token auth,
   five-second authentication and send timeouts, strict text-frame/Host/Origin checks,
@@ -112,9 +120,9 @@ session actions and transcript snapshots require WebSocket authentication.
 
 - Native Keychain-backed encrypted API: 20 s public replay, 7 confirmed segments,
   successful reconnect, and storage-mode indicator verified in Brave.
-- Full local suite: **152 passing tests** after the discovery increment; changed
-  Python code passes Ruff. Frontend replay regressions and 43-module application
-  import smoke also pass.
+- Full local suite: **162 passing tests** after the second discovery increment; changed
+  Python code passes Ruff. Frontend replay/discovery regressions and the
+  44-module application import smoke also pass.
 - ASGI/WebSocket tests use deterministic ASR to verify authorization, malformed
   origins/hosts, consent, fixture access, persistence, non-persistence of partials,
   single active replay, stop, model failure, reconnect, and restart recovery.
@@ -167,8 +175,8 @@ The following full-MVP items are not waived by this audit.
 
 ## Remaining Phase 1 MVP work
 
-1. Implement metadata-only meeting discovery (Teams/Slack first), debounced
-   candidate prompts, explicit source selection, and detector acceptance checks.
+1. Validate the delivered discovery/UI against real Teams/Slack calls, including
+   mute/listen-only, idle apps, and measured false-positive/detection delay checks.
 2. Connect the delivered encrypted DB/audio/keystore foundation to a complete
    recorder lifecycle before new real audio; finish key-aware recovery and deletion.
 3. VAD integration with recorder-timeline preservation; LocalAgreement partial and

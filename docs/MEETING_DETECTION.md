@@ -1,10 +1,11 @@
-# Meeting discovery — first implementation increment
+# Meeting discovery — observer and authenticated source UI
 
 Implemented **2026-10-22**: metadata-only macOS observer, installed-app registry,
 typed discovery/source contracts, pure candidate state machine, diagnostic CLI,
-and shared host-clock mapper. These are M1/M2 foundations from the
-[implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md), not a complete M2 UI or
-validated Teams/Slack integration. No recording path is enabled.
+and shared host-clock mapper. The second increment adds the authenticated
+discovery service, candidate/dismissal UI, and manual source selection. These
+implement M2's service/UI from the [plan](PHASE_1_IMPLEMENTATION_PLAN.md), but
+do not establish real-call Teams/Slack support. No recording path is enabled.
 
 ## Run the metadata diagnostic
 
@@ -18,7 +19,41 @@ once per second (up to five minutes). Output includes installed candidate app
 identities and changes to suggested candidates/availability. It never opens
 audio streams, starts an app, inspects browser pages/URLs, or stores an activity
 history. Redirecting its output is an operator choice, not an app persistence
-feature. The browser replay server is unchanged and does not run this observer.
+feature.
+
+The normal server CLI now starts metadata discovery alongside replay. Build the
+observer before launching it; a missing helper leaves discovery unavailable and
+manual selection usable. `--no-discovery` disables the process observer while
+retaining installed-app choices. Programmatic `create_app()` defaults to disabled
+discovery; tests explicitly inject a deterministic service when needed.
+
+## Authenticated UI and source selection (second increment)
+
+- Only authenticated WebSocket snapshots/events contain installed app choices
+  and candidates. Static pages and `/healthz` expose no process inventory. The
+  service sends state changes rather than flooding clients with timestamps.
+- The notebook displays activity evidence, possible-call/browser ambiguity,
+  unavailable/off states, Use source, and Dismiss. Dismissal is shared across
+  local clients for the ongoing episode; reconnect restores current candidates.
+- Candidate IDs include a random service incarnation. Selection checks the
+  current installed-app registry, matching app/candidate identity, observer
+  availability, and a five-second freshness window. Removed installations or
+  changed identity mappings invalidate old candidates. Arbitrary bundle/device
+  values and client-supplied raw bundle lists are rejected.
+- Manual selection works without a healthy detector: select an installed app
+  or explicitly choose **All system audio · includes other apps**. No app or
+  whole-system scope is implicitly selected. Apps need not be in a live call to
+  save this source preference; actual capture must revalidate running sources.
+- Microphone choice currently offers only **System default microphone · not
+  checked**. This is a source preference, not device enumeration, permission
+  approval, or confirmed microphone availability. Those remain M3 work.
+- A selection acknowledgement is private to the requesting connection. Its
+  request ID prevents an old reply from replacing a newer preference. Preferences
+  and dismissal state stay in memory; reconnect requires source confirmation
+  again. No session/audio/transcript row is created by these controls.
+- Record is always disabled, and no recording command exists. Neither candidate
+  detection, selecting a source, nor dismissing it opens PCM or grants consent.
+  Replay controls and existing session history continue to work independently.
 
 ## Signals and boundaries
 
@@ -34,8 +69,8 @@ The installed-app registry reads specific application bundles under
 versioned Chromium Helpers layouts. It matches exact bundle IDs, never string
 prefixes or names of arbitrary running processes. This is not publisher-signature
 verification and does not prove per-app output routing. Apps in other directories
-can be supplied through the registry's explicit roots parameter; device/source
-enumeration in the UI is still pending.
+can be supplied through the registry's explicit roots parameter. The UI enumerates
+installed app choices; actual running capture/device enumeration remains pending.
 
 The registry recognizes installation paths for Teams, Teams classic, Slack,
 Zoom, Brave, Chrome, Safari, and Firefox. A missing installation contributes no
@@ -64,8 +99,8 @@ installed-app bundle identity; they do not invalidate unrelated app observations
 - Unknown/incomplete observations and long gaps reset unconfirmed debounce and
   end-grace accumulation. Existing suggestions/dismissals remain in memory;
   consumers must honor `available` and `last_seen`, and revalidate before use.
-  IDs are local to the detector instance; future API integration must scope them
-  to a server incarnation and reject stale selections.
+  IDs are local to the detector instance; the implemented API adds an incarnation
+  prefix and rejects stale selections.
 
 ## Recording and clock contracts
 
@@ -106,10 +141,20 @@ capture timestamps and implementing microphone capture belong to M3.
   dismissal/new episodes, mute/output-only ambiguity, browsers, multiple
   candidates, observer gaps/failures, malformed metadata, explicit capture scope,
   and shared-clock offsets.
-- Verification: **152 tests passed** in the full local suite, frontend replay
-  regressions passed, 43 application modules passed import smoke, and changed
+- Verification: **162 tests passed** in the full local suite, frontend replay and
+  meeting-discovery regressions passed, 44 application modules passed import smoke, and changed
   Python code passed Ruff. Native metadata helper compilation passed separately.
+- API/service checks cover auth, stale/foreign IDs, private acknowledgements,
+  shared dismissal, observer/registry failures, source validation, and reconnect.
+  Frontend checks cover literal rendering, stale replies, selection invalidation,
+  disconnected controls, manual fallback, and permanently disabled Record.
+- Brave interaction/visual check on the encrypted local server: discover installed
+  choices, manually select Teams classic, receive the private confirmation, retain
+  encrypted history, and verify Record remains disabled. No real call, new audio,
+  microphone permission, candidate-positive browser run, or mobile layout check
+  is claimed. Candidate interaction is covered with deterministic API/JS tests.
 
-Next: establish input-activity visibility and real Teams/Slack metadata
-traces; finish authenticated candidate/manual-selection UI (M2). Real encrypted
-recording, permissions UX, microphone capture, and alignment checks remain M3/M4.
+Next: establish input-activity visibility and real Teams/Slack metadata traces.
+Implement microphone capture, common-clock native adapters, and device/source
+checks (M3), followed by encrypted recorder integration (M4). Signing and original
+Phase 0 release-validation gates remain deferred as documented.

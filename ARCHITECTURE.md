@@ -31,8 +31,8 @@ ScribeLoop must automatically detect likely active meetings/calls and capture th
 local audio, starting with **Microsoft Teams and Slack huddles**, then Zoom and
 browser meetings such as Google Meet and Teams web. This is **Phase 1 scope**, not
 Phase 4 polish. These are required targets, not currently verified integrations. The first metadata-only
-macOS observer, candidate state machine, and shared-clock contract are implemented;
-UI integration and real-call validation remain pending. See
+macOS observer, candidate state machine, shared-clock contract, and authenticated
+source-selection UI are implemented; real-call validation and recording remain pending. See
 [discovery implementation](docs/MEETING_DETECTION.md).
 See [the detection and capture specification](docs/MEETING_CAPTURE.md).
 
@@ -47,7 +47,7 @@ Phase 1** for a complete conversation, with a common timestamp reference and
 separate encrypted storage. A microphone can contain multiple people; label it
 "Microphone" unless attribution is validated. Phase 2c retains advanced echo
 cancellation and attribution work. None of this capture integration is delivered
-yet; the current UI remains public-fixture replay only.
+yet; audio input remains public-fixture replay only, alongside source-selection UI.
 
 ---
 

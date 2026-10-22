@@ -2,10 +2,10 @@
 
 Created **2026-10-22** from the [code audit](PHASE_1_PLAN_AUDIT.md) and
 [revised requirements](MEETING_CAPTURE.md). Status: **implementation in progress**.
-Progress: M1 contracts/native query and the pure detector portion of M2 are
-implemented; host output activity is visible, but input visibility and real-call
-feasibility remain unverified. See [the first increment](MEETING_DETECTION.md). No complete milestone
-or meeting-app support is claimed from this foundation.
+Progress: M1 contracts/native query and M2's detector/service/authenticated UI are
+implemented. Host output activity is visible, but input visibility and real-call
+feasibility remain unverified. See [discovery status](MEETING_DETECTION.md).
+Real-app/OS acceptance remains open; no meeting-app support is claimed yet.
 Each milestone should be a reviewable commit on a `feature/...` branch, with
 implementation, relevant tests, and a documentation status update together.
 
@@ -50,6 +50,12 @@ Exit: checked API/identity notes, explicit data/state/clock contracts, and a
 documented fallback for ambiguous detections. No claim of app support yet.
 
 ## M2 — Metadata-only discovery and source-selection UI
+
+Implementation delivered locally (2026-10-22): observer/service/state machine,
+authenticated candidates/dismissal, manual app/system choices, unverified default
+mic preference, and disabled Record. API/service/frontend tests and a Brave manual
+source-selection check pass. Real Teams/Slack signal traces and acceptance remain
+open under M1/M7; actual device enumeration remains M3.
 
 Addresses audit finding 1 and the discovery portion of 7.
 
@@ -185,9 +191,10 @@ Exit: revised meeting acceptance plus the remaining original Phase 1 criteria
 are evidenced, or each missing gate is explicitly left open. Documentation must
 distinguish delivered local macOS capability from full Phase 1 completion.
 
-## First implementation increment
+## Next implementation increment
 
-Start with **M1 and the pure detector portion of M2**: correct stale descriptions,
-verify local metadata capabilities, define the shared clock/source contracts,
-and add deterministic candidate tests. This produces a reviewable foundation
-without enabling incomplete real-audio recording.
+Proceed to **M3**: enumerate actual capture/microphone devices, implement the
+native mic source and common-clock adapters, and verify offsets with controlled
+signals. Keep real recording disabled until M4 connects the encrypted recorder.
+Continue real Teams/Slack metadata feasibility checks as installations and
+controlled calls become available; do not infer them from source-selection success.
