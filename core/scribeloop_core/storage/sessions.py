@@ -38,14 +38,15 @@ class SessionStore:
         terminal = status in {'completed', 'stopped', 'failed', 'interrupted', 'processing'}
         now = self._now()
         with self.conn:
-            self.conn.execute('UPDATE sessions SET status=?, ended_at=? WHERE id=?',
-                              (status, now if terminal else None, session_id))
+            self.conn.execute('UPDATE sessions SET status=?, ended_at=CASE '
+                "WHEN source='meeting' AND ended_at IS NOT NULL THEN ended_at ELSE ? END WHERE id=?",
+                (status, now if terminal else None, session_id))
             if terminal:
-                self.conn.execute('UPDATE session_streams SET ended_at=? WHERE session_id=?',
+                self.conn.execute('UPDATE session_streams SET ended_at=COALESCE(ended_at,?) WHERE session_id=?',
                                   (now, session_id))
         return self.get(session_id)
 
-    def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback'):
+    def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback', revision: int = 1):
         if stream not in {'loopback', 'mic'}:
             raise ValueError('Unknown transcript stream')
         if not chunk['is_final']:
@@ -53,7 +54,7 @@ class SessionStore:
         row = {'id': uuid4().hex, 'session_id': session_id, 'stream': stream,
                'start_ms': int(chunk['start_ms']), 'end_ms': int(chunk['end_ms']),
                'text': chunk['text'], 'language': chunk.get('language'),
-               'confidence': chunk.get('confidence'), 'source': 'stream', 'revision': 1}
+               'confidence': chunk.get('confidence'), 'source': 'offline' if revision > 1 else 'stream', 'revision': revision}
         if row['start_ms'] < 0 or row['end_ms'] < row['start_ms']:
             raise ValueError('Invalid transcript timestamps')
         with self.conn:
@@ -71,7 +72,9 @@ class SessionStore:
 
     def segments(self, session_id: str):
         return [dict(row) for row in self.conn.execute(
-            'SELECT * FROM segments WHERE session_id=? ORDER BY start_ms, rowid', (session_id,))]
+            'SELECT * FROM segments WHERE session_id=? AND revision=('
+            'SELECT MAX(revision) FROM segments WHERE session_id=?) ORDER BY start_ms, rowid',
+            (session_id, session_id))]
 
     def create_recording(self, title, metadata):
         session_id = uuid4().hex
@@ -113,3 +116,31 @@ class SessionStore:
         row = self.conn.execute('SELECT content_md FROM summaries WHERE session_id=? '
             'ORDER BY created_at DESC,rowid DESC LIMIT 1', (session_id,)).fetchone()
         return row['content_md'] if row else ''
+
+    def revise_transcript(self, session_id, chunks):
+        from ..pipeline.replay import ReplayChunk
+        if not chunks:
+            raise ValueError('Empty reprocessing result; retain the previous transcript')
+        rows = []
+        for chunk in chunks:
+            if chunk.get('stream') not in {'mic','loopback'}:
+                raise ValueError('Invalid transcript stream')
+            row = ReplayChunk.model_validate(chunk).model_dump()
+            rows.append({**row, 'stream':chunk['stream']})
+        revision = self.conn.execute('SELECT COALESCE(MAX(revision),0)+1 FROM segments WHERE session_id=?',
+                                     (session_id,)).fetchone()[0]
+        # append() uses transaction contexts; an outer savepoint makes all rows atomic.
+        self.conn.execute('SAVEPOINT transcript_revision')
+        try:
+            for chunk in rows:
+                row = {'id':uuid4().hex, 'session_id':session_id, 'stream':chunk['stream'],
+                       'start_ms':chunk['start_ms'], 'end_ms':chunk['end_ms'], 'text':chunk['text'],
+                       'language':chunk['language'], 'confidence':chunk['confidence'],
+                       'source':'offline', 'revision':revision}
+                self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
+                                  + ','.join('?' for _ in row) + ')', tuple(row.values()))
+            self.conn.execute('RELEASE SAVEPOINT transcript_revision')
+        except BaseException:
+            self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
+            self.conn.execute('RELEASE SAVEPOINT transcript_revision')
+            raise

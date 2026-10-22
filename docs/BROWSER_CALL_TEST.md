@@ -14,9 +14,8 @@ The first development test is limited to five minutes. Record both native
 streams directly into separate SLPA encrypted files, with metadata/transcript
 stored only in SQLCipher. Prepare keys/writers before opening sources. A bounded
 recorder queue must stop visibly on overflow or storage failure. Stop drains
-capture independently of transcription. Transcribe authenticated encrypted audio
-in memory after Stop using the cached local development ASR baseline; do not
-change MOSS float16 defaults. Show stream labels and timestamped transcript
+capture independently of transcription. Transcribe authenticated encrypted audio in memory after Stop using local
+MOSS float16 + SDPA, with a user-selected language hint. Show stream labels and timestamped transcript
 excerpts as notes, without claiming speaker identities or inferred decisions.
 No cloud transcription or summary requests are authorized by this test.
 
@@ -31,8 +30,9 @@ Implemented: authenticated Record/Stop, explicit consent, source revalidation,
 exclusive capture/replay slot, bounded native-reader/recorder queue, separate
 SLPA files, SQLCipher metadata/transcript/notes, and startup interruption recovery.
 Capture closes before local inference starts. A failed model leaves audio
-ciphertext in place. The preview uses cached faster-whisper tiny (CPU int8),
-a separate development baseline; MOSS float16 + SDPA defaults are unchanged.
+ciphertext in place. The original preview used faster-whisper tiny (CPU int8) as a development
+baseline. The Vietnamese quality correction below replaces it for actual meetings;
+public-fixture replay retains its separate smoke backend.
 These notes are transcript excerpts, not a synthesized summary.
 
 Verification: generated lifecycle tests cover denied consent, key/writer/source
@@ -63,3 +63,46 @@ system-default microphone selection was confirmed. Recording remains off until
 the user checks consent and presses Record. Validation: **213 tests passed**,
 frontend regressions passed, import smoke passed (47 modules), and changed-file
 Ruff passed. No live-call routing success is claimed yet.
+
+## Vietnamese quality correction — 2026-10-22
+
+The first real Vietnamese test exposed a smoke-backend limitation: Whisper tiny
+CPU int8 with per-window automatic language detection produced poor text and
+switched to Chinese. This result does not evaluate MOSS. Do not treat successful
+recording/transport checks as transcription-quality acceptance.
+
+Correction implemented: make the real-call path use the locally pinned MOSS model
+in float16 + SDPA, with an explicit Vietnamese/English/automatic language choice.
+Keep all decrypted audio in memory, preserve original encrypted recordings and
+prior transcript revisions, and allow reprocessing after Stop. Check per-stream
+sample/energy/clipping metadata before attributing all errors to ASR. Evaluate
+against user-provided reference sentences; fluent text alone is not proof of accuracy.
+
+
+The meeting path now uses an isolated local MOSS worker, float16 + SDPA, and
+Vietnamese by default (English/automatic are explicit alternatives). Audio crosses
+a bounded in-memory pipe; no decrypted WAV or transcript file is created. The
+upstream timestamp/speaker-format prompt is retained with a language hint. There
+is no automatic fallback to Whisper tiny or float32 if MOSS fails.
+
+The saved Vietnamese call was reprocessed for comparison: both tracks contained
+roughly 37.5 seconds of audio, with no clipped samples; loopback overall RMS was
+lower than microphone RMS. This confirms available PCM, not routing fidelity or
+speech intelligibility. The successful MOSS comparison took 12.44 seconds for
+both tracks. Its text remained Vietnamese but did not exactly recover the user's
+reference sentence, so Vietnamese quality is **not accepted** and no WER improvement
+is claimed without a fuller ground-truth transcript.
+
+The UI offers **Transcribe again with selected language** for saved authorized
+meetings. It opens no capture source and preserves the previous transcript as a
+prior revision. Only a successful complete result becomes current; failures retain
+the old transcript. Reprocessing updates transcript excerpts, not a generated
+summary. Model/runtime status is kept separate from transcript output.
+
+Correction verification: **221 tests passed**, frontend regressions passed,
+49 application modules passed import smoke, and changed Python files passed Ruff.
+The authenticated UI successfully reprocessed the existing saved call and showed
+the replacement Vietnamese transcript with capture off. Tests cover large pipe
+input with a slow reader, cancellation cleanup, authenticated-container completion,
+clock gaps/bounds, saved-call reprocessing without capture, prior-revision retention,
+failure preservation, and unchanged recording end timestamps on reprocessing.

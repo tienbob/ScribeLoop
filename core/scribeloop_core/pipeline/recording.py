@@ -22,7 +22,8 @@ class RecordingRunner:
                  queue_size=512, max_s=300, stop_timeout_s=12):
         self.store, self.audio = store, audio
         self.source_factory, self.publish = source_factory, publish
-        self.transcriber = transcriber or transcribe_recording
+        self.transcriber = transcriber
+        self.language = 'vi'
         self.queue_size, self.max_s = queue_size, max_s
         self.stop_timeout_s = stop_timeout_s
         self.active_id = None
@@ -37,6 +38,9 @@ class RecordingRunner:
             raise ValueError('Recording requires explicit consent')
         if self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Recording or processing already active')
+        self.language = source_metadata.get('language', 'vi')
+        if self.language not in {'vi','en','auto'}:
+            raise ValueError('Unsupported language hint')
         session = self.store.create_recording(title, source_metadata)
         self.store.set_audio_paths(session['id'], self.audio)
         self.active_id = session['id']
@@ -168,37 +172,7 @@ class RecordingRunner:
             if self.cancel_processing.is_set():
                 await self._state(session_id, 'interrupted')
                 return
-            # Bounded output queue keeps transcript persistence on the DB thread.
-            chunks = queue.Queue(maxsize=64)
-            def emit(chunk):
-                while not self.cancel_processing.is_set():
-                    try:
-                        chunks.put(chunk, timeout=.1)
-                        return
-                    except queue.Full:
-                        continue
-            processing = asyncio.create_task(asyncio.to_thread(self.transcriber,
-                self.audio, session_id, emit, self.cancel_processing))
-            try:
-                while not processing.done() or not chunks.empty():
-                    try:
-                        chunk = chunks.get_nowait()
-                    except queue.Empty:
-                        await asyncio.sleep(.05)
-                        continue
-                    row = self.store.append(session_id, chunk, stream=chunk['stream'])
-                    if row:
-                        await self.publish({'type': 'segment', 'session_id': session_id, 'segment': row})
-                await processing
-            finally:
-                self.cancel_processing.set()
-                await processing
-            if self.closed:
-                await self._state(session_id, 'interrupted')
-            else:
-                note = self.store.create_transcript_notes(session_id)
-                await self.publish({'type': 'notes', 'session_id': session_id, 'notes': note})
-                await self._state(session_id, 'completed')
+            await self._process(session_id)
         except Exception as exc:  # noqa: BLE001 - fail visibly without leaking text/PCM in logs
             self.stop_requested.set()
             with contextlib.suppress(Exception):
@@ -215,60 +189,84 @@ class RecordingRunner:
             if self.active_id == session_id:
                 self.active_id = None
 
+    def _transcribe(self, audio, session_id, emit, cancelled):
+        if self.transcriber:
+            return self.transcriber(audio, session_id, emit, cancelled)
+        return transcribe_recording(audio, session_id, emit, cancelled, language=self.language)
+
+    def reprocess(self, session_id, *, language):
+        if self.closed or self.active_id or (self.task and not self.task.done()):
+            raise ValueError('Recording or processing already active')
+        session = self.store.get(session_id)
+        if (not session or session['source'] != 'meeting' or not session['consent_confirmed']
+                or session['status'] not in {'completed','failed','interrupted'}):
+            raise ValueError('Select a saved authorized meeting')
+        if language not in {'vi','en','auto'}:
+            raise ValueError('Unsupported language hint')
+        self.language = language
+        self.cancel_processing.clear()
+        self.task = asyncio.create_task(self._reprocess(session_id))
+
+    async def _reprocess(self, session_id):
+        try:
+            await self._state(session_id, 'processing')
+            await self._process(session_id, replace=True)
+        except Exception as exc:  # noqa: BLE001 - retain original transcript on model/storage failure
+            log.warning('Meeting reprocessing failed (%s)', type(exc).__name__)
+            with contextlib.suppress(*DATABASE_ERRORS):
+                await self._state(session_id, 'failed')
+            await self.publish({'type':'recording_error', 'session_id':session_id,
+                'message':'Local MOSS reprocessing failed. Previous transcript and encrypted audio retained.'})
+
+    async def _process(self, session_id, *, replace=False):
+        # Bounded output queue keeps transcript persistence on the DB thread.
+        chunks = queue.Queue(maxsize=64)
+        def emit(chunk):
+            while not self.cancel_processing.is_set():
+                try:
+                    chunks.put(chunk, timeout=.1)
+                    return
+                except queue.Full:
+                    continue
+        replacement = []
+        processing = asyncio.create_task(asyncio.to_thread(self._transcribe,
+            self.audio, session_id, emit, self.cancel_processing))
+        try:
+            while not processing.done() or not chunks.empty():
+                try:
+                    chunk = chunks.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(.05)
+                    continue
+                if replace:
+                    if len(replacement) >= 16000:
+                        raise ValueError('Transcript exceeds segment limit')
+                    replacement.append(chunk)
+                    continue
+                row = self.store.append(session_id, chunk, stream=chunk['stream'])
+                if row:
+                    await self.publish({'type': 'segment', 'session_id': session_id, 'segment': row})
+            await processing
+        finally:
+            self.cancel_processing.set()
+            await processing
+        if self.closed:
+            await self._state(session_id, 'interrupted')
+        else:
+            if replace:
+                self.store.revise_transcript(session_id, replacement)
+                await self.publish({'type':'transcript_replaced', 'session_id':session_id,
+                                    'segments':self.store.segments(session_id)})
+            note = self.store.create_transcript_notes(session_id)
+            await self.publish({'type': 'notes', 'session_id': session_id, 'notes': note})
+            await self._state(session_id, 'completed')
+
     async def _state(self, session_id, status):
         session = self.store.transition(session_id, status)
         await self.publish({'type': 'session', 'session': session})
 
 
-def transcribe_recording(audio, session_id, emit, cancelled):
-    """Cached local test baseline, with original frame timestamps and gaps.
-
-    No network, plaintext audio files, named-speaker claims, or summary model.
-    MOSS batch configuration remains unchanged; this is a separate smoke path.
-    """
-    import numpy as np
-    from faster_whisper import WhisperModel
-
-    from .replay import ReplayChunk
-
-    model = WhisperModel('tiny', device='cpu', compute_type='int8', cpu_threads=2,
-                         local_files_only=True)
-    for stream in ('loopback', 'mic'):
-        # Verify the complete authenticated container before persisting any transcript.
-        for _ in audio.frames(session_id, stream):
-            if cancelled.is_set():
-                return
-        buffers = []
-        count = 0
-        start = end = None
-        def drain(stream=stream):
-            nonlocal buffers, count, start
-            if not count:
-                return
-            pcm = np.concatenate(buffers)
-            segments, info = model.transcribe(pcm, beam_size=3, vad_filter=True)
-            duration = pcm.size * 1000 / 16000
-            for segment in segments:
-                if cancelled.is_set():
-                    return
-                text = segment.text.strip()
-                a = int(start + max(0, segment.start * 1000))
-                b = int(start + min(duration, segment.end * 1000))
-                if text and b > a:
-                    chunk = ReplayChunk.model_validate({'text':text, 'start_ms':a, 'end_ms':b,
-                        'is_final':True, 'language':info.language, 'confidence':segment.avg_logprob}).model_dump()
-                    emit({**chunk, 'stream': stream})
-            buffers, count, start = [], 0, None
-        for frame in audio.frames(session_id, stream):
-            if cancelled.is_set():
-                return
-            if end is not None and abs(frame.t_ms - end) > 1:
-                drain()
-            if start is None:
-                start = frame.t_ms
-            buffers.append(frame.pcm)
-            count += frame.pcm.size
-            end = frame.t_ms + frame.pcm.size * 1000 / 16000
-            if count >= 30 * 16000:
-                drain()
-        drain()
+def transcribe_recording(audio, session_id, emit, cancelled, *, language='vi'):
+    """Actual meeting path: local MOSS float16 + SDPA, explicit language hint."""
+    from .meeting_asr import transcribe_moss
+    return transcribe_moss(audio, session_id, emit, cancelled, language=language)

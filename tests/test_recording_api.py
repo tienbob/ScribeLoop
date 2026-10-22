@@ -72,6 +72,10 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
         receive(ws, 'notes')
         receive(ws, 'session', 'completed')
         assert opened[0].closed
+        ws.send_json({'action':'reprocess','session_id':session['id'],'language':'vi'})
+        receive(ws,'transcript_replaced')
+        receive(ws,'session','completed')
+        assert len(opened)==1, 'Reprocess must reuse encrypted audio without opening capture'
         assert len(client.portal.call(app.state.store.list)) == 1
         assert {s['stream'] for s in client.portal.call(app.state.store.segments,session['id'])} == {'loopback','mic'}
     with TestClient(app, base_url='http://127.0.0.1') as client, connection(client) as ws:

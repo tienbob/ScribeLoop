@@ -176,3 +176,41 @@ def test_recovery_marks_recording_and_processing_interrupted(setup):
     store.transition(second['id'], 'processing')
     store.recover()
     assert all(store.get(s['id'])['status'] == 'interrupted' for s in (first,second))
+
+
+@pytest.mark.asyncio
+async def test_reprocess_retains_old_revision_and_opens_no_capture(setup):
+    store,audio,events,publish=setup
+    session=store.create_recording('Vietnamese',{})
+    sid=session['id']
+    store.append(sid,{'text':'Old smoke text','start_ms':0,'end_ms':20,'is_final':True})
+    store.transition(sid,'completed')
+    def forbidden(*args,**kw):
+        raise AssertionError('Reprocessing must not open capture')
+    def transcribe(audio,sid,emit,cancelled):
+        emit({'text':'có chạy thật không vậy','stream':'mic','start_ms':0,'end_ms':20,'is_final':True})
+    runner=RecordingRunner(store,audio,forbidden,publish,transcriber=transcribe)
+    original_end=store.get(sid)['ended_at']
+    runner.reprocess(sid,language='vi')
+    await asyncio.wait_for(runner.task,3)
+    assert store.get(sid)['ended_at']==original_end
+    assert store.get(sid)['status']=='completed'
+    assert [r['text'] for r in store.segments(sid)]==['có chạy thật không vậy']
+    assert store.conn.execute('SELECT count(*) FROM segments WHERE revision=1').fetchone()[0]==1
+    assert any(e['type']=='transcript_replaced' for e in events)
+
+
+@pytest.mark.asyncio
+async def test_failed_reprocess_preserves_previous_transcript(setup):
+    store,audio,events,publish=setup
+    session=store.create_recording('Vietnamese',{})
+    sid=session['id']
+    store.append(sid,{'text':'Original','start_ms':0,'end_ms':20,'is_final':True})
+    store.transition(sid,'completed')
+    def fail(*args):
+        raise RuntimeError('Model unavailable')
+    runner=RecordingRunner(store,audio,None,publish,transcriber=fail)
+    runner.reprocess(sid,language='vi')
+    await asyncio.wait_for(runner.task,3)
+    assert [r['text'] for r in store.segments(sid)]==['Original']
+    assert any(e['type']=='recording_error' for e in events)

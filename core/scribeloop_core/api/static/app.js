@@ -149,6 +149,9 @@ function render() {
   if (activeId) $('start').textContent = sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
   else $('start').textContent = 'Start replay ↗';
   $('meeting-notes').textContent = notes.get(selectedId) || '';
+  $('reprocess-meeting').hidden = session?.source !== 'meeting';
+  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending ||
+    [...sessions.values()].some(s=>s.source === 'meeting' && s.status === 'processing');
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   if (!rows.length && !session) $('transcript').replaceChildren(emptyTemplate.cloneNode(true));
   if (rows.length || session) {
@@ -200,6 +203,8 @@ function connect() {
       pendingSource=null; chosenSource=data.source;
       $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
+    } else if (data.type === 'transcript_replaced') {
+      segments.set(data.session_id,data.segments); render();
     } else if (data.type === 'notes') {
       notes.set(data.session_id,data.notes); render();
     } else if (data.type === 'recording_error') {
@@ -254,10 +259,16 @@ $('record-meeting').onclick = () => {
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    consent_confirmed:$('record-consent').checked});
+    consent_confirmed:$('record-consent').checked,language:$('meeting-language').value || 'vi'});
   renderDiscovery();
 };
 
 $('enable-microphone').onclick = () => send({action:'microphone_permission'});
 
 setInterval(() => { if (activeId) renderDiscovery(); },1000);
+
+$('reprocess-meeting').onclick = () => {
+  if ($('reprocess-meeting').disabled) return;
+  recordPending=send({action:'reprocess',session_id:selectedId,language:$('meeting-language').value || 'vi'});
+  render();
+};

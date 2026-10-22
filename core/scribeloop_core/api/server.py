@@ -60,6 +60,7 @@ class SelectSource(BaseModel):
 class StartRecording(SelectSource):
     action: Literal['record']
     title: str = Field(default='Meeting test', min_length=1, max_length=160)
+    language: Literal['vi','en','auto'] = 'vi'
     consent_confirmed: bool = Field(strict=True)
 
     @field_validator('title')
@@ -69,6 +70,13 @@ class StartRecording(SelectSource):
         if not value.strip():
             raise ValueError('Empty title')
         return value
+
+
+class ReprocessRecording(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['reprocess']
+    session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    language: Literal['vi','en','auto'] = 'vi'
 
 
 class DismissCandidate(BaseModel):
@@ -258,6 +266,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             from ..capture.devices import request_microphone_access
                             await asyncio.to_thread(request_microphone_access)
                             await app.state.discovery.refresh()
+                        elif command.get('action') == 'reprocess':
+                            request = ReprocessRecording.model_validate(command)
+                            if not app.state.recording or app.state.runner.active_id:
+                                raise ValueError('Local reprocessing is unavailable')
+                            app.state.recording.reprocess(request.session_id, language=request.language)
                         elif command.get('action') == 'record':
                             request = StartRecording.model_validate(command)
                             recorder = app.state.recording
@@ -272,6 +285,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 microphone_device_id=request.microphone_id)
                             if app.state.runner.active_id:
                                 raise ValueError('A replay is active')
+                            source = {**source, 'language':request.language,
+                                      'asr_engine':'MOSS-Transcribe-Diarize', 'dtype':'float16',
+                                      'attention':'sdpa'}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
                             await publish({'type': 'session', 'session': session})
@@ -298,7 +314,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
                             'message': 'Source unavailable or suggestion expired. Choose again manually.'
