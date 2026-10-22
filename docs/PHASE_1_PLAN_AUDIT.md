@@ -127,6 +127,9 @@ they do not establish revised meeting acceptance. No code changes were made.
 
 ## Recommended implementation sequence
 
+See the [detailed implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md) for
+dependencies, concrete deliverables, and milestone acceptance checks.
+
 1. Reconcile stale implementation descriptions; define source selection,
    candidate events, session states, and the shared capture-clock contract.
 2. Implement metadata-only macOS discovery with deterministic candidate tests;

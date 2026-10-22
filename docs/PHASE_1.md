@@ -7,6 +7,8 @@ Phase 0's deferred validation gates remain tracked separately.
 
 The [codebase audit against the revised plan](PHASE_1_PLAN_AUDIT.md) records
 missing meeting functionality, integration risks, and implementation order.
+The [implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md) defines seven ordered
+milestones with acceptance gates; these milestones are not yet implemented.
 
 ## Requirement change — automatic meeting detection
 
