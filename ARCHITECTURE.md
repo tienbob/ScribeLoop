@@ -330,6 +330,12 @@ CREATE TABLE events (
 
 ## 8. Phased roadmap
 
+**Phase 1 started (2026-10-22):** public WAV replay → cached Whisper chunked ASR →
+confirmed SQLite segments → authenticated browser transcript UI is implemented.
+Real recordings remain disabled until encryption is integrated; VAD/LocalAgreement,
+speaker attribution, native recorder integration, and full resume remain pending.
+See [Phase 1 progress](docs/PHASE_1.md).
+
 **2026-10-22 local-development handoff:** native ScreenCaptureKit fallback compiles,
 framed transport and health diagnostics are implemented, and 62 tests pass. Basic
 native silence and controlled-tone capture pass after the user enabled macOS TCC

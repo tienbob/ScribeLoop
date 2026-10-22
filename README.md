@@ -77,3 +77,18 @@ Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 **82.93 s processing**. These are exploratory results from one meeting, not release
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.
+
+## Phase 1: replay workspace (started)
+
+The first vertical slice connects bounded public WAV replay to cached local ASR,
+SQLite session history, and an authenticated browser transcript UI. See
+[Phase 1 implementation and next steps](docs/PHASE_1.md).
+
+```bash
+.venv/bin/python -m scribeloop_core.api.server \
+  --public-fixture data/corpus-v1/moss/segment-300-600-fp16-sdpa.wav
+```
+
+Open the launch URL printed by the server. This slice accepts public test fixtures
+only; encrypted storage, native recording, VAD/LocalAgreement, speaker attribution,
+and full restart/resume are still pending. MOSS batch defaults remain float16 + SDPA.

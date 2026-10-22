@@ -67,10 +67,12 @@ class ChunkedFasterWhisper(StreamingASR):
         compute_type: str = "int8",
         language: str | None = None,
         chunk_s: float = 12.0,
+        local_files_only: bool = False,
     ) -> None:
         from faster_whisper import WhisperModel
 
-        self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self._model = WhisperModel(model_size, device=device, compute_type=compute_type,
+                                   cpu_threads=2, local_files_only=local_files_only)
         self._language = language
         self._chunk_samples = int(chunk_s * SAMPLE_RATE)
         self._buffer = np.empty(0, dtype=np.float32)
@@ -88,6 +90,7 @@ class ChunkedFasterWhisper(StreamingASR):
         return self._drain()
 
     def _drain(self) -> list[dict]:
+        duration_ms = int(len(self._buffer) / SAMPLE_RATE * 1000)
         segments, info = self._model.transcribe(
             self._buffer,
             language=self._language,
@@ -97,18 +100,21 @@ class ChunkedFasterWhisper(StreamingASR):
         out: list[dict] = []
         for seg in segments:
             text = seg.text.strip()
-            if text:
+            start_ms = max(0, int(seg.start * 1000))
+            end_ms = min(duration_ms, int(seg.end * 1000))
+            # Decoder padding can produce timestamps past the supplied audio.
+            if text and end_ms > start_ms:
                 out.append(
                     {
                         "text": text,
-                        "start_ms": self._offset_ms + int(seg.start * 1000),
-                        "end_ms": self._offset_ms + int(seg.end * 1000),
+                        "start_ms": self._offset_ms + start_ms,
+                        "end_ms": self._offset_ms + end_ms,
                         "is_final": True,
                         "language": info.language,
                         "confidence": seg.avg_logprob,
                     }
                 )
-        self._offset_ms += int(len(self._buffer) / SAMPLE_RATE * 1000)
+        self._offset_ms += duration_ms
         self._buffer = np.empty(0, dtype=np.float32)
         return out
 

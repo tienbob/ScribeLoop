@@ -37,7 +37,7 @@ diar = ["pyannote.audio>=3.3", "torch>=2.2"]
 # Bake-off candidates
 sherpa = ["sherpa-onnx>=1.10"]
 moonshine = ["useful-moonshine"]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4", "httpx>=0.27"]
 
 [tool.setuptools.packages.find]
 where = ["core"]
@@ -49,3 +49,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.setuptools.package-data]
+scribeloop_core = ["api/static/*"]

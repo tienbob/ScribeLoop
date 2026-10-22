@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ScribeLoop — listening room</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
+<body>
+<header><a class="wordmark" href="/">scribe<span>loop</span><i aria-hidden="true"></i></a><span class="edition">THE LISTENING ROOM <span> / </span> LOCAL DEVELOPMENT</span><span id="connection" role="status">Connecting…</span></header>
+<main>
+<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New replay</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot"></span> On this machine<br><small>Public test fixtures only</small></div></aside>
+<section class="workspace">
+<div class="eyebrow">PHASE 01 <span>—</span> A PLACE FOR THE CONVERSATION</div>
+<div class="heading"><h1>Listen closely.<br><em>Keep the thread.</em></h1><div class="page-number" aria-hidden="true">01<span> / NOTES</span></div></div>
+<p class="intro">A local workspace for turning a conversation into something you can return to.</p>
+<form id="replay-form"><div class="form-top"><label>SESSION TITLE<input id="title" maxlength="160" value="Development listening session" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span>↗</span></button></div><p class="scope">This development slice replays existing audio. Microphone and meeting recording are not enabled.</p></form>
+<div id="notice" role="alert" hidden></div>
+<div class="transcript-header"><div><span id="activity-dot" class="activity-dot"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div><button id="stop" type="button" hidden>Stop replay</button></div>
+<div id="transcript" aria-live="polite" aria-relevant="additions"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Choose a sample above. Confirmed text appears here as it’s transcribed and stays in your notebook.</p><span class="empty-rule"></span></div></div>
+<div id="partial" class="partial" aria-live="off"></div>
+<footer><span>WORDS, KEPT CLOSE.</span><span>Replay · local transcription · saved on this machine</span></footer>
+</section>
+</main>
+<dialog id="unlock"><form method="dialog" id="unlock-form"><div class="section-label">LOCAL CONNECTION</div><h2>Open your notebook.</h2><p>Use the launch key from your local server terminal. It stays in this page’s memory.</p><label>Launch key<input id="launch-key" type="password" autocomplete="off" required></label><button type="submit">Connect ↗</button></form></dialog>
+</body></html>
