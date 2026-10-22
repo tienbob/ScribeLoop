@@ -46,7 +46,7 @@ def setup(tmp_path):
         backends.append(backend)
         return backend
 
-    app, token = create_app(database=database, fixtures={'public': wav}, backend_factory=factory)
+    app, token = create_app(storage='public-demo', database=database, fixtures={'public': wav}, backend_factory=factory)
     return app, token, database, backends, wav
 
 
@@ -128,7 +128,7 @@ def test_failure_finishes_session_and_allows_another_start(setup):
     def factory():
         raise RuntimeError('private diagnostic should not be sent to clients')
 
-    app, token = create_app(database=database, fixtures={'public':wav}, backend_factory=factory)
+    app, token = create_app(storage='public-demo', database=database, fixtures={'public':wav}, backend_factory=factory)
     with TestClient(app, base_url='http://127.0.0.1') as client:
         with authenticated(client, token) as ws:
             ws.send_text(token)
@@ -219,7 +219,7 @@ def test_invalid_model_output_fails_without_broadcast_or_storage(setup, bad_chun
         def feed(self, frame):
             return [bad_chunk]
 
-    app, token = create_app(database=database, fixtures={'public':wav}, backend_factory=BadASR)
+    app, token = create_app(storage='public-demo', database=database, fixtures={'public':wav}, backend_factory=BadASR)
     with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
         ws.send_text(token)
         ws.receive_json()
@@ -238,7 +238,7 @@ def test_cleanup_failure_does_not_lock_replay_slot(setup):
         def close(self):
             raise RuntimeError('cleanup failed')
 
-    app, token = create_app(database=database, fixtures={'public':wav}, backend_factory=BadCleanup)
+    app, token = create_app(storage='public-demo', database=database, fixtures={'public':wav}, backend_factory=BadCleanup)
     with TestClient(app, base_url='http://127.0.0.1') as client, authenticated(client, token) as ws:
         ws.send_text(token)
         ws.receive_json()
@@ -341,3 +341,9 @@ def test_blocked_socket_send_times_out_without_hanging_shutdown(setup, monkeypat
         with pytest.raises(WebSocketDisconnect) as exc:
             ws.receive_json()
         assert exc.value.code == 1013
+
+
+def test_disk_storage_requires_explicit_mode(tmp_path):
+    with pytest.raises(ValueError,match='explicit storage mode'):
+        create_app(database=tmp_path/'silent-plaintext.sqlite3')
+    assert not (tmp_path/'silent-plaintext.sqlite3').exists()

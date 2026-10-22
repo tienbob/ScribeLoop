@@ -332,7 +332,9 @@ CREATE TABLE events (
 
 **Phase 1 replay milestone audited (2026-10-22; full MVP still open):** public WAV replay → cached Whisper chunked ASR →
 confirmed SQLite segments → authenticated browser transcript UI is implemented.
-Real recordings remain disabled until encryption is integrated; VAD/LocalAgreement,
+SQLCipher/native-keystore storage and authenticated encrypted-audio primitives
+are implemented ([details](docs/SECURE_STORAGE.md)); real recordings remain disabled
+until the recorder is connected to that lifecycle. VAD/LocalAgreement,
 speaker attribution, native recorder integration, and full resume remain pending.
 See [Phase 1 progress](docs/PHASE_1.md).
 

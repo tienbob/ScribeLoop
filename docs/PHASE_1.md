@@ -1,6 +1,7 @@
 # Phase 1 — public replay vertical slice (2026-10-22)
 
 Status: **public replay milestone audited and finalized** (2026-10-22).
+The encrypted-storage foundation is also implemented ([details](SECURE_STORAGE.md)).
 The full Phase 1 MVP remains incomplete; its remaining requirements are listed below.
 Phase 0's deferred validation gates remain tracked separately.
 
@@ -21,12 +22,15 @@ Phase 0's deferred validation gates remain tracked separately.
 - [x] Use cached Whisper-tiny CPU/int8, two threads, four-second chunks for this
   integration slice. No implicit model downloads. Clamp padded decoder timestamps
   to actual supplied audio. MOSS float16 + SDPA batch defaults remain unchanged.
+- [x] SQLCipher disk storage with native keystore, fail-closed startup, explicit
+  public-demo opt-in, and per-session authenticated encrypted-audio primitives.
+  Real recorder integration is still pending.
 - [x] Actual local WebSocket/model smoke on public AMI seconds 300–320, plus browser
   checks of authentication, transcript display, new replay, start, and stop.
 
 ## Run locally
 
-Install the usual development dependencies (`pip install -e '.[dev]'`) and cache
+Install the development/security dependencies (`pip install -e '.[dev,security,sqlcipher]'`) and cache
 Whisper-tiny using the existing model setup before replay. The server deliberately
 uses `local_files_only=True`; a missing model ends the session as failed.
 
@@ -42,12 +46,16 @@ use the current launch URL/key again. Do not save this short-lived key in a brow
 password manager. The API has no arbitrary path, upload, capture, or model-selection
 endpoint. It can replay only startup-configured fixtures of at most five minutes.
 
-Default database: `data/phase1/public-replays.sqlite3` (gitignored). This development
-SQLite store is **not encrypted**. Only public, non-sensitive fixtures and test
-session titles belong here. Consent is a separate explicit start condition; it does
-not make a sensitive recording safe for plaintext storage. Real meeting recording
-and upload remain unavailable until encrypted storage/keystore integration lands.
-No new recorded audio is created: replay references the existing public WAV.
+The CLI now defaults to encrypted SQLCipher storage in the ScribeLoop platform
+user-data directory, with a key in the native OS keystore. Missing dependencies,
+missing keys, locked keystores, or invalid encrypted files fail closed. The old
+plaintext demo DB is left untouched. Use explicit `--storage public-demo` for
+non-sensitive test storage, or programmatic memory mode for portable tests.
+See [secure storage setup and limitations](SECURE_STORAGE.md).
+
+Public-fixture replay remains the only input. Encrypted audio primitives are
+implemented, but native recording and upload are not enabled until the recorder
+and session lifecycle use them together. No new recorded audio is created by replay.
 
 ## State and transport behavior
 
@@ -75,7 +83,9 @@ session actions and transcript snapshots require WebSocket authentication.
 
 ## Verification
 
-- Full local suite: **92 passing tests**; changed Python code passes Ruff.
+- Native Keychain-backed encrypted API: 20 s public replay, 7 confirmed segments,
+  successful reconnect, and storage-mode indicator verified in Brave.
+- Full local suite: **122 passing tests**; changed Python code passes Ruff.
 - ASGI/WebSocket tests use deterministic ASR to verify authorization, malformed
   origins/hosts, consent, fixture access, persistence, non-persistence of partials,
   single active replay, stop, model failure, reconnect, and restart recovery.
@@ -103,8 +113,8 @@ session actions and transcript snapshots require WebSocket authentication.
 - [x] UI partials are scoped to sessions; disconnected controls cannot issue Stop;
   storage-unavailable state disables Start. Node regressions execute the actual
   UI script with a minimal DOM/socket harness (not a substitute for browser layout QA).
-- [x] Fix CI smoke dependency mismatch: default smoke imports all 35 application
-  modules; optional `--full-ml` requires separately installed diarization/Sherpa
+- [x] Fix CI smoke dependency mismatch: default smoke imports the application
+  module tree; optional `--full-ml` requires separately installed diarization/Sherpa
   extras. Add frontend regression execution to CI. No remote CI run is claimed.
 - [x] Build a Python wheel and verify all three UI assets are included. This is
   not a frozen desktop installer or signing validation.
@@ -123,12 +133,13 @@ node tests/frontend_replay.mjs
 No known unresolved audit defect remains in the scoped public replay milestone.
 Stop/model-load cancellation is still cooperative; hard interruption needs an
 isolated worker. Public-fixture declarations rely on the local operator, not
-license detection. The plaintext store is not approved for real meetings.
+license detection. Explicit public-demo plaintext storage is not approved for real meetings.
 The following full-MVP items are not waived by this audit.
 
 ## Remaining Phase 1 MVP work
 
-1. Encrypted database/audio storage and OS-keystore lifecycle before new real audio.
+1. Connect the delivered encrypted DB/audio/keystore foundation to a complete
+   recorder lifecycle before new real audio; finish key-aware recovery and deletion.
 2. VAD integration with recorder-timeline preservation; LocalAgreement partial and
    confirmation policy, paced latency/resource measurements.
 3. Native capture/recorder integration with lossless recording priority and device

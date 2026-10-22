@@ -82,7 +82,8 @@ Full-meeting MOSS runs are deferred during development.
 
 The first vertical slice connects bounded public WAV replay to cached local ASR,
 SQLite session history, and an authenticated browser transcript UI. The replay
-milestone is audited and finalized with 92 local tests plus frontend regressions. See
+milestone is audited; encrypted database/keystore and audio-container primitives
+are now implemented, with 122 local tests plus frontend regressions. See
 [Phase 1 implementation and next steps](docs/PHASE_1.md).
 
 ```bash
@@ -91,5 +92,7 @@ milestone is audited and finalized with 92 local tests plus frontend regressions
 ```
 
 Open the launch URL printed by the server. This slice accepts public test fixtures
-only; encrypted storage, native recording, VAD/LocalAgreement, speaker attribution,
-and full restart/resume are still pending. MOSS batch defaults remain float16 + SDPA.
+only. The CLI defaults to SQLCipher + native keystore; install `.[security,sqlcipher]`
+or explicitly select `--storage public-demo` for non-sensitive development. Native
+recording integration, VAD/LocalAgreement, speaker attribution, and full resume
+remain pending. See [secure storage](docs/SECURE_STORAGE.md). MOSS batch defaults remain float16 + SDPA.

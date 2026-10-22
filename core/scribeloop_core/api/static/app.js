@@ -65,6 +65,7 @@ function connect() {
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
       authenticated = true; replayAvailable = data.replay_available !== false; partials.clear();
+      $('storage-status').textContent = {encrypted:'Encrypted on this machine', 'public-demo':'Public demo · unencrypted', memory:'Temporary memory'}[data.storage] || 'Storage status unavailable';
       $('connection').textContent = '● Connected locally';
       if (!replayAvailable) notice('Replay storage is unavailable. Restart the local server.');
       sessions = new Map(data.sessions.map(s => [s.id,s]));

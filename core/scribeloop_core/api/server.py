@@ -1,7 +1,7 @@
 """Authenticated Phase 1 public-fixture replay workspace; loopback only.
 
 Disk storage here is deliberately limited to explicitly configured public test
-fixtures. Real-recording capture/upload waits for encrypted application storage.
+fixtures. Real-recording capture/upload waits for the complete encrypted recorder lifecycle.
 """
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import argparse
 import asyncio
 import contextlib
 import json
-import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -22,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..pipeline.replay import ReplayRunner
-from ..storage.db import connect, migrate
+from ..storage.db import DATABASE_ERRORS, connect, migrate
 from ..storage.sessions import SessionStore
 from .auth import check_first_message, host_allowed, new_token, origin_allowed
 
@@ -47,7 +46,12 @@ class StartReplay(BaseModel):
         return value
 
 
-def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[FastAPI, str]:
+def create_app(*, database=None, fixtures=None, backend_factory=None,
+               storage='memory', key_store=None) -> tuple[FastAPI, str]:
+    if storage not in {'memory', 'public-demo', 'encrypted'}:
+        raise ValueError('Unknown storage mode')
+    if (storage == 'memory') != (database is None):
+        raise ValueError('Disk storage requires an explicit storage mode and database path')
     token = new_token()
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
@@ -78,18 +82,23 @@ def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[F
 
     @asynccontextmanager
     async def lifespan(app):
-        conn = migrate(connect(database or ':memory:'))
-        store = SessionStore(conn)
-        store.recover()
-        app.state.store = store
-        app.state.runner = ReplayRunner(store, backend_factory, publish)
-        try:
-            yield
-        finally:
+        from contextlib import closing
+
+        from ..storage.encrypted import encrypted_database
+
+        manager = (encrypted_database(Path(database), key_store) if storage == 'encrypted'
+                   else closing(migrate(connect(database or ':memory:'))))
+        # Keychain access occurs during startup, before any recording or UI work.
+        with manager as conn:
+            store = SessionStore(conn)
+            store.recover()
+            app.state.store = store
+            app.state.runner = ReplayRunner(store, backend_factory, publish)
+            app.state.storage = storage
             try:
-                await app.state.runner.close()
+                yield
             finally:
-                conn.close()
+                await app.state.runner.close()
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
@@ -155,7 +164,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[F
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
                 'sessions': history, 'active_id': app.state.runner.active_id,
-                'replay_available': not app.state.runner.unavailable,
+                'replay_available': not app.state.runner.unavailable, 'storage': app.state.storage,
                 'segments': {s['id']: store.segments(s['id']) for s in history}})
 
             async def send_events():
@@ -186,7 +195,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None) -> tuple[F
                             app.state.runner.stop(command.get('session_id'))
                         else:
                             raise ValueError('Unknown command')
-                    except (ValueError, ValidationError, TypeError, sqlite3.Error):
+                    except (ValueError, ValidationError, TypeError, *DATABASE_ERRORS):
                         if queue.full():
                             await ws.close(code=1013)
                             return
@@ -221,11 +230,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--public-fixture', type=Path, required=True,
                         help='public/authorized non-sensitive test WAV, at most five minutes')
-    parser.add_argument('--database', type=Path, default=Path('data/phase1/public-replays.sqlite3'))
+    parser.add_argument('--storage', choices=['encrypted', 'public-demo'], default='encrypted')
+    parser.add_argument('--database', type=Path)
     parser.add_argument('--port', type=int, default=8757)
     args = parser.parse_args()
-    args.database.parent.mkdir(parents=True, exist_ok=True)
-    app, token = create_app(database=args.database, fixtures={'development-sample': args.public_fixture})
+    if args.database is None:
+        if args.storage == 'encrypted':
+            from platformdirs import user_data_path
+            args.database = user_data_path('ScribeLoop', appauthor=False) / 'sessions.sqlcipher'
+        else:
+            args.database = Path('data/phase1/public-replays.sqlite3')
+    args.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    app, token = create_app(database=args.database, storage=args.storage,
+                            fixtures={'development-sample': args.public_fixture})
     # Fragment is not sent in HTTP requests; client removes it after reading.
     print(f'Open locally: http://127.0.0.1:{args.port}/#token={token}', file=sys.stderr)
     uvicorn.run(app, host='127.0.0.1', port=args.port, ws_max_size=8192, access_log=False)

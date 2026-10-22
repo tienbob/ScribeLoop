@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sqlite3
 import threading
 from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
@@ -17,6 +16,7 @@ import soundfile as sf
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..capture.source import WavFileSource
+from ..storage.db import DATABASE_ERRORS
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ class ReplayRunner:
             await worker
             log.error('Replay consumer failed (%s)', type(exc).__name__)
             self.unavailable = True
-            with contextlib.suppress(sqlite3.Error):
+            with contextlib.suppress(*DATABASE_ERRORS):
                 self.store.transition(session_id, 'failed')
             self.active_id = None
             await self.publish({'type': 'replay_unavailable', 'session_id': session_id,

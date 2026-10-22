@@ -44,8 +44,9 @@ const session=(id,status)=>({id,status,title:id,started_at:id==='active'?2:1});
 const deliver=data=>socket.onmessage({data:JSON.stringify(data)});
 const snapshot=()=>deliver({type:'snapshot',fixtures:[{id:'public',duration_s:20}],
   sessions:[session('active','replaying'),session('past','completed')],
-  active_id:'active',replay_available:true,segments:{active:[],past:[]}});
+  active_id:'active',replay_available:true,storage:'public-demo',segments:{active:[],past:[]}});
 snapshot();
+assert.equal(get('storage-status').textContent,'Public demo · unencrypted');
 deliver({type:'partial',session_id:'active',segment:{text:'ephemeral words'}});
 assert.equal(get('partial').textContent,'ephemeral words');
 get('history').children[1].onclick();

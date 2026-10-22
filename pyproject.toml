@@ -34,6 +34,9 @@ dependencies = [
 # Offline diarization (pyannote community-1). HF-gated model download happens
 # at runtime with a user token (ARCHITECTURE.md §9) — see speakers/README.
 diar = ["pyannote.audio>=3.3", "torch>=2.2"]
+# At-rest encryption; SQLCipher binding needs a compatible native library on source builds.
+security = ["cryptography>=43,<51", "keyring>=25,<26"]
+sqlcipher = ["sqlcipher3>=0.6.4,<0.7"]
 # Bake-off candidates
 sherpa = ["sherpa-onnx>=1.10"]
 moonshine = ["useful-moonshine"]
