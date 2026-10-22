@@ -1,6 +1,7 @@
 # Phase 0a capture validation — 2026-10-22
 
-Status: open. Phase 0b's development checkpoint remains closed.
+Status: local capture implementation delivered; native validation deferred.
+See [Phase 0 handoff](PHASE_0_CLOSEOUT.md). Phase 0b remains closed.
 
 ## Completed implementation
 
@@ -26,12 +27,14 @@ per stream on a consumer thread, never inside a native realtime audio callback.
 
 ## Next implementation and host validation
 
-- [ ] Implement the native macOS helper and Python transport; both remain placeholders.
-- [ ] Wire health events into the capture consumer/UI; this component is not yet
-  integrated into an active recording pipeline.
-- [ ] Detect stopped/missing capture separately: no incoming frames cannot trigger
-  this sample-based silence monitor.
-- [ ] Verify prompt attribution and PCM capture from a signed/notarized app bundle.
+- [x] Implement and compile ScreenCaptureKit fallback helper and framed Python transport.
+- [x] Exercise partial packets, invalid data, timestamps, stderr errors, and child cleanup.
+- [ ] Implement the preferred Core Audio process-tap helper.
+- [x] Wire silence/recovery events into the native diagnostic consumer.
+- [ ] Connect events to the future product recording UI.
+- [x] Detect missing/stalled native packets via a configurable transport timeout.
+- [ ] Verify prompt attribution and PCM capture from a signed/notarized app bundle
+  (signing explicitly deferred by user; no valid local identity installed).
 - [ ] Validate intentional silence, denied permission, source changes, and recovery
   on the actual macOS host; do not infer native permission behavior from WAV replay.
 - [ ] Resolve remaining Phase 0a backend/packaging decisions and second-OS checks
@@ -39,3 +42,7 @@ per stream on a consumer thread, never inside a native realtime audio callback.
 
 The signed-build exit criterion remains unchecked. This work completes the silence
 monitor component, not native capture or the whole Phase 0a spike.
+
+Native capture attempt returned macOS TCC permission denial before successful
+audio delivery. No real-capture pass is claimed. New transport tests bring the
+full suite to **62 passing tests**; helper build and import smoke also pass.

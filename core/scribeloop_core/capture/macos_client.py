@@ -12,7 +12,7 @@ silent frames and guide the user).
 """
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 from .source import AudioFrame
 
@@ -34,3 +34,41 @@ class MacOSTapSource:
 
     def close(self) -> None:
         raise NotImplementedError
+
+
+class MacOSScreenAudioSource:
+    """Implemented ScreenCaptureKit fallback (macOS 13+); no mic or video saved.
+
+    Requires Screen Recording permission, unlike the preferred process-tap path.
+    A signed app's permission attribution remains a separate host validation.
+    """
+
+    stream = 'loopback'
+
+    def __init__(self, bundle_ids: list[str] | None = None, *, helper_path=None,
+                 timeout_s: float = 10):
+        import sys
+        from pathlib import Path
+
+        from .pcm_process import PCMProcessSource
+
+        if sys.platform != 'darwin':
+            raise OSError('ScreenCaptureKit requires macOS')
+        helper = Path(helper_path or 'data/native/scribeloop-sck').resolve()
+        if not helper.is_file():
+            raise FileNotFoundError(f'Build the native helper first: {helper}')
+        command = [str(helper)]
+        for bundle in bundle_ids or []:
+            if not bundle or bundle.startswith('-'):
+                raise ValueError('Invalid application bundle identifier')
+            command.extend(['--bundle-id', bundle])
+        self._source = PCMProcessSource(command, timeout_s=timeout_s)
+
+    def frames(self) -> Iterator[AudioFrame]:
+        return self._source.frames()
+
+    def monitored_frames(self, on_health) -> Iterator[AudioFrame]:
+        return self._source.monitored_frames(on_health)
+
+    def close(self) -> None:
+        self._source.close()

@@ -25,7 +25,18 @@ see [Phase 0a status](../../../../docs/PHASE_0A.md).
 
 - Requires Screen Recording permission; macOS 15 re-prompts periodically.
 
-Build (Phase 0a, on a macOS host): `swiftc -O -o tap-helper *.swift`
+Implemented fallback: `macos_sck/main.swift`. Build with
+`python scripts/build_capture.py` from the repo root; then run
+`python scripts/check_native_capture.py --consent-confirmed --duration-s 5`.
+No audio is saved by the diagnostic. Native capture is currently blocked by
+macOS TCC on the development host. Core Audio taps are still unimplemented.
+
+The helper emits `SLP1`, little-endian uint32 sample count, little-endian float64
+presentation timestamp in seconds, then mono float32 little-endian PCM at 16 kHz.
+The consumer rejects invalid/oversized packets, nonfinite samples, reversed
+timestamps, missing data, and helper errors. It preserves gaps and stops the
+helper on timeout/close. Pipe writes run on the ScreenCaptureKit output queue,
+not an IOProc realtime callback. No screen-output or microphone delegate is added.
 
 License: proprietary (see repo root). See ARCHITECTURE.md §2/§9 for the full
 rationale and permission model.
