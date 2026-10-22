@@ -16,6 +16,11 @@ on a realtime thread** — Python's GIL/GC must not sit there (ARCHITECTURE.md
 - No public preflight API: detect silent frames from the Python side and
   guide the user to grant the "system audio recording" permission.
 
+Python-side silence diagnostics are implemented in `capture/health.py`;
+`scripts/check_capture.py` exercises them on bounded WAV replay. Wire the monitor
+into the future capture consumer. This does not validate native permission behavior;
+see [Phase 0a status](../../../../docs/PHASE_0A.md).
+
 ## macos_sck/ — ScreenCaptureKit fallback (macOS 13.x)
 
 - Requires Screen Recording permission; macOS 15 re-prompts periodically.

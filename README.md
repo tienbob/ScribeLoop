@@ -38,7 +38,10 @@ placeholders; implementation and host validation remain Phase 0a work. `capture/
 
 ## Phase 0a tasks (from ARCHITECTURE.md §8)
 
+Current implementation and host-validation status: [Phase 0a notes](docs/PHASE_0A.md).
+
 - [x] Repo on GitHub (CI runs tests + import smoke on ubuntu/macos/windows)
+- [x] Consumer-side silent-frame monitor and bounded WAV diagnostic (native integration pending)
 - [ ] Signed & notarized macOS build records loopback PCM; permission attributes to the Tauri bundle
 - [ ] ASR bake-off:
       ```bash
