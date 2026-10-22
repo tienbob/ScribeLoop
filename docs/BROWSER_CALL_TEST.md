@@ -106,3 +106,40 @@ the replacement Vietnamese transcript with capture off. Tests cover large pipe
 input with a slow reader, cancellation cleanup, authenticated-container completion,
 clock gaps/bounds, saved-call reprocessing without capture, prior-revision retention,
 failure preservation, and unchanged recording end timestamps on reprocessing.
+
+## Detect once, then lock — requested 2026-10-22
+
+Automatic becomes the default. Use only the first few seconds of detected speech
+from the opening 30 seconds of each track (up to six speech seconds per track),
+not leading silence. Run local language identification once, lock the result for
+both tracks and the entire MOSS pass, and persist/report that session choice.
+A pinned local multilingual Whisper small model identifies language only; it
+must not transcribe meetings. The tiny detector was rejected after it confused
+Vietnamese with Chinese on the saved call.
+MOSS remains float16 + SDPA. Manual Vietnamese/English overrides detection.
+Require at least two voiced seconds, a top language probability of 0.70, and a
+0.20 margin over the runner-up. These are initial conservative thresholds.
+Insufficient/uncertain or unsupported language evidence must request a manual
+choice rather than silently guessing. Auto reprocessing reuses an existing auto
+lock; manually changing language is an explicit override. In the current
+record-first implementation this step runs after Stop, before transcription;
+live first-seconds detection during recording is not delivered by this change.
+
+
+Install the language detector explicitly with
+`.venv/bin/python scripts/download_language_model.py`. The pinned Systran small
+revision is `536b0662742c02347bc0e980a01041f333bce120`; its required files include
+`vocabulary.txt`. Recording never triggers a model download. The language-only
+CPU int8 detector is released after selection; MOSS transcription stays float16.
+
+Saved-call check: the detector selected Vietnamese with probability 0.7262 from
+7.78 seconds of opening speech, in 1.83 seconds including encrypted input loading.
+This model probability is not a calibrated accuracy score. No new capture or
+upload occurred. Silence and uncertain/unsupported evidence require a manual
+choice. Automatic mode currently supports Vietnamese and English only.
+
+Detect-once validation: **228 tests passed**, frontend regressions and 50-module
+import smoke passed, and changed Python files passed Ruff. The corrected detector
+loaded successfully after installing its required vocabulary. Tests cover one
+shared detection, silence/sample bounds, uncertain/unsupported results, fixed
+worker language, reuse of a persisted auto lock, and UI language-lock reporting.

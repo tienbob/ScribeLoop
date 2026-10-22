@@ -60,7 +60,7 @@ class SelectSource(BaseModel):
 class StartRecording(SelectSource):
     action: Literal['record']
     title: str = Field(default='Meeting test', min_length=1, max_length=160)
-    language: Literal['vi','en','auto'] = 'vi'
+    language: Literal['vi','en','auto'] = 'auto'
     consent_confirmed: bool = Field(strict=True)
 
     @field_validator('title')
@@ -76,7 +76,7 @@ class ReprocessRecording(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['reprocess']
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
-    language: Literal['vi','en','auto'] = 'vi'
+    language: Literal['vi','en','auto'] = 'auto'
 
 
 class DismissCandidate(BaseModel):
@@ -225,7 +225,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 'replay_available': not app.state.runner.unavailable, 'storage': app.state.storage,
                 'discovery': app.state.discovery.snapshot(),
                 'segments': {s['id']: store.segments(s['id']) for s in history},
-                'notes': {s['id']: store.notes(s['id']) for s in history}})
+                'notes': {s['id']: store.notes(s['id']) for s in history},
+                'language_locks': {s['id']:store.language_lock(s['id']) for s in history}})
 
             async def send_events():
                 while True:

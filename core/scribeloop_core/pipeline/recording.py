@@ -13,6 +13,7 @@ import threading
 import time
 
 from ..storage.db import DATABASE_ERRORS
+from .language import LanguageDetectionError
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,8 @@ class RecordingRunner:
         self.store, self.audio = store, audio
         self.source_factory, self.publish = source_factory, publish
         self.transcriber = transcriber
-        self.language = 'vi'
+        self.language = 'auto'
+        self.language_lock = None
         self.queue_size, self.max_s = queue_size, max_s
         self.stop_timeout_s = stop_timeout_s
         self.active_id = None
@@ -38,7 +40,8 @@ class RecordingRunner:
             raise ValueError('Recording requires explicit consent')
         if self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Recording or processing already active')
-        self.language = source_metadata.get('language', 'vi')
+        self.language = source_metadata.get('language', 'auto')
+        self.language_lock = None
         if self.language not in {'vi','en','auto'}:
             raise ValueError('Unsupported language hint')
         session = self.store.create_recording(title, source_metadata)
@@ -181,9 +184,10 @@ class RecordingRunner:
             with contextlib.suppress(*DATABASE_ERRORS):
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
-                'message': 'Recording or local transcription failed. Check microphone/Screen Recording '
+                'message': ('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
+                           if isinstance(exc, LanguageDetectionError) else 'Recording or local transcription failed. Check microphone/Screen Recording '
                            'permission, running source, available disk space, and cached ASR model. '
-                           'Any captured audio remains encrypted; no plaintext fallback was used.'})
+                           'Any captured audio remains encrypted; no plaintext fallback was used.')})
         finally:
             ready_wait.cancel()
             if self.active_id == session_id:
@@ -192,7 +196,7 @@ class RecordingRunner:
     def _transcribe(self, audio, session_id, emit, cancelled):
         if self.transcriber:
             return self.transcriber(audio, session_id, emit, cancelled)
-        return transcribe_recording(audio, session_id, emit, cancelled, language=self.language)
+        return transcribe_recording(audio, session_id, emit, cancelled, language=self.language, locked_language=self.language_lock)
 
     def reprocess(self, session_id, *, language):
         if self.closed or self.active_id or (self.task and not self.task.done()):
@@ -204,6 +208,8 @@ class RecordingRunner:
         if language not in {'vi','en','auto'}:
             raise ValueError('Unsupported language hint')
         self.language = language
+        prior = self.store.language_lock(session_id)
+        self.language_lock = prior if language == 'auto' and prior and prior.get('mode') == 'auto' else None
         self.cancel_processing.clear()
         self.task = asyncio.create_task(self._reprocess(session_id))
 
@@ -216,7 +222,9 @@ class RecordingRunner:
             with contextlib.suppress(*DATABASE_ERRORS):
                 await self._state(session_id, 'failed')
             await self.publish({'type':'recording_error', 'session_id':session_id,
-                'message':'Local MOSS reprocessing failed. Previous transcript and encrypted audio retained.'})
+                'message':('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
+                           if isinstance(exc, LanguageDetectionError) else
+                           'Local MOSS reprocessing failed. Previous transcript and encrypted audio retained.')})
 
     async def _process(self, session_id, *, replace=False):
         # Bounded output queue keeps transcript persistence on the DB thread.
@@ -237,6 +245,10 @@ class RecordingRunner:
                     chunk = chunks.get_nowait()
                 except queue.Empty:
                     await asyncio.sleep(.05)
+                    continue
+                if chunk.get('type') == 'language_locked':
+                    self.store.set_language_lock(session_id, chunk)
+                    await self.publish({**chunk, 'session_id':session_id})
                     continue
                 if replace:
                     if len(replacement) >= 16000:
@@ -266,7 +278,7 @@ class RecordingRunner:
         await self.publish({'type': 'session', 'session': session})
 
 
-def transcribe_recording(audio, session_id, emit, cancelled, *, language='vi'):
+def transcribe_recording(audio, session_id, emit, cancelled, *, language='auto', locked_language=None):
     """Actual meeting path: local MOSS float16 + SDPA, explicit language hint."""
     from .meeting_asr import transcribe_moss
-    return transcribe_moss(audio, session_id, emit, cancelled, language=language)
+    return transcribe_moss(audio, session_id, emit, cancelled, language=language, locked_language=locked_language)

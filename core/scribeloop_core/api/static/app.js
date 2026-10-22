@@ -4,7 +4,7 @@ let key = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, recordingAvailable = false, recordPending = false;
-let notes = new Map();
+let notes = new Map(), languageLocks = new Map();
 const partials = new Map();
 let socket, activeId = null, selectedId = null, sessions = new Map(), segments = new Map();
 const liveStates = new Set(['loading', 'replaying', 'preparing', 'recording', 'stopping']);
@@ -148,6 +148,9 @@ function render() {
   if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
   else $('start').textContent = 'Start replay ↗';
+  const languageLock = languageLocks.get(selectedId);
+  $('language-status').textContent = languageLock ? `${languageLock.mode === 'auto' ? 'Detected' : 'Selected'}: ${languageLock.language === 'vi' ? 'Tiếng Việt' : 'English'} · fixed for this conversation` :
+    session?.source === 'meeting' ? 'Automatic mode detects early speech once after Stop, before transcription.' : '';
   $('meeting-notes').textContent = notes.get(selectedId) || '';
   $('reprocess-meeting').hidden = session?.source !== 'meeting';
   $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending ||
@@ -180,6 +183,7 @@ function connect() {
     if (data.type === 'snapshot') {
       authenticated = true; recordingAvailable = data.recording_available === true; recordPending=false;
       notes = new Map(Object.entries(data.notes || {}));
+      languageLocks = new Map(Object.entries(data.language_locks || {}));
       replayAvailable = data.replay_available !== false; partials.clear();
       clearSource(); updateDiscovery(data.discovery);
       $('storage-status').textContent = {encrypted:'Encrypted on this machine', 'public-demo':'Public demo · unencrypted', memory:'Temporary memory'}[data.storage] || 'Storage status unavailable';
@@ -203,6 +207,8 @@ function connect() {
       pendingSource=null; chosenSource=data.source;
       $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
+    } else if (data.type === 'language_locked') {
+      languageLocks.set(data.session_id,data); render();
     } else if (data.type === 'transcript_replaced') {
       segments.set(data.session_id,data.segments); render();
     } else if (data.type === 'notes') {
@@ -259,7 +265,7 @@ $('record-meeting').onclick = () => {
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    consent_confirmed:$('record-consent').checked,language:$('meeting-language').value || 'vi'});
+    consent_confirmed:$('record-consent').checked,language:$('meeting-language').value || 'auto'});
   renderDiscovery();
 };
 
@@ -269,6 +275,6 @@ setInterval(() => { if (activeId) renderDiscovery(); },1000);
 
 $('reprocess-meeting').onclick = () => {
   if ($('reprocess-meeting').disabled) return;
-  recordPending=send({action:'reprocess',session_id:selectedId,language:$('meeting-language').value || 'vi'});
+  recordPending=send({action:'reprocess',session_id:selectedId,language:$('meeting-language').value || 'auto'});
   render();
 };

@@ -144,3 +144,16 @@ class SessionStore:
             self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
             self.conn.execute('RELEASE SAVEPOINT transcript_revision')
             raise
+
+    def set_language_lock(self, session_id, lock):
+        if lock.get('language') not in {'vi','en'} or lock.get('mode') not in {'auto','manual'}:
+            raise ValueError('Invalid language lock')
+        metadata = {key:lock.get(key) for key in ('language','mode','confidence','sample_s')}
+        with self.conn:
+            self.conn.execute('INSERT INTO events (session_id,ts,level,type,payload_json) '
+                'VALUES (?,?,?,?,?)', (session_id,self._now(),'info','language_locked',json.dumps(metadata)))
+
+    def language_lock(self, session_id):
+        row = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='language_locked' "
+            'ORDER BY id DESC LIMIT 1', (session_id,)).fetchone()
+        return json.loads(row['payload_json']) if row else None

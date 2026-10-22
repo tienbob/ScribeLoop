@@ -68,7 +68,9 @@ print(json.dumps({'segments':[{'stream':'mic','text':'có chạy thật không v
 """)
     rows=[]
     meeting_asr.transcribe_moss(Audio(),'unused',rows.append,threading.Event(),language='vi')
-    assert rows[0]['text']=='có chạy thật không vậy'
+    assert rows[0]['type']=='language_locked'
+    assert rows[0]['language']=='vi'
+    assert rows[1]['text']=='có chạy thật không vậy'
     assert children[0].poll()==0
     assert children[0].stdin.closed and children[0].stdout.closed
 
@@ -81,14 +83,36 @@ def test_cancel_kills_worker_without_emitting_or_plaintext_files(monkeypatch):
     timer.start()
     started=time.monotonic()
     try:
-        meeting_asr.transcribe_moss(Audio(),'unused',rows.append,cancelled)
+        meeting_asr.transcribe_moss(Audio(),'unused',rows.append,cancelled,language='vi')
     finally:
         timer.cancel()
     assert time.monotonic()-started<3
-    assert not rows
+    assert all(row.get('type')=='language_locked' for row in rows)
     assert children[0].poll() is not None
 
 
 def test_invalid_hint_does_not_read_audio():
     with pytest.raises(ValueError,match='language'):
         meeting_asr.transcribe_moss(None,'unused',None,threading.Event(),language='unknown')
+
+
+def test_auto_detects_once_and_reuses_lock_for_both_tracks(monkeypatch):
+    calls=[]
+    def detect(tracks):
+        calls.append(tuple(tracks))
+        return {'language':'vi','mode':'auto','confidence':.95,'sample_s':6}
+    monkeypatch.setattr('scribeloop_core.pipeline.language.identify_language',detect)
+    children=worker(monkeypatch,"""
+import io,json,sys
+import numpy as np
+with np.load(io.BytesIO(sys.stdin.buffer.read()),allow_pickle=False) as data:
+    assert str(data['language'])=='vi', 'Worker must receive a fixed language, never auto'
+print(json.dumps({'segments':[]}))
+""")
+    rows=[]
+    meeting_asr.transcribe_moss(Audio(),'unused',rows.append,threading.Event(),language='auto')
+    assert len(calls)==1
+    lock=rows[0]
+    meeting_asr.transcribe_moss(Audio(),'unused',rows.append,threading.Event(),language='auto',locked_language=lock)
+    assert len(calls)==1, 'Do not redetect a saved auto-locked conversation'
+    assert len(children)==2

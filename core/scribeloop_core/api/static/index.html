@@ -17,7 +17,7 @@
 <p id="source-status" class="source-status" role="status">Choose manually if automatic discovery misses a call.</p>
 <button id="enable-microphone" type="button" hidden>Enable microphone access</button>
 <p id="microphone-permission" class="scope" role="status">Microphone access has not been checked.</p>
-<label>CONVERSATION LANGUAGE<select id="meeting-language"><option value="vi">Tiếng Việt</option><option value="en">English</option><option value="auto">Automatic language detection</option></select></label>
+<label>CONVERSATION LANGUAGE<select id="meeting-language"><option value="auto">Detect once, then keep language</option><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
 <label class="consent"><input type="checkbox" id="record-consent"> I have permission from participants to record this call.</label>
 <p id="recording-unavailable" class="scope">Five-minute development test. Captures all audio in the selected browser plus your microphone. Use headphones. Encrypted audio stays on this machine; MOSS transcribes locally after Stop. Choose the conversation language for best results.</p>
 </section>
@@ -25,6 +25,7 @@
 <div id="notice" role="alert" hidden></div>
 <div class="transcript-header"><div><span id="activity-dot" class="activity-dot"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div><button id="stop" type="button" hidden>Stop replay</button></div>
 <div id="transcript" aria-live="polite" aria-relevant="additions"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Choose a sample above. Confirmed text appears here as it’s transcribed and stays in your notebook.</p><span class="empty-rule"></span></div></div>
+<p id="language-status" class="scope" role="status"></p>
 <button id="reprocess-meeting" type="button" hidden>Transcribe again with selected language</button>
 <pre id="meeting-notes" class="meeting-notes scope" aria-live="polite"></pre>
 <div id="partial" class="partial" aria-live="off"></div>

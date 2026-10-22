@@ -41,12 +41,23 @@ def recording_pcm(audio, session_id):
     return tracks
 
 
-def transcribe_moss(audio, session_id, emit, cancelled, *, language='vi'):
+def transcribe_moss(audio, session_id, emit, cancelled, *, language='auto', locked_language=None):
     if language not in {'vi','en','auto'}:
         raise ValueError('Unsupported language hint')
     tracks = recording_pcm(audio, session_id)
     if cancelled.is_set():
         return
+    from .language import identify_language
+    if language == 'auto':
+        lock = locked_language or identify_language(tracks)
+        if lock.get('language') not in {'vi','en'} or lock.get('mode') != 'auto':
+            raise ValueError('Invalid session language lock')
+    else:
+        lock = {'language':language, 'confidence':None, 'mode':'manual', 'sample_s':0}
+    language = lock['language']
+    if cancelled.is_set():
+        return
+    emit({'type':'language_locked', **lock})
     payload = io.BytesIO()
     np.savez(payload, language=np.array(language), **tracks)
     env = os.environ.copy()
