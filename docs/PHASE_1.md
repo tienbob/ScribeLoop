@@ -5,6 +5,9 @@ The encrypted-storage foundation is also implemented ([details](SECURE_STORAGE.m
 The full Phase 1 MVP remains incomplete; its remaining requirements are listed below.
 Phase 0's deferred validation gates remain tracked separately.
 
+The [codebase audit against the revised plan](PHASE_1_PLAN_AUDIT.md) records
+missing meeting functionality, integration risks, and implementation order.
+
 ## Requirement change — automatic meeting detection
 
 **Required, not yet implemented:** detect active Microsoft Teams calls and Slack
