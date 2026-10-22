@@ -1,9 +1,22 @@
-# Phase 1 — public replay vertical slice (2026-10-22)
+# Phase 1 — meeting capture and live transcript MVP (2026-10-22)
 
 Status: **public replay milestone audited and finalized** (2026-10-22).
 The encrypted-storage foundation is also implemented ([details](SECURE_STORAGE.md)).
 The full Phase 1 MVP remains incomplete; its remaining requirements are listed below.
 Phase 0's deferred validation gates remain tracked separately.
+
+## Requirement change — automatic meeting detection
+
+**Required, not yet implemented:** detect active Microsoft Teams calls and Slack
+huddles automatically, then support Zoom and browser meetings. Offer a source
+confirmation prompt and capture meeting output plus a separate microphone stream
+so the conversation includes the user's speech. Detection does not authorize
+recording. Keep the consent confirmation and visible recording indicator.
+
+This moves discovery and basic dual-stream capture into Phase 1; they are no
+longer deferred polish/microphone features. The existing replay milestone remains
+delivered, but does not satisfy this requirement. Implementation must follow
+[meeting detection and capture acceptance](MEETING_CAPTURE.md).
 
 ## Delivered
 
@@ -138,13 +151,15 @@ The following full-MVP items are not waived by this audit.
 
 ## Remaining Phase 1 MVP work
 
-1. Connect the delivered encrypted DB/audio/keystore foundation to a complete
+1. Implement metadata-only meeting discovery (Teams/Slack first), debounced
+   candidate prompts, explicit source selection, and detector acceptance checks.
+2. Connect the delivered encrypted DB/audio/keystore foundation to a complete
    recorder lifecycle before new real audio; finish key-aware recovery and deletion.
-2. VAD integration with recorder-timeline preservation; LocalAgreement partial and
+3. VAD integration with recorder-timeline preservation; LocalAgreement partial and
    confirmation policy, paced latency/resource measurements.
-3. Native capture/recorder integration with lossless recording priority and device
+4. Native per-app output and separate microphone capture/recorder integration with lossless recording priority and device
    change/recovery. Preserve Phase 0 signing and second-OS limitations.
-4. Near-online community-1 with stable cross-chunk speaker identities, then tested
+5. Near-online community-1 with stable cross-chunk speaker identities, then tested
    speaker attribution; keep concurrent timestamps for real overlap.
-5. Authenticated recording UI, restart/resume at an audio checkpoint, and full MVP
+6. Authenticated recording UI, restart/resume at an audio checkpoint, and full MVP
    validation against the architecture's corpus/latency/resource criteria.
