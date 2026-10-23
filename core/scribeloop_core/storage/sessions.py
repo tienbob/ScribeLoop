@@ -46,6 +46,25 @@ class SessionStore:
                                   (now, session_id))
         return self.get(session_id)
 
+    def _speaker(self, session_id, stream, key):
+        if key is None:
+            return None
+        import re
+        if not re.fullmatch(r'deepgram:[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
+            raise ValueError('Invalid speaker identity scope')
+        identity = session_id+':'+key
+        existing = self.conn.execute('SELECT id FROM session_speakers WHERE id=?',(identity,)).fetchone()
+        if not existing:
+            number = self.conn.execute('SELECT COUNT(*)+1 FROM session_speakers WHERE session_id=?',
+                                       (session_id,)).fetchone()[0]
+            self.conn.execute('INSERT INTO session_speakers(id,session_id,stream,local_label) VALUES (?,?,?,?)',
+                              (identity,session_id,stream,f'Speaker {number}'))
+        return identity
+
+    def _speaker_label(self, identity):
+        row = self.conn.execute('SELECT local_label FROM session_speakers WHERE id=?',(identity,)).fetchone()
+        return row[0] if row else None
+
     def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback', revision: int = 1):
         if stream not in {'loopback', 'mic'}:
             raise ValueError('Unknown transcript stream')
@@ -58,8 +77,10 @@ class SessionStore:
         if row['start_ms'] < 0 or row['end_ms'] < row['start_ms']:
             raise ValueError('Invalid transcript timestamps')
         with self.conn:
+            row['local_speaker_id'] = self._speaker(session_id,stream,chunk.get('speaker_key'))
             self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                               + ','.join('?' for _ in row) + ')', tuple(row.values()))
+        row['speaker_label'] = self._speaker_label(row.get('local_speaker_id'))
         return row
 
     def get(self, session_id: str):
@@ -93,8 +114,10 @@ class SessionStore:
 
     def segments(self, session_id: str):
         return [dict(row) for row in self.conn.execute(
-            'SELECT * FROM segments WHERE session_id=? AND revision=('
-            'SELECT MAX(revision) FROM segments WHERE session_id=?) ORDER BY start_ms, rowid',
+            'SELECT segments.*, session_speakers.local_label AS speaker_label FROM segments '
+            'LEFT JOIN session_speakers ON session_speakers.id=segments.local_speaker_id '
+            'WHERE segments.session_id=? AND revision=('
+            'SELECT MAX(revision) FROM segments WHERE session_id=?) ORDER BY start_ms, segments.rowid',
             (session_id, session_id))]
 
     def create_recording(self, title, metadata):
@@ -122,7 +145,7 @@ class SessionStore:
         rows = self.segments(session_id)
         content = 'Conversation notes · transcript excerpts\n\n'
         content += '\n'.join(f"[{row['start_ms']//60000}:{row['start_ms']//1000%60:02d}] "
-            f"{'Microphone' if row['stream'] == 'mic' else 'Meeting audio'}: {row['text']}" for row in rows)
+            f"{'Microphone' if row['stream'] == 'mic' else 'Meeting audio'} · {row.get('speaker_label') or 'speaker unknown'}: {row['text']}" for row in rows)
         if not rows:
             content += 'No speech was transcribed. Check capture routing and microphone permission.'
         with self.conn:
@@ -138,7 +161,7 @@ class SessionStore:
             'ORDER BY created_at DESC,rowid DESC LIMIT 1', (session_id,)).fetchone()
         return row['content_md'] if row else ''
 
-    def revise_transcript(self, session_id, chunks):
+    def revise_transcript(self, session_id, chunks, *, provider=None):
         from ..pipeline.replay import ReplayChunk
         if not chunks:
             raise ValueError('Empty reprocessing result; retain the previous transcript')
@@ -157,11 +180,15 @@ class SessionStore:
                 row = {'id':uuid4().hex, 'session_id':session_id, 'stream':chunk['stream'],
                        'start_ms':chunk['start_ms'], 'end_ms':chunk['end_ms'], 'text':chunk['text'],
                        'language':chunk['language'], 'confidence':chunk['confidence'],
-                       'source':'offline', 'revision':revision}
+                       'source':'offline', 'revision':revision,
+                       'local_speaker_id':self._speaker(session_id,chunk['stream'],chunk.get('speaker_key'))}
                 self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                                   + ','.join('?' for _ in row) + ')', tuple(row.values()))
             self.conn.execute('UPDATE recording_checkpoints SET confirmed_ms=recorded_ms WHERE session_id=?',
                               (session_id,))
+            if provider is not None:
+                self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                    (session_id,self._now(),'info','transcript_provider',json.dumps({'provider':provider})))
             self.conn.execute('RELEASE SAVEPOINT transcript_revision')
         except BaseException:
             self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
@@ -224,9 +251,11 @@ class SessionStore:
                 row = {'id':uuid4().hex,'session_id':session_id,'stream':stream,
                     'start_ms':chunk['start_ms'],'end_ms':chunk['end_ms'],'text':chunk['text'],
                     'language':chunk['language'],'confidence':chunk['confidence'],
-                    'source':'stream','revision':revision}
+                    'source':'stream','revision':revision,
+                    'local_speaker_id':self._speaker(session_id,stream,chunk.get('speaker_key'))}
                 self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                     + ','.join('?' for _ in row) + ')', tuple(row.values()))
+                row['speaker_label'] = self._speaker_label(row.get('local_speaker_id'))
                 saved.append(row)
             self.conn.execute('UPDATE recording_checkpoints SET confirmed_ms=MAX(confirmed_ms,?) '
                 'WHERE session_id=? AND stream=?', (end_ms,session_id,stream))
@@ -289,10 +318,16 @@ class SessionStore:
                 'WHERE session_id=? AND stream=?', (end_ms,session_id,stream))
 
 
-    def grant_cloud(self, session_id, model):
+    def transcript_provider(self, session_id):
+        row = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session_id,)).fetchone()
+        if row:
+            return json.loads(row[0])['provider']
+        return (self.get(session_id) or {}).get('capture',{}).get('provider')
+
+    def grant_cloud(self, session_id, model, *, provider='groq'):
         with self.conn:
             self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
-                (session_id,self._now(),'info','cloud_consent',json.dumps({'provider':'groq','model':model,'consent':True})))
+                (session_id,self._now(),'info','cloud_consent',json.dumps({'provider':provider,'model':model,'consent':True})))
 
     def reserve_cloud(self, session_id, reservation):
         with self.conn:
@@ -303,5 +338,6 @@ class SessionStore:
     def cloud_usage(self, session_id):
         rows = [json.loads(row[0]) for row in self.conn.execute(
             "SELECT payload_json FROM events WHERE session_id=? AND type='cloud_request'", (session_id,))]
-        return {'requests':len(rows),'estimated_usd':sum(r['estimated_usd'] for r in rows),
+        return {'providers':sorted({r.get('provider','groq') for r in rows}),
+                'requests':len(rows),'estimated_usd':sum(r['estimated_usd'] for r in rows),
                 'billed_audio_s':sum(r['billed_audio_s'] for r in rows)}

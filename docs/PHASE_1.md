@@ -1,5 +1,7 @@
 # Phase 1 — cloud development checkpoint complete
 
+> **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
+
 Current status (2026-10-23): **implementation checkpoint complete; full MVP acceptance open**. Groq Turbo replaces heavy local meeting inference by default. Capture/storage/recovery remain local and encrypted; uploads require explicit consent.
 
 See the [closeout, measured results, support matrix and launch instructions](PHASE_1_CLOSEOUT.md). Real-meeting testing is deferred at the user's request. Original accuracy, sub-two-second partial latency, individual remote speakers, physical capture and app coverage gates have not passed.

@@ -1,5 +1,7 @@
 # Phase 1 development closeout — 2026-10-23
 
+> **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
+
 **The cloud development checkpoint is complete. Original full Phase 1 acceptance remains open.** The user accepted the public Vietnamese sample and deferred real-meeting testing. This closes implementation work for this checkpoint, not release approval.
 
 ## Delivered

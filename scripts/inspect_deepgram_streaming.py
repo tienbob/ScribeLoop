@@ -19,6 +19,7 @@ from websockets.asyncio.client import connect
 
 SOURCE = Path('data/corpus-v1/moss/segment-300-600-fp16-sdpa.wav')
 OUTPUT = Path('data/phase1/deepgram-streaming-inspection')
+DURATION = 20
 CONFIG = {'model':'nova-3', 'language':'en', 'encoding':'linear16',
     'sample_rate':'16000', 'channels':'1', 'interim_results':'true',
     'punctuate':'true', 'endpointing':'300', 'diarize_model':'v1'}
@@ -43,11 +44,11 @@ def prepare():
     digest=hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     if digest!='f4e64336510ce0076a8e313527d48737d0e952d3a262589823bac14c7acb922f':
         raise ValueError('Pinned public AMI audio changed')
-    pcm,sr=sf.read(SOURCE,start=0,stop=20*16000,dtype='float32')
-    if sr!=16000 or pcm.shape!=(20*16000,) or not np.isfinite(pcm).all():
+    pcm,sr=sf.read(SOURCE,start=0,stop=DURATION*16000,dtype='float32')
+    if sr!=16000 or pcm.shape!=(DURATION*16000,) or not np.isfinite(pcm).all():
         raise ValueError('Expected twenty seconds of finite mono 16 kHz public audio')
     words=json.loads(Path('data/corpus-v1/investigation/reference-words.json').read_text())
-    words=sorted((w for w in words if 300<=w['start']<320),key=lambda w:(w['start'],w['speaker']))
+    words=sorted((w for w in words if 300<=w['start']<300+DURATION),key=lambda w:(w['start'],w['speaker']))
     reference=' '.join(w['text'] for w in words)
     return reference,pcm,digest,words[0]["start"]-300
 
@@ -112,36 +113,56 @@ def render(report):
     audio=base64.b64encode((OUTPUT/'public-english.wav').read_bytes()).decode()
     score=f'{report["wer"]:.2%}' if report.get('wer') is not None else 'Not scored'
     text=report.get('text','No completed transcript')
+    turns=[]
+    for event in report.get('events',[]):
+        if not event.get('is_final'):
+            continue
+        for word in event.get('words',[]):
+            speaker=word.get('speaker')
+            label=f'Speaker {speaker+1}' if type(speaker) is int else 'Speaker unknown'
+            value=word.get('punctuated_word',word.get('word',''))
+            if turns and turns[-1][0]==label:
+                turns[-1][2]+=' '+value
+            else:
+                turns.append([label,word.get('start',0),value])
+    labeled='\n'.join(f'[{start:.2f}s] {label}: {value}' for label,start,value in turns)
     details={k:v for k,v in report.items() if k not in {'events','final_tokens','reference','text','sources'}}
     (OUTPUT/'results.html').write_text('''<!doctype html><html lang="en"><meta charset="utf-8">
 <title>Deepgram English streaming trial</title><style>body{font:17px system-ui;max-width:1100px;margin:40px auto;padding:20px;color:#18342b}table{width:100%;border-collapse:collapse}td,th{border:1px solid #ccd6cf;padding:16px;text-align:left;vertical-align:top}audio{width:250px}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{display:block}</style>
-<h1>Deepgram English streaming trial</h1><p>One real-time paced connection. Public AMI meeting excerpt, seconds 300–320. English. Tiny sample; speaker and overlap accuracy are not validated.</p>
-<table><tr><th>Sound file name</th><th>Transcription result</th><th>WER</th></tr><tr><td>public-english.wav<small>'''+esc(', '.join(report['sources']))+'''</small><audio controls src="data:audio/wav;base64,'''+audio+'''"></audio></td><td>'''+esc(text)+'''<details><summary>Reference</summary>'''+esc(ref)+'''</details></td><td>'''+score+'''</td></tr></table><h2>Measurements</h2><p>Times are seconds from connection attempt, including handshake. First text is not per-word latency. Provisional text may change; only final text is scored. The clip begins with 6.38 seconds before the first annotated reference word. First-text delay after that word is reported separately. WER uses the existing lowercase/punctuation normalization. References include overlapping speakers and disfluencies; this tiny excerpt is not a representative quality benchmark. Times after stream start exclude handshake.</p><pre>'''+esc(json.dumps(details,ensure_ascii=False,indent=2))+'''</pre></html>''')
+<h1>Deepgram English streaming trial</h1><p>One real-time paced connection. Public AMI meeting excerpt; exact interval shown below. English. Tiny sample; speaker and overlap accuracy are not validated.</p>
+<table><tr><th>Sound file name</th><th>Transcription result</th><th>WER</th></tr><tr><td>public-english.wav<small>'''+esc(', '.join(report['sources']))+'''</small><audio controls src="data:audio/wav;base64,'''+audio+'''"></audio></td><td>'''+esc(text)+'''<details><summary>Reference</summary>'''+esc(ref)+'''</details><details open><summary>Speaker-labeled text</summary><pre>'''+esc(labeled)+'''</pre></details></td><td>'''+score+'''</td></tr></table><h2>Measurements</h2><p>Times are seconds from connection attempt, including handshake. First text is not per-word latency. Provisional text may change; only final text is scored. The clip begins with 6.38 seconds before the first annotated reference word. First-text delay after that word is reported separately. WER uses the existing lowercase/punctuation normalization. References include overlapping speakers and disfluencies; this tiny excerpt is not a representative quality benchmark. Times after stream start exclude handshake.</p><pre>'''+esc(json.dumps(details,ensure_ascii=False,indent=2))+'''</pre></html>''')
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--consent-public-upload',action='store_true',required=True)
-    parser.parse_args()
+    parser.add_argument('--speaker-validation',action='store_true',help='One separate 60-second public multi-speaker trial')
+    args=parser.parse_args()
+    global OUTPUT,DURATION
+    if args.speaker_validation:
+        OUTPUT=Path('data/phase1/deepgram-speaker-validation')
+        DURATION=60
     key=load_key()
     reference,pcm,digest,speech_start=prepare()
     OUTPUT.mkdir(parents=True,exist_ok=True)
     # Permanent local attempt reservation prevents accidental repeat usage even on failure.
     with (OUTPUT/'attempt.json').open('x') as handle:
-        json.dump({'reserved_at_unix':time.time(),'max_connections':1,'max_audio_s':20,
-            'max_wall_s':45,'automatic_retries':0},handle)
+        json.dump({'reserved_at_unix':time.time(),'max_connections':1,'max_audio_s':DURATION,
+            'max_wall_s':DURATION+25,'automatic_retries':0},handle)
     sf.write(OUTPUT/'public-english.wav',pcm,16000,subtype='PCM_16')
     report={'status':'started','config':CONFIG,'audio_s':len(pcm)/16000,'audio_sent_s':0,
-        'sources':['AMI ES2004a mixed-headset 300–320 seconds'],
+        'sources':[f'AMI ES2004a mixed-headset 300–{300+DURATION} seconds'],
         'reference':reference, 'source_sha256':digest,
         'first_reference_word_start_s':speech_start,
         'normalization':NORMALIZATION,'connections_max':1,'automatic_retries':0,
-        'nominal_estimate_usd':len(pcm)/16000/3600*.29,
-        'billing_note':'Approximate published hourly equivalent; free balance/actual billing unverified'}
+        'nominal_estimate_usd':len(pcm)/16000/3600*.60,
+        'billing_note':'Conservative $0.60/audio-hour estimate including diarization; free balance/actual billing unverified'}
     try:
-        asyncio.run(asyncio.wait_for(trial(key,pcm,report),timeout=45))
+        asyncio.run(asyncio.wait_for(trial(key,pcm,report),timeout=DURATION+25))
         report['first_text_after_reference_speech_start_s']=report['first_text_after_stream_s']-speech_start
         report['finish_after_audio_s']=report['finished_s']-report['end_audio_sent_s']
+        words=[w for e in report['events'] if e['is_final'] for w in e.get('words',[])]
+        report['provider_speaker_ids']=sorted({w['speaker'] for w in words if type(w.get('speaker')) is int})
         score=score_words(report['reference'],report['text'])
         report.update(status='completed',wer=score.wer,word_errors=score.errors,
                       reference_words=score.reference_words)

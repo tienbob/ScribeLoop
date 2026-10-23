@@ -1,5 +1,7 @@
 # Cloud transcription direction — 2026-10-23
 
+> **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
+
 **Current decision:** Groq Turbo is integrated as the default after user acceptance of public Vietnamese samples. See [completed checkpoint and measured limits](PHASE_1_CLOSEOUT.md). Provider investigation below records earlier options, not the current integration plan.
 
 User requested a low-cost cloud solution because local MOSS/community-1 inference
@@ -264,3 +266,6 @@ interim/final accumulation and failure handling; lint/preflight pass.
 Next: a separately authorized larger English sample can evaluate accuracy and
 word-latency distribution before deciding whether to integrate Deepgram as the
 streaming app backend. The production default remains Groq Turbo.
+
+
+Current single-provider app integration: [Deepgram streaming/speaker status](DEEPGRAM_STREAMING.md). A separate 60-second public AMI validation returned three speaker IDs, 17.39% WER (24/138), 0.375 s first-text delay from reference speech onset and 0.305 s final tail. Reference contains four speakers, so multi-person diarization acceptance remains open. App label persistence was also checked offline against these actual responses. No retries or automatic alternative backend were used.

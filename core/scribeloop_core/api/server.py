@@ -156,13 +156,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.recording = None
             if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
                 from ..capture.macos_client import MacOSMeetingAudioSource
-                from ..pipeline.cloud_meeting import CloudRecordingRunner
+                from ..pipeline.deepgram_meeting import DeepgramRecordingRunner
                 from ..storage.audio import SessionAudioStore
                 from ..storage.keys import NativeKeyStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           key_store if key_store is not None else NativeKeyStore())
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
-                    if recording_factory else CloudRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,config=cloud_config))
+                    if recording_factory else DeepgramRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,config=cloud_config))
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             try:
                 await app.state.discovery.start()
@@ -342,7 +342,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if app.state.runner.active_id:
                                 raise ValueError('A replay is active')
                             source = {**source,'language':request.language,'cloud_consent':request.cloud_consent,
-                                      'asr_engine':'Groq Whisper Large v3 Turbo' if hasattr(recorder,'cloud') else 'test'}
+                                      'asr_engine':recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
                             await publish({'type': 'session', 'session': session})

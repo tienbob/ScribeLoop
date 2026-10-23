@@ -19,8 +19,8 @@ scribeloop/
 
 ## Cloud development setup
 
-Groq Turbo is the default meeting backend. Install core/security dependencies
-without local ML packages, configure `GROQ_API_KEY` in the ignored `.env`, and
+Deepgram Nova-3 streaming with anonymous speaker labels is the default meeting backend. Install core/security dependencies
+without local ML packages, configure `DEEPGRAM_API_KEY` in the ignored `.env`, and
 restart the server. New and saved audio each require explicit cloud consent.
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 
@@ -94,8 +94,8 @@ Full-meeting MOSS runs are deferred during development.
 
 ## Phase 1: cloud development checkpoint complete
 
-Groq Turbo now transcribes short microphone/output batches while recording. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Groq. Language locks after early detection. No local speech models load in the default path.
+Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Deepgram. Choose English (default) or Vietnamese before recording. No local speech models load in the default path.
 
-M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. **286 Python tests**, frontend regressions and 55-module lightweight import smoke passed. The paced 30-second public-audio check produced first text at 13.80 seconds with 78.73 MiB peak client RSS.
+M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
 
-See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, individual remote speakers, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.
+See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.

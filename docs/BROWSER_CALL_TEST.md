@@ -1,5 +1,7 @@
 # Brave Teams call test — development test path
 
+> **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
+
 Requested 2026-10-22: launch ScribeLoop, manually start a short Teams call in
 Brave, explicitly start/stop capture, and obtain local conversation notes.
 

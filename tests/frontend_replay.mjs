@@ -204,7 +204,7 @@ get('reprocess-meeting').onclick();
 assert.equal(JSON.parse(socket.sent.at(-1)).action,'reprocess');
 assert.equal(JSON.parse(socket.sent.at(-1)).language,'auto');
 deliver({type:'transcript_replaced',session_id:'meeting',segments:[{id:'revised',text:'Tiếng Việt',stream:'mic',start_ms:0}]});
-assert.equal(get('transcript').children.at(-1).children[1].textContent,'Microphone: Tiếng Việt');
+assert.equal(get('transcript').children.at(-1).children[1].textContent,'Microphone · speaker unknown: Tiếng Việt');
 deliver({type:'language_locked',session_id:'meeting',mode:'auto',language:'vi',confidence:.95});
 assert.match(get('language-status').textContent,/Detected: Tiếng Việt.*fixed/);
 assert.ok(socket.sent.length > sentBeforeRecording);
@@ -271,3 +271,13 @@ assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,true);
 assert.equal(get('saved-cloud-consent').checked,false,'Do not retain consent after dispatch');
 assert.notEqual(get('session-status').textContent,'STORAGE UNAVAILABLE');
 console.log('Cloud upload consent and disabled-local-replay regressions passed');
+
+// Speaker identities are persisted with words, independently of delayed turns.
+liveEvent({type:'snapshot',fixtures:[],sessions:[{id:'people',source:'meeting',title:'People',status:'completed',started_at:Date.now()}],active_id:null,recording_available:true,replay_enabled:false,transcription:{provider:'deepgram',cloud:true,configured:true,speaker_labels:true,streaming:true,auto_language:false,default_language:'en',model:'nova-3',budget_usd:.15},segments:{people:[{id:'a',stream:'loopback',start_ms:0,end_ms:300,text:'Hello',speaker_label:'Speaker 1'},{id:'b',stream:'loopback',start_ms:300,end_ms:500,text:'Hi',speaker_label:'Speaker 2'}]}});
+assert.equal(get('meeting-language').value,'en');
+assert.match(get('cloud-provider').textContent,/Deepgram/);
+assert.match(get('speaker-status').textContent,/Anonymous speaker labels/);
+assert.match(get('transcript').children[0].children[1].textContent,/Speaker 1: Hello/);
+assert.match(get('transcript').children[1].children[1].textContent,/Speaker 2: Hi/);
+assert.match(get('cloud-consent-copy').textContent,/Deepgram/);
+console.log('Deepgram streaming speaker labels and explicit language regressions passed');

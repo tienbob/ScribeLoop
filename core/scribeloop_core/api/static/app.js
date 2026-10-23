@@ -22,6 +22,7 @@ function scopeDescription(source) {
   const kind = source.kind || discovery.apps.find(app=>app.id === source.app_id)?.kind;
   return kind === 'browser' ? `All tabs in ${source.name}` : `All audio from ${source.name || 'the selected app'}`;
 }
+function providerName() { return transcription.provider === 'deepgram' ? 'Deepgram' : 'Groq'; }
 function busy() { return Boolean(activeId) || recordPending; }
 function formatDuration(ms) {
   const seconds = Math.max(0,Math.floor(ms/1000));
@@ -92,14 +93,14 @@ function renderDiscovery() {
   const reason = !authenticated ? 'Reconnect to set up recording.' :
     !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
     activeId ? 'Stop the active session before starting another.' :
-    transcription.cloud && !transcription.configured ? 'Configure GROQ_API_KEY in your local .env, then restart ScribeLoop.' :
+    transcription.cloud && !transcription.configured ? `Configure ${transcription.provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'GROQ_API_KEY'} in your local .env, then restart ScribeLoop.` :
     processing ? 'Wait for transcription to finish.' :
     recordPending ? 'Preparing your request…' :
     discovery.permission !== 'authorized' ? 'Enable microphone access before recording.' :
     !$('title').value.trim() ? 'Add a meeting title.' :
     !chosenSource ? 'Choose an audio source and microphone, then press Confirm source.' :
     !$('record-consent').checked ? 'Confirm participant permission above to enable Record.' :
-    transcription.cloud && !$('cloud-consent').checked ? 'Confirm sending this meeting audio to Groq before Record.' :
+    transcription.cloud && !$('cloud-consent').checked ? `Confirm sending this meeting audio to ${providerName()} before Record.` :
     'Ready. Start your call, then press Record meeting.';
   $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
     !$('record-consent').checked || (transcription.cloud && (!transcription.configured || !$('cloud-consent').checked)) || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
@@ -133,7 +134,9 @@ function renderDiscovery() {
   $('record-consent').disabled = !authenticated || locked;
   $('cloud-consent-row').hidden = !transcription.cloud;
   $('cloud-consent').disabled = !authenticated || locked;
-  text('cloud-provider',transcription.cloud ? `Groq · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated request cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
+  text('cloud-consent-copy',`Send this meeting’s microphone and selected app audio to ${providerName()} for cloud transcription.`);
+  text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${providerName()} for this transcription/resume request.`);
+  text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
   text('scope-warning', chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
@@ -192,7 +195,8 @@ function renderHistory() {
   });
 }
 function speakerLabel(row, turns) {
-  if (row.stream === 'mic') return 'Microphone';
+  if (row.speaker_label) return `${row.stream === 'mic' ? 'Microphone' : 'Meeting audio'} · ${row.speaker_label}`;
+  if (row.stream === 'mic') return 'Microphone · speaker unknown';
   const overlaps=turns.filter(t=>t.start_ms < row.end_ms && t.end_ms > row.start_ms);
   if (!overlaps.length) return 'Meeting audio · speaker unknown';
   const labels=new Set(overlaps.map(t=>t.label));
@@ -262,7 +266,7 @@ function render() {
     'Transcribing saved audio. Previous text stays visible until the new pass completes.' :
     session.status === 'preparing' ? 'Preparing encrypted storage and selected audio sources…' :
     session.status === 'stopping' ? 'Stopping capture and finishing the encrypted audio…' :
-    session.status === 'recording' ? 'Recording encrypted audio. Groq sends text after short audio batches; Stop remains available while requests are running.' :
+    session.status === 'recording' ? `Recording encrypted audio. ${providerName()} ${transcription.streaming ? 'streams text and anonymous speaker labels' : 'sends text after short batches'}; Stop remains available.` :
     session.status === 'failed' ? 'Recording or transcription failed. Check the message above; saved audio remains encrypted.' : '' : '');
   const idle = authenticated && !activeId && !recordPending && ![...sessions.values()].some(s=>s.status === 'processing');
   $('saved-tools').hidden = session?.source !== 'meeting';
@@ -273,9 +277,9 @@ function render() {
   $('delete-meeting').disabled = !idle || !$('delete-consent').checked;
   $('apply-retention').disabled = !idle || !$('retention-consent').checked;
   const usage=cloudUsage.get(selectedId);
-  text('cloud-usage',usage ? `Groq requests: ${usage.requests} · reserved estimate $${Number(usage.estimated_usd).toFixed(4)}. Actual billing depends on your Groq account.` : '');
+  text('cloud-usage',usage ? `${usage.providers?.join(', ') || providerName()} upload reservations: ${usage.requests} · reserved estimate $${Number(usage.estimated_usd).toFixed(4)}. Actual billing depends on your provider account.` : '');
   const progress=liveProgress.get(selectedId);
-  text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'catching_up' ? 'Catching up' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
+  text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'catching_up' ? 'Catching up' : progress.mode === 'streaming' ? 'Streaming' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
   if (session?.recovery) text('session-progress','Recovered / interrupted audio. Only authenticated complete frames were retained; missing tail duration is unknown. Capture was not restarted.');
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   const emptyMessage = !replayAvailable ? 'Storage is unavailable. Reconnect or restart the local server.' :
@@ -303,6 +307,12 @@ function connect() {
       notes = new Map(Object.entries(data.notes || {}));
       speakerTurns = new Map(Object.entries(data.speaker_turns || {})); liveProgress.clear();
       transcription=data.transcription || {cloud:false,configured:true};
+      for (const id of ['meeting-language','reprocess-language']) {
+        const select=$(id);
+        for (const option of select.options || []) if (option.value === 'auto') option.disabled=transcription.auto_language === false;
+        if (transcription.auto_language === false && (!select.value || select.value === 'auto')) select.value=transcription.default_language || 'en';
+      }
+      text('speaker-status',transcription.speaker_labels ? 'Anonymous speaker labels are provided per audio track. Names are unknown; labels may be mistaken during overlap and are not linked across new connections.' : 'Microphone and meeting audio are separate sources. Individual speaker labels are unavailable.');
       cloudUsage=new Map(Object.entries(data.cloud_usage || {}));
       languageLocks = new Map(Object.entries(data.language_locks || {}));
       replayEnabled = data.replay_enabled !== false;

@@ -305,3 +305,34 @@ open as previously deferred, rather than being checked off from mocked evidence.
 ### Cloud checkpoint completion — 2026-10-23
 
 Implemented encrypted recorder recovery/checkpoints, default Groq Turbo short-batch inference, early shared language lock, explicit new/saved audio cloud consent, durable request/cost caps, and honest UI progress/source labels. Heavy local ML dependencies are optional. Validated with 286 Python tests, frontend regressions, lightweight imports, public paced cloud audio and desktop/400px browser checks. No private-meeting uploads. M7 support matrix is published in the closeout; physical, real-call, second-OS and release gates remain open. Original M6 streaming/speaker targets are not checked off.
+
+### Required speaker separation — 2026-10-23 (implementation)
+
+Individual speakers are core acceptance, not optional source labels. Replace the
+app default with Deepgram Nova-3 streaming plus its v1 streaming diarizer, using
+one transcription provider per meeting and no second pass/fallback. Keep the two
+capture tracks distinct (two connections to the same provider); anonymous person
+labels must come from provider word-level speakers, split transcript rows at
+speaker changes, persist atomically with checkpoints, restore after reconnect,
+and appear in notes. Never equate microphone source with a known person. Missing
+labels remain unknown; fresh provider connections receive fresh session labels
+rather than assuming identity across resumes/tracks. Keep no biometric registry.
+
+Preserve explicit provider-named upload consent, backend-only credentials,
+encrypted capture/recovery and recorder-independent Stop. English is the initial
+streaming language; explicit language choice precedes recording. Disable automatic
+language mode in this profile instead of silently running a second model. Send
+continuous PCM including silence, not a new local VAD. Reserve bounded audio blocks
+in the durable cost ledger before sending; conservatively budget $0.60/audio hour
+including diarization (estimate, actual account pricing unverified), max $0.15 per
+saved meeting across resume/reprocess. No automatic retries or paid second pass.
+Use mocks/replayed saved public responses for validation; no additional API spend
+or private uploads without a separate bounded test. Speaker accuracy and overlap
+reliability remain real multi-person acceptance gates, not guaranteed by wiring.
+
+Implementation delivered: Deepgram default, final word speaker splits, transactional
+session speaker labels/checkpoints, history and transcript-note restoration,
+provider-specific consent and usage controls, no automatic second model/pass.
+English is selected by default. Real public 60-second response produced three
+speaker IDs and 17.39% WER; reference has four speakers, so the required speaker
+**quality** gate remains open. See [streaming status](DEEPGRAM_STREAMING.md).
