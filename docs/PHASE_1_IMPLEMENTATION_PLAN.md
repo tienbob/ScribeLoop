@@ -56,6 +56,9 @@ checks free of heavy speech runtimes; exercise encryption and vectors in a Linux
 CI job with required native dependencies. Check the current branch's CI after
 pushing fixes to its existing PR. Preserve open physical/quality gates and carry
 the local live-window prototype into the Phase 2 plan, not the shipped feature list.
+Linux/macOS now pass remotely. Windows stalls despite per-test timeout coverage;
+add a whole-session faulthandler watchdog to cover collection/executor shutdown
+and expose its blocking stack rather than waiting for the runner job limit.
 
 Local live feasibility experiment: benchmark bounded overlapping MOSS Q6_K windows
 against existing public English meeting audio, with timing and normalized WER.

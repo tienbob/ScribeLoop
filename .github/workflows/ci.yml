@@ -45,7 +45,9 @@ jobs:
       - name: Lint
         run: ruff check core scripts tests
       - name: Tests
-        run: pytest -q --timeout=90 --timeout-method=thread
+        # Include collection and interpreter/executor shutdown in the watchdog;
+        # per-test timeouts alone cannot diagnose a stalled session teardown.
+        run: python -c "import faulthandler, pytest; faulthandler.dump_traceback_later(180, exit=True); raise SystemExit(pytest.main(['-q', '--timeout=90', '--timeout-method=thread']))"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
