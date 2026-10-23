@@ -45,7 +45,7 @@ running; no automatic paid retry or alternative backend is started.
 - A fresh core/dev/security-only environment passes **310 tests with eight optional
   integration skips** (module-level skips account for the different total). This
   environment has no cached Whisper or SQLCipher installation. CI provisions
-  SQLCipher on Linux and requires SQLite extension loading on every OS; macOS uses
+  SQLCipher on Linux and requires SQLite extension loading on both active CI platforms; macOS uses
   Homebrew Python for that capability. Native generated-signal build/check passed
   again without opening any audio device.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
@@ -88,6 +88,10 @@ Inspect the ignored local report
 zero retries and a conservative nominal $0.01 estimate. Remaining free balance and
 actual charges were not verified. Final closeout checks made **no further cloud
 requests, private uploads, recordings or permission changes**.
+
+Windows CI is explicitly deferred by the user: test failures and stalled error
+reporting remain unresolved. The active required CI matrix is Linux and macOS;
+this closeout makes no Windows validation claim.
 
 ## Acceptance/support matrix
 

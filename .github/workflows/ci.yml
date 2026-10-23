@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -45,24 +45,9 @@ jobs:
       - name: Lint
         run: ruff check core scripts tests
       - name: Tests
-        if: runner.os != 'Windows'
         # Include collection and interpreter/executor shutdown in the watchdog;
         # per-test timeouts alone cannot diagnose a stalled session teardown.
         run: python -c "import faulthandler, pytest; faulthandler.dump_traceback_later(180, exit=True); raise SystemExit(pytest.main(['-q', '--timeout=90', '--timeout-method=thread']))"
-      - name: Windows first-failure diagnostic
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python -c "import faulthandler, pytest; faulthandler.dump_traceback_later(180, exit=True); raise SystemExit(pytest.main(['-x', '-vv', '--tb=short', '--timeout=90', '--timeout-method=thread']))" > "$env:RUNNER_TEMP/pytest-windows.log" 2>&1
-          $testExit = $LASTEXITCODE
-          Get-Content "$env:RUNNER_TEMP/pytest-windows.log"
-          exit $testExit
-      - name: Windows test log
-        if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-windows
-          path: ${{ runner.temp }}/pytest-windows.log
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
