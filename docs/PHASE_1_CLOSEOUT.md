@@ -8,6 +8,9 @@ remain required; the checklist below records them without treating deferral as a
 This is the authoritative current status. Deepgram remains the default. A later
 explicit [Local MOSS Q6_K option](LOCAL_MOSS.md) now transcribes after Stop without
 uploading audio. Older PyTorch MOSS and Groq experiments are historical diagnostics.
+The [Phase 2 handoff](PHASE_2_IMPLEMENTATION_PLAN.md) starts with revision handling,
+speaker corrections, grounded summaries and explicit Markdown export. Local live
+MOSS windowing is measured research and remains outside the shipped feature set.
 
 ## Delivered
 
@@ -39,6 +42,12 @@ running; no automatic paid retry or alternative backend is started.
 
 - **329 Python tests passed**, eight frontend regression groups passed, and 61 application
   modules passed lightweight import smoke without loading local speech models.
+- A fresh core/dev/security-only environment passes **310 tests with eight optional
+  integration skips** (module-level skips account for the different total). This
+  environment has no cached Whisper or SQLCipher installation. CI provisions
+  SQLCipher on Linux and requires SQLite extension loading on every OS; macOS uses
+  Homebrew Python for that capability. Native generated-signal build/check passed
+  again without opening any audio device.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
   speaker persistence/reconnect/notes, automatic language routing, language changes
@@ -91,7 +100,7 @@ requests, private uploads, recordings or permission changes**.
 | Physical capture | Controlled audible mic/output, device changes, five-minute continuity, alignment/drift ≤50 ms and failure handling need real-device validation |
 | Person separation | Implemented and observed as three labels, but the four-speaker reference demonstrates possible misses/merges. Representative 2–3-person attribution, confusion/DER and overlap quality are required and open |
 | Accuracy/latency | Original representative WER ≤18% and partial p50 <2 s remain open; one public excerpt is insufficient sign-off |
-| Resource use | No local ML models are loaded. Full native-capture CPU/RAM and network profiles remain unmeasured for the current backend |
+| Resource use | Cloud mode loads no local ML. Local Q6_K benchmark peak process RSS was 711.5 MiB for the one-minute comparison and 1868.6 MiB for five minutes. Full native-capture CPU/RAM, GPU and network profiles remain unmeasured |
 | Linux | Native discovery/integrated meeting capture is not implemented/validated. Existing experimental source code is not advertised support |
 | Packaged desktop/signing | Browser notebook is the development host. Native packaging, signing and notarization remain deferred; not distribution-ready |
 | Visual QA | Accessibility-state checks and DOM regressions pass; screenshot/narrow-layout verification remains open |

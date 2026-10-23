@@ -198,7 +198,7 @@ async def test_explicit_cloud_reprocess_revision_and_checkpoint_do_not_duplicate
     assert len(calls)==2 and len(store.segments(sid))==2
 
 
-def test_cloud_api_requires_new_and_saved_consent_and_keeps_key_out_of_snapshot(tmp_path):
+def test_cloud_api_requires_new_and_saved_consent_and_keeps_key_out_of_snapshot(tmp_path,require_sqlcipher):
     import json
 
     from fastapi.testclient import TestClient

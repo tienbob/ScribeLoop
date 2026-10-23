@@ -114,7 +114,7 @@ async def test_microphone_scope_rejects_unexpected_output_frames(state):
     assert not frames and report['end_ms']==0
 
 
-def test_api_mic_only_streams_before_stop_with_one_connection(tmp_path):
+def test_api_mic_only_streams_before_stop_with_one_connection(tmp_path,require_sqlcipher):
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
     from scribeloop_core.meetings.service import DiscoveryService

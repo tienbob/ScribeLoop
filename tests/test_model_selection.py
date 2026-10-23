@@ -208,7 +208,7 @@ def test_local_process_transfers_large_pcm_and_cancels_without_plaintext_files(m
             timer.cancel()
 
 
-def test_api_model_selection_restores_profile_and_local_speaker_rows(tmp_path):
+def test_api_model_selection_restores_profile_and_local_speaker_rows(tmp_path,require_sqlcipher):
     import json
 
     from fastapi.testclient import TestClient

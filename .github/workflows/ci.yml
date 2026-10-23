@@ -5,8 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    timeout-minutes: 15
     # Core is platform-independent (tests use WAV replay, no audio hardware) —
     # ARCHITECTURE.md §3/§8. Platform capture (macOS tap / Linux GStreamer)
     # is validated on real hosts, not in CI.
@@ -22,10 +27,25 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: macOS Python with loadable SQLite extensions
+        if: runner.os == 'macOS'
+        run: |
+          brew install python@3.11
+          "$(brew --prefix python@3.11)/bin/python3.11" -m venv "$RUNNER_TEMP/scribeloop-ci"
+          echo "$RUNNER_TEMP/scribeloop-ci/bin" >> "$GITHUB_PATH"
       - name: Install (core + dev + portable security; native SQLCipher optional)
-        run: pip install -e ".[dev,security]"
+        run: pip install -e ".[dev,security]" pytest-timeout==2.4.0
+      - name: Real SQLCipher integration on Linux
+        if: runner.os == 'Linux'
+        run: |
+          pip install sqlcipher3-binary==0.6.0
+          python -c "from sqlcipher3 import dbapi2; c=dbapi2.connect(':memory:'); assert int(c.execute('PRAGMA cipher_version').fetchone()[0].split('.')[0]) >= 4"
+      - name: Require SQLite extension loading
+        run: python -c "import sqlite3; c=sqlite3.connect(':memory:'); assert hasattr(c, 'enable_load_extension'); c.enable_load_extension(True); c.enable_load_extension(False)"
+      - name: Lint
+        run: ruff check core scripts tests
       - name: Tests
-        run: pytest -q
+        run: pytest -q --timeout=90 --timeout-method=thread
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

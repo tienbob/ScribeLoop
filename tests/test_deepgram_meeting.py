@@ -251,7 +251,7 @@ def test_reservation_must_be_durable_before_connection_and_cap_spans_requests(st
         resumed.reserve('mic',emit,cancelled)
 
 
-def test_api_restores_speaker_labels_and_hides_credentials(tmp_path):
+def test_api_restores_speaker_labels_and_hides_credentials(tmp_path,require_sqlcipher):
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
     from scribeloop_core.meetings.contracts import AppIdentity

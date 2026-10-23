@@ -50,6 +50,13 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Final Phase 1 handoff/CI: reproduce the open PR's missing optional SQLCipher and
+Whisper metadata failures and macOS SQLite-extension limitation. Keep portable
+checks free of heavy speech runtimes; exercise encryption and vectors in a Linux
+CI job with required native dependencies. Check the current branch's CI after
+pushing fixes to its existing PR. Preserve open physical/quality gates and carry
+the local live-window prototype into the Phase 2 plan, not the shipped feature list.
+
 Local live feasibility experiment: benchmark bounded overlapping MOSS Q6_K windows
 against existing public English meeting audio, with timing and normalized WER.
 Check repeated/missing boundary words and speaker-ID consistency across independent

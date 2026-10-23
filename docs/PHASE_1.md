@@ -7,6 +7,9 @@ Each meeting uses one provider with no automatic alternative or second pass.
 The explicit [Local MOSS Q6_K option](LOCAL_MOSS.md) added afterward runs English/
 Chinese transcription and speaker labels after Stop. The UI labels processing
 location and timing; Deepgram remains the live default.
+Microphone-only recording and the keyless local demo are delivered. Local live
+windowing is a benchmark, not a shipped mode. The next increment is the
+[Phase 2 revision/summary/export plan](PHASE_2_IMPLEMENTATION_PLAN.md).
 
 The [authoritative closeout](PHASE_1_CLOSEOUT.md) contains verified results,
 current launch instructions, the support matrix and later real-call checklist.
