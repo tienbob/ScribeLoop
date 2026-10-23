@@ -17,17 +17,31 @@ scribeloop/
 └── audio/                 # runtime session recordings (gitignored)
 ```
 
-## Dev setup
+## Cloud development setup
+
+Groq Turbo is the default meeting backend. Install core/security dependencies
+without local ML packages, configure `GROQ_API_KEY` in the ignored `.env`, and
+restart the server. New and saved audio each require explicit cloud consent.
+See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
+
+```bash
+uv pip install -e ".[dev,security,sqlcipher]"
+```
+
+The optional `local-asr`, `diar`, `sherpa` and isolated MOSS runtimes are for
+explicit local experiments. They are not required or started by cloud meetings.
+
+## Optional local evaluation setup
 
 ```bash
 python -m venv .venv
 # Windows:      .venv\Scripts\activate
 # macOS/Linux:  source .venv/bin/activate
-pip install -e ".[dev,diar,sherpa]"
+pip install -e ".[dev,local-asr,diar,sherpa]"
 pytest
 ```
 
-> The full ML stack (torch + pyannote) is ~2–3 GB. For a light start: `pip install -e ".[dev]"`.
+> The full ML stack (torch + pyannote) is ~2–3 GB. Cloud setup above does not require this stack.
 
 ## Platform note (development on Windows)
 
@@ -78,33 +92,10 @@ Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.
 
-## Phase 1: replay milestone audited; full MVP in progress
+## Phase 1: cloud development checkpoint complete
 
-**Core requirement:** automatically detect Microsoft Teams calls, Slack huddles,
-and other supported meetings, then offer consented capture of meeting audio and
-separate microphone audio. This is planned Phase 1 work, not implemented support.
-See [meeting detection and capture](docs/MEETING_CAPTURE.md).
-The [metadata discovery and authenticated source UI](docs/MEETING_DETECTION.md)
-are now implemented; real-call validation remains pending. Source selection captures no audio. An opt-in encrypted five-minute
-[Brave call test](docs/BROWSER_CALL_TEST.md) supports explicit Record/Stop and local
-transcript notes; live routing still needs validation.
+Groq Turbo now transcribes short microphone/output batches while recording. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Groq. Language locks after early detection. No local speech models load in the default path.
 
-The first vertical slice connects bounded public WAV replay to cached local ASR,
-SQLite session history, and an authenticated browser transcript UI. The replay
-milestone is audited; encrypted database/keystore and audio-container primitives
-are now implemented. Native mic/output sources, device enumeration, and shared
-timestamps also have generated-signal validation ([status](docs/NATIVE_MEETING_CAPTURE.md)).
-With this increment, 193 local tests and frontend
-regressions pass. See
-[Phase 1 implementation and next steps](docs/PHASE_1.md).
+M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. **286 Python tests**, frontend regressions and 55-module lightweight import smoke passed. The paced 30-second public-audio check produced first text at 13.80 seconds with 78.73 MiB peak client RSS.
 
-```bash
-.venv/bin/python -m scribeloop_core.api.server \
-  --public-fixture data/corpus-v1/moss/segment-300-600-fp16-sdpa.wav
-```
-
-Open the launch URL printed by the server. This slice accepts public test fixtures
-only. The CLI defaults to SQLCipher + native keystore; install `.[security,sqlcipher]`
-or explicitly select `--storage public-demo` for non-sensitive development. Native
-recording integration, VAD/LocalAgreement, speaker attribution, and full resume
-remain pending. See [secure storage](docs/SECURE_STORAGE.md). MOSS batch defaults remain float16 + SDPA.
+See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, individual remote speakers, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.

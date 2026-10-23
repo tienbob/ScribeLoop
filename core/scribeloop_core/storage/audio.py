@@ -75,6 +75,15 @@ class EncryptedAudioWriter:
         try:
             self.file.write(self.header)
             self.file.flush()
+            os.fsync(self.file.fileno())
+            if os.name == 'posix':
+                # Persist both the session-directory entry and the new file entry.
+                for directory in (path.parent.parent,path.parent):
+                    fd = os.open(directory,os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
         except BaseException:
             self.file.close()
             raise
@@ -114,6 +123,13 @@ class EncryptedAudioWriter:
             self.file.close()
             self.closed = True
 
+    def checkpoint(self):
+        """Make preceding authenticated records durable before publishing progress."""
+        if self.closed:
+            raise ValueError('Audio writer is closed')
+        self.file.flush()
+        os.fsync(self.file.fileno())
+
     def abort(self):
         """Keep the encrypted prefix, without falsely marking it complete."""
         self.file.close()
@@ -129,7 +145,7 @@ class EncryptedAudioWriter:
             self.abort()
 
 
-def read_audio(path: Path, session_id: str, stream: str, key: bytes):
+def read_audio(path: Path, session_id: str, stream: str, key: bytes, *, _prefix=None):
     """Yield authenticated frames. Missing/altered footer raises, even after valid frames."""
     from cryptography.exceptions import InvalidTag
 
@@ -153,11 +169,24 @@ def read_audio(path: Path, session_id: str, stream: str, key: bytes):
         cipher = _cipher(key, file_id)
         sequence = samples = 0
         last_end = 0.0
+        # Snapshot the byte boundary: a concurrent writer cannot make this read
+        # unbounded. Prefix mode tolerates only a missing/incomplete final record;
+        # malformed records and failed authentication remain fatal.
+        boundary = os.fstat(source.fileno()).st_size
         while True:
+            record_start = source.tell()
+            if _prefix is not None and boundary - record_start < RECORD.size:
+                _prefix.update(complete=False, samples=samples, end_ms=last_end,
+                               authenticated_bytes=record_start, tail_bytes=boundary-record_start)
+                return
             prefix = _read_exact(source, RECORD.size)
             kind, length = RECORD.unpack(prefix)
             if kind not in (0, 1) or not 16 <= length <= MAX_CIPHERTEXT:
                 raise AudioIntegrityError('Invalid encrypted audio record')
+            if _prefix is not None and boundary - source.tell() < length:
+                _prefix.update(complete=False, samples=samples, end_ms=last_end,
+                               authenticated_bytes=record_start, tail_bytes=boundary-record_start)
+                return
             counter = sequence.to_bytes(12, 'big')
             try:
                 plaintext = cipher.decrypt(counter, _read_exact(source, length), header + counter + prefix)
@@ -168,6 +197,9 @@ def read_audio(path: Path, session_id: str, stream: str, key: bytes):
                     raise AudioIntegrityError('Invalid encrypted audio footer')
                 if source.read(1):
                     raise AudioIntegrityError('Unexpected data after encrypted audio footer')
+                if _prefix is not None:
+                    _prefix.update(complete=True, samples=samples, end_ms=last_end,
+                                   authenticated_bytes=source.tell(), tail_bytes=0)
                 return
             if len(plaintext) < FRAME.size:
                 raise AudioIntegrityError('Invalid encrypted PCM frame')
@@ -198,12 +230,17 @@ class SessionAudioStore:
             raise KeyUnavailable('Session audio key is missing')
         return key
 
-    def path(self, session_id, stream):
+    def original_path(self, session_id, stream):
         _identity(session_id, stream)
         return self.root / session_id / (stream + '.slpa')
 
+    def path(self, session_id, stream):
+        original = self.original_path(session_id, stream)
+        recovered = original.with_name(stream + '.recovered.slpa')
+        return recovered if recovered.exists() else original
+
     def writer(self, session_id, stream):
-        return EncryptedAudioWriter(self.path(session_id, stream), session_id, stream, self._key(session_id))
+        return EncryptedAudioWriter(self.original_path(session_id, stream), session_id, stream, self._key(session_id))
 
     def frames(self, session_id, stream):
         return read_audio(self.path(session_id, stream), session_id, stream, self._key(session_id))
@@ -216,3 +253,69 @@ class SessionAudioStore:
         """
         _identity(session_id, 'loopback')
         self.keys.delete('audio:' + session_id)
+
+
+    def prefix(self, session_id, stream, *, durable=False, original=False):
+        """Bounded authenticated snapshot; an unfinalized tail is never speech."""
+        path = self.original_path(session_id,stream) if original else self.path(session_id,stream)
+        report = {}
+        frames = []
+        samples = 0
+        for frame in read_audio(path, session_id, stream,
+                                self._key(session_id), _prefix=report):
+            samples += frame.pcm.size
+            if samples > 305 * SAMPLE_RATE or frame.t_ms > 305000:
+                raise AudioIntegrityError('Recording exceeds development bounds')
+            frames.append(frame)
+        if durable:
+            with path.open('rb') as source:
+                os.fsync(source.fileno())
+        return frames, report
+
+    def recover_session(self, session_id):
+        """Explicit idle-session operation. Originals remain unchanged.
+
+        Authenticate both tracks before changing either selected path. Each new
+        container gets fresh random file-key salt/nonces; never append to a prefix.
+        A crash between renames is retryable: already complete recovered tracks
+        are checked again and the remaining original is recovered on the retry.
+        """
+        from uuid import uuid4
+        snapshots = {stream:self.prefix(session_id, stream, original=True) for stream in ('mic','loopback')}
+        if any(not frames for frames, _ in snapshots.values()):
+            raise AudioIntegrityError('No authenticated audio in a selected stream')
+        staged = []
+        try:
+            for stream, (frames, report) in snapshots.items():
+                if report['complete']:
+                    continue
+                target = self.original_path(session_id, stream).with_name(stream + '.recovered.slpa')
+                temporary = target.with_name('.' + stream + '-' + uuid4().hex + '.slpa')
+                staged.append((temporary, target))
+                with EncryptedAudioWriter(temporary, session_id, stream, self._key(session_id)) as writer:
+                    for frame in frames:
+                        writer.write(frame)
+            for temporary, target in staged:
+                os.replace(temporary, target)
+            directory = os.open(self.root / session_id, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            for temporary, _ in staged:
+                temporary.unlink(missing_ok=True)
+        return {stream:report for stream, (_, report) in snapshots.items()}
+
+    def delete_session(self, session_id):
+        """Retryable key-first removal, only after readers/writers are stopped."""
+        _identity(session_id, 'loopback')
+        if self.keys.get('audio:' + session_id) is not None:
+            self.forget_session_key(session_id)
+        directory = self.root / session_id
+        if directory.exists():
+            # Only application-owned encrypted artifacts; no arbitrary paths.
+            for path in directory.iterdir():
+                if path.is_file() and path.suffix == '.slpa':
+                    path.unlink()
+            directory.rmdir()

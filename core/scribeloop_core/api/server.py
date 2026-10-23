@@ -1,7 +1,7 @@
 """Authenticated local replay and opt-in encrypted native meeting test workspace.
 
 Native recording requires SQLCipher, macOS, explicit source selection and consent.
-Uploads/cloud processing are not exposed by this server.
+Cloud meeting transcription requires separate explicit consent; credentials stay in the backend.
 """
 from __future__ import annotations
 
@@ -62,6 +62,7 @@ class StartRecording(SelectSource):
     title: str = Field(default='Meeting test', min_length=1, max_length=160)
     language: Literal['vi','en','auto'] = 'auto'
     consent_confirmed: bool = Field(strict=True)
+    cloud_consent: bool = False
 
     @field_validator('title')
     @classmethod
@@ -75,8 +76,25 @@ class StartRecording(SelectSource):
 class ReprocessRecording(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['reprocess']
+    cloud_consent: bool = False
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: Literal['vi','en','auto'] = 'auto'
+
+
+class SavedMeeting(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['recover', 'resume', 'delete']
+    session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    language: Literal['vi','en','auto'] = 'auto'
+    confirmed: bool = False
+    cloud_consent: bool = False
+
+
+class RetentionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['retention']
+    days: int = Field(ge=1, le=3650)
+    confirmed: bool
 
 
 class DismissCandidate(BaseModel):
@@ -86,7 +104,7 @@ class DismissCandidate(BaseModel):
 
 
 def create_app(*, database=None, fixtures=None, backend_factory=None,
-               storage='memory', key_store=None, discovery_factory=None, recording_factory=None) -> tuple[FastAPI, str]:
+               storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -99,6 +117,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         if not 0 < info.duration <= 300:
             raise ValueError('Public fixtures must be nonempty and at most five minutes')
         fixture_rows.append({'id': name, 'duration_s': info.duration})
+    explicit_replay_backend = backend_factory is not None
     if backend_factory is None:
         def backend_factory():
             from ..pipeline.asr import ChunkedFasterWhisper
@@ -137,13 +156,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.recording = None
             if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
                 from ..capture.macos_client import MacOSMeetingAudioSource
-                from ..pipeline.recording import RecordingRunner
+                from ..pipeline.cloud_meeting import CloudRecordingRunner
                 from ..storage.audio import SessionAudioStore
                 from ..storage.keys import NativeKeyStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           key_store if key_store is not None else NativeKeyStore())
-                app.state.recording = (recording_factory or RecordingRunner)(
-                    store, audio, MacOSMeetingAudioSource, publish)
+                app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
+                    if recording_factory else CloudRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,config=cloud_config))
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             try:
                 await app.state.discovery.start()
@@ -222,11 +241,16 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 'sessions': history, 'active_id': app.state.runner.active_id or
                     (app.state.recording.active_id if app.state.recording else None),
                 'recording_available': app.state.recording is not None,
-                'replay_available': not app.state.runner.unavailable, 'storage': app.state.storage,
+                'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
+                'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
+                'replay_available': not app.state.runner.unavailable,
+                'replay_enabled': explicit_replay_backend or not hasattr(app.state.recording,'cloud'), 'storage': app.state.storage,
                 'discovery': app.state.discovery.snapshot(),
                 'segments': {s['id']: store.segments(s['id']) for s in history},
                 'notes': {s['id']: store.notes(s['id']) for s in history},
-                'language_locks': {s['id']:store.language_lock(s['id']) for s in history}})
+                'language_locks': {s['id']:store.language_lock(s['id']) for s in history},
+                'speaker_turns': {s['id']:store.turns(s['id']) for s in history},
+                'checkpoints': {s['id']:store.checkpoints(s['id']) for s in history}})
 
             async def send_events():
                 while True:
@@ -245,7 +269,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
                         if command.get('action') == 'start':
-                            if app.state.recording and app.state.recording.active_id:
+                            if not explicit_replay_backend and hasattr(app.state.recording,'cloud'):
+                                raise ValueError('Local model replay is disabled in cloud mode')
+                            if app.state.recording and (app.state.recording.active_id or
+                                    (app.state.recording.task and not app.state.recording.task.done())):
                                 raise ValueError('A recording is active')
                             request = StartReplay.model_validate(command)
                             if not request.consent_confirmed:
@@ -271,7 +298,35 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             request = ReprocessRecording.model_validate(command)
                             if not app.state.recording or app.state.runner.active_id:
                                 raise ValueError('Local reprocessing is unavailable')
-                            app.state.recording.reprocess(request.session_id, language=request.language)
+                            app.state.recording.reprocess(request.session_id, language=request.language,
+                                **({'cloud_consent':request.cloud_consent} if hasattr(app.state.recording,'cloud') else {}))
+                        elif command.get('action') in {'recover','resume','delete'}:
+                            request = SavedMeeting.model_validate(command)
+                            recorder = app.state.recording
+                            if not recorder or app.state.runner.active_id:
+                                raise ValueError('Saved meeting operations unavailable')
+                            if request.action == 'recover':
+                                recorder.recover_saved(request.session_id)
+                            elif request.action == 'resume':
+                                recorder.resume(request.session_id, language=request.language,
+                                    **({'cloud_consent':request.cloud_consent} if hasattr(recorder,'cloud') else {}))
+                            else:
+                                if not request.confirmed:
+                                    raise ValueError('Confirm permanent deletion')
+                                recorder.delete_saved(request.session_id)
+                        elif command.get('action') == 'retention':
+                            request = RetentionRequest.model_validate(command)
+                            recorder = app.state.recording
+                            if not request.confirmed or not recorder or app.state.runner.active_id:
+                                raise ValueError('Confirm retention cleanup')
+                            candidates = store.retention_candidates(request.days)
+                            # Serialize retirement; no recording or reader may own keys.
+                            for session_id in candidates:
+                                recorder.delete_saved(session_id)
+                                await recorder.task
+                                if store.get(session_id):
+                                    raise ValueError('Retry pending deletion before continuing')
+                            await publish({'type':'retention_complete','deleted':len(candidates)})
                         elif command.get('action') == 'record':
                             request = StartRecording.model_validate(command)
                             recorder = app.state.recording
@@ -286,9 +341,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 microphone_device_id=request.microphone_id)
                             if app.state.runner.active_id:
                                 raise ValueError('A replay is active')
-                            source = {**source, 'language':request.language,
-                                      'asr_engine':'MOSS-Transcribe-Diarize', 'dtype':'float16',
-                                      'attention':'sdpa'}
+                            source = {**source,'language':request.language,'cloud_consent':request.cloud_consent,
+                                      'asr_engine':'Groq Whisper Large v3 Turbo' if hasattr(recorder,'cloud') else 'test'}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
                             await publish({'type': 'session', 'session': session})
@@ -315,10 +369,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
-                            'message': 'Source unavailable or suggestion expired. Choose again manually.'
+                            'message': ('Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
+                            if action in {'recover','resume','delete','retention'} else
+                            'Source unavailable or suggestion expired. Choose again manually.')
                             if meeting else
                             'Request rejected. Check authorization, fixture, and active replay.'})
 

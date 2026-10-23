@@ -219,3 +219,55 @@ assert.equal(get('reconnect').hidden,true);
 socket.onclose({code:1006});
 assert.equal(get('reconnect').hidden,true,'Ignore late events from the previous socket');
 console.log('Frontend replay and meeting discovery regressions passed');
+// Live streams retain each other's provisional text; labels preserve ambiguity.
+recovered.onmessage({data:JSON.stringify({type:'snapshot',fixtures:[],sessions:[{id:'live',source:'meeting',title:'Live',status:'recording',started_at:Date.now(),capture:{scope:'system'}}],active_id:'live',
+ segments:{live:[]},notes:{},recording_available:true,storage:'encrypted',discovery})});
+const liveEvent=data=>recovered.onmessage({data:JSON.stringify(data)});
+liveEvent({type:'partial',session_id:'live',stream:'mic',segment:{text:'local draft'}});
+liveEvent({type:'partial',session_id:'live',stream:'loopback',segment:{text:'remote draft'}});
+assert.match(get('partial').textContent,/local draft/);
+assert.match(get('partial').textContent,/remote draft/);
+liveEvent({type:'segment',session_id:'live',segment:{id:'live1',stream:'mic',text:'confirmed local',start_ms:0,end_ms:1000}});
+assert.match(get('partial').textContent,/remote draft/);
+assert.doesNotMatch(get('partial').textContent,/local draft/);
+liveEvent({type:'segment',session_id:'live',segment:{id:'live2',stream:'loopback',text:'remote words',start_ms:0,end_ms:1000}});
+liveEvent({type:'speaker_turns',session_id:'live',turns:[{start_ms:0,end_ms:1000,label:'Speaker 1'},{start_ms:500,end_ms:1000,label:'Speaker 2'}]});
+assert.match(get('transcript').children[1].children[1].textContent,/overlapping \/ uncertain speakers/);
+liveEvent({type:'transcription_progress',session_id:'live',mode:'catching_up',lag_ms:15000});
+assert.match(get('live-progress').textContent,/Catching up.*0:15/);
+assert.equal(get('stop').disabled,false,'Backlog must not disable Stop');
+assert.equal(get('delete-meeting').disabled,true,'No deletion during capture');
+liveEvent({type:'session',session:{id:'live',source:'meeting',title:'Live',status:'interrupted',started_at:Date.now()}});
+get('delete-consent').checked=true; get('delete-consent').onchange();
+assert.equal(get('delete-meeting').disabled,false);
+get('history').children[0].onclick();
+assert.equal(get('delete-consent').checked,false,'Changing selected meeting clears permanent-delete consent');
+assert.equal(get('delete-meeting').disabled,true);
+console.log('Live transcript, overlap labels and saved-session control regressions passed');
+// Default cloud UI requires separate new/saved upload consent; replay does not
+// load a local model or masquerade as storage failure when disabled.
+liveEvent({type:'snapshot',fixtures:[],sessions:[],active_id:null,segments:{},notes:{},
+ recording_available:true,replay_available:true,replay_enabled:false,storage:'encrypted',
+ transcription:{cloud:true,configured:true,provider:'groq',model:'whisper-large-v3-turbo',budget_usd:.05},
+ discovery:{...discovery,permission:'authorized'}});
+get('meeting-source').value='system';get('meeting-source').onchange();
+get('source-form').onsubmit({preventDefault(){}});
+const cloudSelection=JSON.parse(recovered.sent.at(-1));
+liveEvent({type:'source_selected',request_id:cloudSelection.request_id,source:{scope:'system',name:'All system audio',microphone_id:'default'}});
+get('record-consent').checked=true;get('record-consent').onchange();
+assert.equal(get('record-meeting').disabled,true,'Recording consent does not authorize cloud upload');
+assert.match(get('record-help').textContent,/Groq/);
+get('cloud-consent').checked=true;get('cloud-consent').onchange();
+assert.equal(get('record-meeting').disabled,false);
+get('record-meeting').onclick();
+assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,true);
+liveEvent({type:'session',session:{id:'cloud',title:'Cloud',source:'meeting',status:'completed',started_at:Date.now(),has_checkpoints:true}});
+get('history').children[0].onclick();
+assert.equal(get('reprocess-meeting').disabled,true,'Saved audio needs its own explicit upload consent');
+get('saved-cloud-consent').checked=true;get('saved-cloud-consent').onchange();
+assert.equal(get('reprocess-meeting').disabled,false);
+get('reprocess-meeting').onclick();
+assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,true);
+assert.equal(get('saved-cloud-consent').checked,false,'Do not retain consent after dispatch');
+assert.notEqual(get('session-status').textContent,'STORAGE UNAVAILABLE');
+console.log('Cloud upload consent and disabled-local-replay regressions passed');

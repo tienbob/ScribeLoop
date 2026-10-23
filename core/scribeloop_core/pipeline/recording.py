@@ -1,7 +1,7 @@
-"""Opt-in five-minute native recording; encryption precedes offline transcription.
+"""Opt-in five-minute encrypted recording with independent transcription workers.
 
-Native reads and disk writes have separate threads and a bounded queue. A slow
-model never blocks Stop: inference starts only after both encrypted files close.
+Native reads and disk writes have a bounded queue; inference never blocks capture
+Stop. The app supplies the Groq cloud profile. Local models are explicit diagnostics.
 """
 from __future__ import annotations
 
@@ -20,10 +20,17 @@ log = logging.getLogger(__name__)
 
 class RecordingRunner:
     def __init__(self, store, audio, source_factory, publish, *, transcriber=None,
-                 queue_size=512, max_s=300, stop_timeout_s=12):
+                 queue_size=512, max_s=300, stop_timeout_s=12,
+                 live_transcriber=None, diarizer=None, finalize_transcript=None):
         self.store, self.audio = store, audio
         self.source_factory, self.publish = source_factory, publish
         self.transcriber = transcriber
+        self.live_transcriber = live_transcriber
+        self.use_live = transcriber is None or live_transcriber is not None
+        self.diarizer = diarizer
+        self.finalize_transcript = transcriber is None and live_transcriber is None if finalize_transcript is None else finalize_transcript
+        self.capture_done = threading.Event()
+        self.storage_ready = threading.Event()
         self.language = 'auto'
         self.language_lock = None
         self.queue_size, self.max_s = queue_size, max_s
@@ -49,6 +56,8 @@ class RecordingRunner:
         self.active_id = session['id']
         self.stop_requested.clear()
         self.cancel_processing.clear()
+        self.capture_done.clear()
+        self.storage_ready.clear()
         self.task = asyncio.create_task(self._run(session['id'], selection))
         return session
 
@@ -64,7 +73,7 @@ class RecordingRunner:
         if self.task:
             await self.task
 
-    def _capture(self, session_id, selection, ready):
+    def _capture(self, session_id, selection, ready, checkpoint=None):
         writers = {}
         source = None
         producer = None
@@ -74,12 +83,14 @@ class RecordingRunner:
         created_key = False
         capture_failed = False
         samples = {'mic': 0, 'loopback': 0}
+        synced = dict(samples)
         try:
             # Keys and both writers must exist before even constructing a source.
             self.audio.create_session(session_id)
             created_key = True
             for stream in samples:
                 writers[stream] = self.audio.writer(session_id, stream)
+            self.storage_ready.set()
             if self.stop_requested.is_set():
                 for writer in writers.values():
                     writer.close()
@@ -122,6 +133,10 @@ class RecordingRunner:
                     continue
                 writers[frame.stream].write(frame)
                 samples[frame.stream] += frame.pcm.size
+                if checkpoint and samples[frame.stream]-synced[frame.stream] >= 32000:
+                    writers[frame.stream].checkpoint()
+                    synced[frame.stream] = samples[frame.stream]
+                    checkpoint(frame.stream,round(writers[frame.stream].last_end))
                 if not announced and all(samples.values()):
                     announced = True
                     ready()
@@ -130,8 +145,10 @@ class RecordingRunner:
                 raise outcome[0]
             if not all(samples.values()) and not self.stop_requested.is_set():
                 raise RuntimeError('A selected capture stream produced no audio')
-            for writer in writers.values():
+            for stream, writer in writers.items():
                 writer.close()
+                if checkpoint:
+                    checkpoint(stream,round(writer.last_end))
             return samples
         except BaseException:
             capture_failed = True
@@ -169,28 +186,52 @@ class RecordingRunner:
         ready_event = asyncio.Event()
         def ready():
             loop.call_soon_threadsafe(ready_event.set)
-        capture = asyncio.create_task(asyncio.to_thread(self._capture, session_id, selection, ready))
+        capture_progress = {}
+        def checkpoint(stream,end_ms):
+            loop.call_soon_threadsafe(capture_progress.update,{stream:end_ms})
+        def persist_progress():
+            for stream,end_ms in list(capture_progress.items()):
+                self.store.checkpoint(session_id,stream,recorded_ms=end_ms)
+            capture_progress.clear()
+        capture = asyncio.create_task(asyncio.to_thread(self._capture, session_id, selection, ready,checkpoint))
         ready_wait = asyncio.create_task(ready_event.wait())
         stopping = False
+        live = asyncio.create_task(self._process(session_id, live=True, finalize=False)) if self.use_live else None
+        diar = asyncio.create_task(self._diarize(session_id)) if self.use_live and self.diarizer is not False else None
+        reported_live_error = False
         try:
             while not capture.done():
                 await asyncio.wait({capture, ready_wait}, timeout=.1,
                                    return_when=asyncio.FIRST_COMPLETED)
+                persist_progress()
                 if ready_wait.done() and not stopping:
                     await self._state(session_id, 'recording')
                     # Avoid a completed Event wait spinning the event loop.
                     ready_wait = asyncio.create_task(asyncio.Event().wait())
+                if live and live.done() and not reported_live_error and live.exception():
+                    reported_live_error = True
+                    log.warning('Live transcription failed (%s)',type(live.exception()).__name__)
+                    await self.publish({'type':'transcription_error','session_id':session_id,
+                            'message':'Transcription updates stopped; encrypted recording continues. Check the cloud key, network or quota, then resume after Stop.'})
                 if self.stop_requested.is_set() and not stopping:
                     stopping = True
                     await self._state(session_id, 'stopping')
             samples = await capture
+            persist_progress()
             self.store.record_audio_duration(session_id, samples)
+            self.capture_done.set()
             self.active_id = None
             await self._state(session_id, 'processing')
             if self.cancel_processing.is_set():
                 await self._state(session_id, 'interrupted')
                 return
-            await self._process(session_id)
+            if live:
+                await live
+                if diar:
+                    await diar
+                await self._complete_live(session_id)
+            else:
+                await self._process(session_id)
         except Exception as exc:  # noqa: BLE001 - fail visibly without leaking text/PCM in logs
             self.stop_requested.set()
             with contextlib.suppress(Exception):
@@ -200,10 +241,16 @@ class RecordingRunner:
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
                 'message': ('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
-                           if isinstance(exc, LanguageDetectionError) else 'Recording or local transcription failed. Check microphone/Screen Recording '
-                           'permission, running source, available disk space, and cached ASR model. '
-                           'Any captured audio remains encrypted; no plaintext fallback was used.')})
+                           if isinstance(exc, LanguageDetectionError) else 'Recording or transcription failed. Check microphone/Screen Recording '
+                           'permission, running source, disk space, provider configuration and network. '
+                           'Local saved audio remains encrypted; no automatic provider fallback was used.')})
         finally:
+            self.cancel_processing.set()
+            self.capture_done.set()
+            for task in (live, diar):
+                if task:
+                    with contextlib.suppress(Exception):
+                        await task
             ready_wait.cancel()
             if self.active_id == session_id:
                 self.active_id = None
@@ -239,9 +286,9 @@ class RecordingRunner:
             await self.publish({'type':'recording_error', 'session_id':session_id,
                 'message':('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
                            if isinstance(exc, LanguageDetectionError) else
-                           'Local MOSS reprocessing failed. Previous transcript and encrypted audio retained.')})
+                           'Transcription failed. Previous transcript and encrypted audio retained; check provider, network or quota.')})
 
-    async def _process(self, session_id, *, replace=False):
+    async def _process(self, session_id, *, replace=False, live=False, finalize=True):
         # Bounded output queue keeps transcript persistence on the DB thread.
         chunks = queue.Queue(maxsize=64)
         def emit(chunk):
@@ -252,8 +299,22 @@ class RecordingRunner:
                 except queue.Full:
                     continue
         replacement = []
-        processing = asyncio.create_task(asyncio.to_thread(self._transcribe,
-            self.audio, session_id, emit, self.cancel_processing))
+        if live:
+            while not self.storage_ready.is_set() and not self.capture_done.is_set() and not self.cancel_processing.is_set():
+                await asyncio.sleep(.01)
+            transcriber = self.live_transcriber
+            if transcriber is None:
+                from .live import transcribe_live
+                transcriber = transcribe_live
+            processing = asyncio.create_task(asyncio.to_thread(transcriber,
+                self.audio, session_id, emit, self.cancel_processing, self.capture_done,
+                language=self.language, locked_language=self.language_lock,
+                checkpoints=self.store.checkpoints(session_id),
+                confirmed_text={s:' '.join(r['text'] for r in self.store.segments(session_id) if r['stream']==s)
+                                for s in ('mic','loopback')}))
+        else:
+            processing = asyncio.create_task(asyncio.to_thread(self._transcribe,
+                self.audio, session_id, emit, self.cancel_processing))
         try:
             while not processing.done() or not chunks.empty():
                 try:
@@ -261,7 +322,26 @@ class RecordingRunner:
                 except queue.Empty:
                     await asyncio.sleep(.05)
                     continue
+                if chunk.get('type') == 'cloud_request':
+                    usage = self.store.reserve_cloud(session_id,chunk['reservation'])
+                    chunk['ack'].set()  # Do not dispatch before the durable reservation.
+                    await self.publish({'type':'cloud_usage','session_id':session_id,**usage})
+                    continue
+                if chunk.get('type') == 'recorded_checkpoint':
+                    self.store.checkpoint(session_id,chunk['stream'],recorded_ms=chunk['end_ms'])
+                    continue
+                if chunk.get('type') == 'confirmed_window':
+                    rows = self.store.commit_window(session_id,chunk['stream'],chunk['segments'],chunk['end_ms'])
+                    for row in rows:
+                        await self.publish({'type':'segment','session_id':session_id,'segment':row})
+                    await self.publish({'type':'partial','session_id':session_id,'stream':chunk['stream'],
+                                        'segment':{'text':''}})
+                    continue
+                if chunk.get('type') in {'partial','transcription_progress','model_metrics'}:
+                    await self.publish({**chunk,'session_id':session_id})
+                    continue
                 if chunk.get('type') == 'language_locked':
+                    self.language_lock = chunk
                     self.store.set_language_lock(session_id, chunk)
                     await self.publish({**chunk, 'session_id':session_id})
                     continue
@@ -274,9 +354,13 @@ class RecordingRunner:
                 if row:
                     await self.publish({'type': 'segment', 'session_id': session_id, 'segment': row})
             await processing
-        finally:
+        except BaseException:
             self.cancel_processing.set()
+            raise
+        finally:
             await processing
+        if not finalize:
+            return
         if self.closed:
             await self._state(session_id, 'interrupted')
         else:
@@ -284,9 +368,143 @@ class RecordingRunner:
                 self.store.revise_transcript(session_id, replacement)
                 await self.publish({'type':'transcript_replaced', 'session_id':session_id,
                                     'segments':self.store.segments(session_id)})
-            note = self.store.create_transcript_notes(session_id)
-            await self.publish({'type': 'notes', 'session_id': session_id, 'notes': note})
-            await self._state(session_id, 'completed')
+            await self._finish(session_id)
+
+    async def _complete_live(self, session_id):
+        if self.closed:
+            await self._state(session_id,'interrupted')
+        elif self.finalize_transcript:
+            await self.publish({'type':'transcription_stage','session_id':session_id,'stage':'finalizing'})
+            await self._process(session_id,replace=True)
+        else:
+            await self._finish(session_id)
+
+    async def _finish(self, session_id):
+        note = self.store.create_transcript_notes(session_id)
+        await self.publish({'type':'notes','session_id':session_id,'notes':note})
+        await self._state(session_id, 'interrupted' if self.closed else 'completed')
+
+    async def _diarize(self, session_id):
+        while not self.storage_ready.is_set() and not self.capture_done.is_set() and not self.cancel_processing.is_set():
+            await asyncio.sleep(.01)
+        from .diar import diarize_live
+        events = queue.Queue(maxsize=8)
+        cancelled = threading.Event()
+        def emit(event):
+            while not cancelled.is_set() and not self.cancel_processing.is_set():
+                try:
+                    events.put(event,timeout=.1)
+                    return
+                except queue.Full:
+                    continue
+        prior = self.store.turns(session_id)
+        # Anonymous embeddings are intentionally not persisted; don't reuse an
+        # old label after restart without fresh identity evidence.
+        labels = [int(t['label'].split()[-1]) for t in prior if t.get('label') and t['label'].startswith('Speaker ')]
+        checkpoint = self.store.checkpoints(session_id).get('loopback',{}).get('diarized_ms',0)
+        worker = asyncio.create_task(asyncio.to_thread(self.diarizer or diarize_live,
+            self.audio,session_id,emit,cancelled,self.capture_done,
+            checkpoint=checkpoint,next_label=max(labels,default=0)+1))
+        try:
+            while not worker.done() or not events.empty():
+                if self.cancel_processing.is_set():
+                    cancelled.set()
+                try:
+                    event = events.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(.05)
+                    continue
+                self.store.checkpoint(session_id,'loopback')
+                self.store.save_turns(session_id,'loopback',event['turns'],event['end_ms'])
+                await self.publish({'type':'speaker_turns','session_id':session_id,
+                                    'turns':self.store.turns(session_id)})
+            await worker
+        except Exception as exc:  # noqa: BLE001 - model/storage boundary, retain encrypted data
+            cancelled.set()
+            if not self.cancel_processing.is_set():
+                log.warning('Delayed diarization unavailable (%s)',type(exc).__name__)
+                await self.publish({'type':'speaker_warning','session_id':session_id,
+                    'message':'Speaker labels are unavailable. Recording and transcription remain independent; meeting voices stay unknown.'})
+        finally:
+            cancelled.set()
+            with contextlib.suppress(Exception):
+                await worker
+
+    def _saved(self, session_id):
+        if self.closed or self.active_id or (self.task and not self.task.done()):
+            raise ValueError('Wait for recording and processing to finish')
+        session = self.store.get(session_id)
+        if not session or session['source'] != 'meeting' or not session['consent_confirmed']:
+            raise ValueError('Select an authorized saved meeting')
+        if session['status'] not in {'completed','failed','interrupted','deleting'}:
+            raise ValueError('Saved meeting is not idle')
+        return session
+
+    def recover_saved(self, session_id):
+        session = self._saved(session_id)
+        if session['status'] == 'deleting':
+            raise ValueError('Deletion is pending')
+        self.task = asyncio.create_task(self._recover_saved(session_id))
+
+    async def _recover_saved(self, session_id):
+        try:
+            await self._state(session_id,'processing')
+            report = await asyncio.to_thread(self.audio.recover_session,session_id)
+            self.store.set_audio_paths(session_id,self.audio)
+            self.store.recovery_report(session_id,report)
+            self.store.record_audio_duration(session_id,{s:r['samples'] for s,r in report.items()})
+            await self._state(session_id,'interrupted')
+            await self.publish({'type':'recovery_complete','session_id':session_id,
+                'report':report,'message':'Authenticated audio recovered. Originals retained; missing tail duration is unknown. Capture was not restarted.'})
+        except Exception as exc:  # noqa: BLE001 - model/storage boundary, retain encrypted data
+            log.warning('Audio recovery failed (%s)',type(exc).__name__)
+            await self._state(session_id,'failed')
+            await self.publish({'type':'recording_error','session_id':session_id,
+                'message':'Recovery failed authentication or storage checks. Originals retained; no capture opened.'})
+
+    def resume(self, session_id, *, language='auto'):
+        session = self._saved(session_id)
+        if session['status'] == 'deleting' or language not in {'auto','vi','en'}:
+            raise ValueError('Cannot resume this meeting')
+        if self.store.segments(session_id) and not self.store.checkpoints(session_id):
+            raise ValueError('Use Transcribe again for legacy batch transcripts')
+        self.language = language
+        prior = self.store.language_lock(session_id)
+        self.language_lock = prior if language == 'auto' and prior else None
+        self.cancel_processing.clear()
+        self.capture_done.set()
+        self.storage_ready.set()
+        self.task = asyncio.create_task(self._resume(session_id))
+
+    async def _resume(self, session_id):
+        try:
+            await self._state(session_id,'processing')
+            await self._process(session_id,live=True,finalize=False)
+            if self.diarizer is not False:
+                await self._diarize(session_id)
+            await self._complete_live(session_id)
+        except Exception as exc:  # noqa: BLE001 - model/storage boundary, retain encrypted data
+            log.warning('Catch-up failed (%s)',type(exc).__name__)
+            await self._state(session_id,'interrupted')
+            await self.publish({'type':'recording_error','session_id':session_id,
+                'message':'Catch-up paused. Recover incomplete audio or select a language, then resume. Confirmed text is retained.'})
+        finally:
+            self.cancel_processing.set()
+
+    def delete_saved(self, session_id):
+        self._saved(session_id)
+        self.store.begin_delete(session_id)
+        self.task = asyncio.create_task(self._delete_saved(session_id))
+
+    async def _delete_saved(self, session_id):
+        try:
+            await asyncio.to_thread(self.audio.delete_session,session_id)
+            self.store.finish_delete(session_id)
+            await self.publish({'type':'session_deleted','session_id':session_id})
+        except Exception as exc:  # noqa: BLE001 - model/storage boundary, retain encrypted data
+            log.warning('Session deletion pending (%s)',type(exc).__name__)
+            await self.publish({'type':'recording_error','session_id':session_id,
+                'message':'Deletion is pending. Retry Delete to finish cleanup. Backups and already unlocked readers are outside this guarantee.'})
 
     async def _state(self, session_id, status):
         session = self.store.transition(session_id, status)

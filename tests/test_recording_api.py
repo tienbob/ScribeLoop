@@ -88,3 +88,56 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
         assert snapshot['active_id'] is None
         assert snapshot['sessions'][0]['capture']['name']=='Brave'
         assert snapshot['sessions'][0]['capture']['scope']=='application'
+
+
+def test_saved_recovery_resume_delete_and_retention_require_auth_and_confirmation(tmp_path):
+    pytest.importorskip('sqlcipher3')
+    import numpy as np
+    from scribeloop_core.capture.source import AudioFrame
+    opened = []
+    def recording(store,audio,factory,publish):
+        def source(*a,**kw):
+            opened.append(True)
+            raise AssertionError('Saved operations must not open capture')
+        def live(audio,sid,emit,cancelled,done,**kw):
+            assert done.is_set()
+            for stream in ('mic','loopback'):
+                emit({'type':'recorded_checkpoint','stream':stream,'end_ms':100})
+                emit({'type':'confirmed_window','stream':stream,'end_ms':100,
+                      'segments':[{'text':'Recovered words','stream':stream,'start_ms':0,
+                                   'end_ms':100,'is_final':True}]})
+        return RecordingRunner(store,audio,source,publish,live_transcriber=live,diarizer=False)
+    app,token = create_app(database=tmp_path/'saved.sqlcipher',storage='encrypted',key_store=Keys(),
+                          recording_factory=recording)
+    with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
+        ws.send_text(token)
+        snapshot = ws.receive_json()
+        assert snapshot['checkpoints'] == {} and snapshot['speaker_turns'] == {}
+        def prepare():
+            store, audio = app.state.store, app.state.recording.audio
+            sid = store.create_recording('Interrupted',{})['id']
+            audio.create_session(sid)
+            store.set_audio_paths(sid,audio)
+            for stream in ('mic','loopback'):
+                writer = audio.writer(sid,stream)
+                writer.write(AudioFrame(np.ones(1600,dtype=np.float32),stream,0,0))
+                writer.abort()
+            store.transition(sid,'interrupted')
+            return sid
+        sid = client.portal.call(prepare)
+        ws.send_json({'action':'recover','session_id':sid,'path':'/etc/passwd'})
+        receive(ws,'error')
+        ws.send_json({'action':'recover','session_id':sid})
+        receive(ws,'recovery_complete')
+        ws.send_json({'action':'resume','session_id':sid,'language':'en'})
+        receive(ws,'session','completed')
+        assert len(client.portal.call(app.state.store.segments,sid)) == 2
+        ws.send_json({'action':'delete','session_id':sid,'confirmed':False})
+        receive(ws,'error')
+        assert client.portal.call(app.state.store.get,sid) is not None
+        ws.send_json({'action':'retention','days':30,'confirmed':False})
+        receive(ws,'error')
+        ws.send_json({'action':'delete','session_id':sid,'confirmed':True})
+        receive(ws,'session_deleted')
+        assert client.portal.call(app.state.store.get,sid) is None
+        assert not opened

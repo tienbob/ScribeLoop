@@ -1,3 +1,5 @@
+> **Current status (2026-10-23): cloud development checkpoint complete.** See [closeout and support/acceptance matrix](PHASE_1_CLOSEOUT.md). Historical plans below preserve earlier decisions; Groq Turbo now supersedes local MOSS as the default meeting backend. Real-call/full MVP acceptance remains open.
+
 # Phase 1 implementation plan — meeting detection and capture
 
 Created **2026-10-22** from the [code audit](PHASE_1_PLAN_AUDIT.md) and
@@ -250,3 +252,56 @@ No real recording was started. Next gate is a consented controlled physical test
 of both tracks and their timing, then remaining device/storage fault acceptance.
 M5 authenticated-prefix recovery/checkpointing remains the next implementation
 milestone; current strict readers intentionally reject incomplete files.
+
+
+### M5/M6 implementation — 2026-10-23 (historical implementation stage)
+
+User requested implementation before further real meetings. Implement explicit
+interrupted-prefix recovery into fresh encrypted containers, recorded/confirmed
+checkpoints, retryable authorized deletion/retention, and checkpoint-based catch-up.
+Keep strict full-file verification unchanged and never restart capture on recovery.
+
+Enable bounded local live transcription from authenticated recorded audio, with
+per-stream timeline-preserving VAD, early shared language lock, LocalAgreement
+partials/confirmation, and durable backlog catch-up. Keep MOSS float16 + SDPA as
+the default and reuse a persistent isolated worker across windows. Add delayed
+community-1 speaker turns with conservative session-local identity matching;
+retain overlap and unknown attribution, with no persisted speaker embeddings.
+Expose live/catching-up/recovered/error state and recovery/delete controls.
+Validate using synthetic/fault fixtures and cached public audio only. Hardware,
+real-meeting accuracy, production latency/resource targets and speaker thresholds
+remain measured acceptance gates, not inferred from deterministic tests.
+
+
+### Direction change — cloud inference (2026-10-23)
+
+The user stopped local runs and requested low-cost cloud transcription because
+local model resource use is impractical. See [provider investigation and proposed
+migration](CLOUD_TRANSCRIPTION.md). Soniox streaming is the first recommended
+candidate; Groq is the cheaper file/chunk alternative. Keep encrypted capture and
+M5 recovery local. Do not treat the unfinished local M6 changes as final default
+architecture, and do not upload meetings without explicit cloud-processing consent.
+No cloud integration, paid call or audio upload has been performed yet.
+
+
+### Phase 1 cloud MVP finalization — 2026-10-23 (historical implementation stage)
+
+User accepted the Groq sample and selected Turbo for integration. Replace default
+meeting inference with Groq Turbo short-batch updates during recording; clearly
+label file/chunk behavior rather than claiming native streaming or diarization.
+Keep capture/SLPA/SQLCipher/recovery local. Add separately persisted cloud consent
+for new recording and explicit saved-audio reprocessing/resume, backend-only keys,
+shared early cloud language locking, per-track timeline/checkpoint catch-up,
+request/cost caps and visible quota/network errors. Cloud mode must never load
+MOSS, Whisper language-ID weights or community-1, nor automatically perform a
+second paid full-recording pass. Preserve existing local experiments as explicit
+diagnostics, not the default app path. Test cloud app integration using only
+public audio and generated/fault fixtures; no private-meeting uploads.
+Finalize the implementation checkpoint and publish the support/acceptance matrix.
+Real-call/device/second-OS/signing and release-quality acceptance stay explicitly
+open as previously deferred, rather than being checked off from mocked evidence.
+
+
+### Cloud checkpoint completion — 2026-10-23
+
+Implemented encrypted recorder recovery/checkpoints, default Groq Turbo short-batch inference, early shared language lock, explicit new/saved audio cloud consent, durable request/cost caps, and honest UI progress/source labels. Heavy local ML dependencies are optional. Validated with 286 Python tests, frontend regressions, lightweight imports, public paced cloud audio and desktop/400px browser checks. No private-meeting uploads. M7 support matrix is published in the closeout; physical, real-call, second-OS and release gates remain open. Original M6 streaming/speaker targets are not checked off.

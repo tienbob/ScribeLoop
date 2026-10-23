@@ -101,17 +101,15 @@ any file as complete; an authenticated prefix alone is not a complete recording.
 IO failure closes/poisons the writer. Application code writes no plaintext audio
 file or decryption temporary file.
 
-A crash/exception may leave an encrypted incomplete prefix. Salvage, directory-entry
-power-loss durability, resumed writing, and recorder checkpoint recovery remain
-future work; do not label an incomplete file finalized. Live capture's independent
-lossless recorder queue is also not implemented by this storage primitive.
-
-`forget_session_key` removes the audio key and verifies deletion, blocking new
-reader creation without deleting ciphertext first. This is an irreversible operation
-for a future authorized deletion flow, not an exposed API action. Existing readers
-or processes holding the key must be stopped first; keys retained in backups or
-other copies are not erased by deleting one keystore entry. Full session purge,
-DB/vector cleanup, and retention UI remain separate work.
+A crash/exception may leave an encrypted incomplete prefix. Explicit M5 recovery
+now authenticates both tracks, preserves originals and writes fresh encrypted
+containers with new file IDs/nonces; strict readers still reject unfinalized files.
+Recorded/confirmed checkpoints, capture-free resume, and retryable key-first
+session deletion/explicit retention cleanup are implemented. Details and limits:
+[M5/M6](M5_M6.md). Recorder progress follows periodic fsync, and recovery fsyncs
+new containers and directory entries. No interrupted recording is silently finalized
+or reopened for capture. Existing readers and backed-up keys remain outside the
+local deletion guarantee.
 
 ## Verification
 

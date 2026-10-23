@@ -3,8 +3,8 @@
 Requested 2026-10-22: launch ScribeLoop, manually start a short Teams call in
 Brave, explicitly start/stop capture, and obtain local conversation notes.
 
-The encrypted recording path is implemented; permission and physical routing
-still need validation on this host.
+**Current behavior (2026-10-23):** Groq Turbo provides confirmed text from short batches while recording, with encrypted checkpoints and explicit cloud consent. There is no automatic final second pass or individual remote speaker labeling. See [current launch steps and limitations](PHASE_1_CLOSEOUT.md). Earlier local-model notes below are historical and superseded for inference. Physical routing/timing and a real cloud Teams call remain unverified.
+
 Automatic discovery is a suggestion only and never starts recording. Browser
 scope includes all Brave tabs; close unrelated audio tabs and use headphones to
 reduce duplicate speaker audio in the microphone track. Confirm authorization
@@ -29,7 +29,7 @@ microphone clock behavior remain unverified until the user's actual test.
 Implemented: authenticated Record/Stop, explicit consent, source revalidation,
 exclusive capture/replay slot, bounded native-reader/recorder queue, separate
 SLPA files, SQLCipher metadata/transcript/notes, and startup interruption recovery.
-Capture closes before local inference starts. A failed model leaves audio
+In this historical increment, capture closed before local inference started. A failed model leaves audio
 ciphertext in place. The original preview used faster-whisper tiny (CPU int8) as a development
 baseline. The Vietnamese quality correction below replaces it for actual meetings;
 public-fixture replay retains its separate smoke backend.
@@ -49,7 +49,7 @@ already denied, enable the responsible launching app under macOS System Settings
 → Privacy & Security → Microphone; Screen Recording access is also needed for
 browser output. Start the Teams call, confirm participant authorization, check
 the recording consent box, and press Record meeting. Stop after a short exchange;
-local transcription and timestamped transcript notes appear after Stop. Do not
+live transcript appears during recording; catch-up, final refinement and transcript excerpts finish after Stop. Do not
 assume capture worked until the UI shows RECORDING. Source errors stop visibly.
 
 This delivers a limited M4 test path, not all M4/M5/M6 acceptance gates. Remaining:

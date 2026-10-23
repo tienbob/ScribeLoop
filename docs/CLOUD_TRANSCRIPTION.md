@@ -1,5 +1,7 @@
 # Cloud transcription direction — 2026-10-23
 
+**Current decision:** Groq Turbo is integrated as the default after user acceptance of public Vietnamese samples. See [completed checkpoint and measured limits](PHASE_1_CLOSEOUT.md). Provider investigation below records earlier options, not the current integration plan.
+
 User requested a low-cost cloud solution because local MOSS/community-1 inference
 is too heavy for the development machine. Heavy local runs were stopped. This
 supersedes the assumption that local inference must be the default product path;

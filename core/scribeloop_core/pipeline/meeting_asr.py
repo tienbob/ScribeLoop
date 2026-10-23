@@ -92,6 +92,8 @@ def transcribe_moss(audio, session_id, emit, cancelled, *, language='auto', lock
         if len(output) > 4_000_000:
             raise ValueError('MOSS response exceeds limit')
         result = json.loads(output)
+        if result.get('metrics'):
+            emit({'type':'model_metrics','stage':'final','metrics':result['metrics']})
         for row in result['segments']:
             stream = row['stream']
             if stream not in tracks:

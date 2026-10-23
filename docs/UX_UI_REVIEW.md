@@ -144,3 +144,6 @@ its width could be confirmed; narrow-layout visual verification remains open.
 No real capture was started or OS permissions changed during this verification.
 These fixes do not establish transcription accuracy, live transcription, or
 completion of the remaining Phase 1 capture-validation milestones.
+
+
+Cloud checkpoint check (2026-10-23): new-meeting upload consent, configured-provider status, latency disclosure and source-label limits were visually checked in Brave on desktop and at 400px responsive width. Controls/text fit without horizontal clipping. No recording was started. Frontend regression tests include independent new/saved cloud consent and disabled local replay.

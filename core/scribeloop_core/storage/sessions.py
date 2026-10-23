@@ -74,11 +74,17 @@ class SessionStore:
                 'ORDER BY id LIMIT 1', (session['id'],)).fetchone()
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
-                'scope','name','kind','app_id','microphone_id','microphone_name')}
+                'scope','name','kind','app_id','microphone_id','microphone_name',
+                'provider','model','cloud_consent','cloud_budget_usd')}
             audio = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
-                'ORDER BY id LIMIT 1', (session['id'],)).fetchone()
+                'ORDER BY id DESC LIMIT 1', (session['id'],)).fetchone()
             session['audio_duration_ms'] = json.loads(audio['payload_json'])['audio_duration_ms'] if audio else None
+            recovered = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='audio_recovered' ORDER BY id DESC LIMIT 1", (session['id'],)).fetchone()
+            session['recovery'] = json.loads(recovered[0]) if recovered else None
+            session['has_checkpoints'] = self.conn.execute(
+                'SELECT 1 FROM recording_checkpoints WHERE session_id=? LIMIT 1',(session['id'],)).fetchone() is not None
         return session
 
     def list(self):
@@ -154,6 +160,8 @@ class SessionStore:
                        'source':'offline', 'revision':revision}
                 self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                                   + ','.join('?' for _ in row) + ')', tuple(row.values()))
+            self.conn.execute('UPDATE recording_checkpoints SET confirmed_ms=recorded_ms WHERE session_id=?',
+                              (session_id,))
             self.conn.execute('RELEASE SAVEPOINT transcript_revision')
         except BaseException:
             self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
@@ -179,3 +187,121 @@ class SessionStore:
             self.conn.execute('INSERT INTO events (session_id,ts,level,type,payload_json) '
                 'VALUES (?,?,?,?,?)', (session_id,self._now(),'info','recording_complete',
                 json.dumps({'audio_duration_ms':duration})))
+
+    def checkpoints(self, session_id):
+        return {row['stream']:dict(row) for row in self.conn.execute(
+            'SELECT * FROM recording_checkpoints WHERE session_id=?', (session_id,))}
+
+    def checkpoint(self, session_id, stream, *, recorded_ms=None):
+        if stream not in {'mic','loopback'}:
+            raise ValueError('Invalid checkpoint stream')
+        with self.conn:
+            self.conn.execute('INSERT OR IGNORE INTO recording_checkpoints(session_id,stream) VALUES (?,?)',
+                              (session_id, stream))
+            if recorded_ms is not None:
+                self.conn.execute('UPDATE recording_checkpoints SET recorded_ms=MAX(recorded_ms,?) '
+                    'WHERE session_id=? AND stream=?', (int(recorded_ms),session_id,stream))
+
+    def commit_window(self, session_id, stream, chunks, end_ms):
+        """Transcript rows and their replay boundary become durable together."""
+        from ..pipeline.replay import ReplayChunk
+        rows = [ReplayChunk.model_validate(chunk).model_dump() for chunk in chunks]
+        if stream not in {'mic','loopback'} or not 0 <= end_ms <= 305000:
+            raise ValueError('Invalid confirmed checkpoint')
+        self.conn.execute('SAVEPOINT confirmed_window')
+        try:
+            self.conn.execute('INSERT OR IGNORE INTO recording_checkpoints(session_id,stream) VALUES (?,?)',
+                              (session_id,stream))
+            current = self.checkpoints(session_id)[stream]
+            if end_ms > current['recorded_ms']:
+                raise ValueError('Confirmation exceeds durable recording')
+            revision = self.conn.execute('SELECT COALESCE(MAX(revision),1) FROM segments WHERE session_id=?',
+                                         (session_id,)).fetchone()[0]
+            saved = []
+            for chunk in rows:
+                if not chunk['is_final'] or not current['confirmed_ms'] <= chunk['start_ms'] < chunk['end_ms'] <= end_ms:
+                    raise ValueError('Confirmation overlaps checkpoint or exceeds window')
+                row = {'id':uuid4().hex,'session_id':session_id,'stream':stream,
+                    'start_ms':chunk['start_ms'],'end_ms':chunk['end_ms'],'text':chunk['text'],
+                    'language':chunk['language'],'confidence':chunk['confidence'],
+                    'source':'stream','revision':revision}
+                self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
+                    + ','.join('?' for _ in row) + ')', tuple(row.values()))
+                saved.append(row)
+            self.conn.execute('UPDATE recording_checkpoints SET confirmed_ms=MAX(confirmed_ms,?) '
+                'WHERE session_id=? AND stream=?', (end_ms,session_id,stream))
+            self.conn.execute('RELEASE SAVEPOINT confirmed_window')
+            return saved
+        except BaseException:
+            self.conn.execute('ROLLBACK TO SAVEPOINT confirmed_window')
+            self.conn.execute('RELEASE SAVEPOINT confirmed_window')
+            raise
+
+    def recovery_report(self, session_id, reports):
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'warning','audio_recovered',json.dumps(reports)))
+            for stream, report in reports.items():
+                # Reconcile checkpoints to authenticated audio, never trust a stale
+                # checkpoint beyond a recovered prefix. Existing confirmed text stays.
+                self.conn.execute('INSERT OR IGNORE INTO recording_checkpoints(session_id,stream) VALUES (?,?)',
+                                  (session_id,stream))
+                self.conn.execute('UPDATE recording_checkpoints SET recorded_ms=? WHERE session_id=? AND stream=?',
+                                  (int(report['end_ms']),session_id,stream))
+
+    def begin_delete(self, session_id):
+        self.transition(session_id, 'deleting')
+
+    def finish_delete(self, session_id):
+        """Delete dependent data in FK order; callers have already retired audio keys."""
+        with self.conn:
+            self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
+                '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
+                '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
+            for table in ('words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+                          'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
+                          'session_streams','events'):
+                column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'
+                self.conn.execute(f'DELETE FROM {table} WHERE {column}=?', (session_id,))
+            self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))
+        from .db import purge_checkpoint
+        purge_checkpoint(self.conn)
+
+    def retention_candidates(self, days=30):
+        if not isinstance(days,int) or days < 1:
+            raise ValueError('Retention must be at least one day')
+        return [row[0] for row in self.conn.execute(
+            "SELECT id FROM sessions WHERE source='meeting' AND status IN "
+            "('completed','failed','interrupted','deleting') AND started_at < ?",
+            (self._now()-days*86400000,))]
+
+    def turns(self, session_id):
+        return [dict(row) for row in self.conn.execute(
+            'SELECT * FROM speaker_turns WHERE session_id=? ORDER BY start_ms', (session_id,))]
+
+    def save_turns(self, session_id, stream, turns, end_ms):
+        with self.conn:
+            for turn in turns:
+                self.conn.execute('INSERT INTO speaker_turns(id,session_id,stream,start_ms,end_ms,label,confidence) '
+                    'VALUES (?,?,?,?,?,?,?)', (uuid4().hex,session_id,stream,turn['start_ms'],turn['end_ms'],
+                    turn.get('label'),turn.get('confidence')))
+            self.conn.execute('UPDATE recording_checkpoints SET diarized_ms=MAX(diarized_ms,?) '
+                'WHERE session_id=? AND stream=?', (end_ms,session_id,stream))
+
+
+    def grant_cloud(self, session_id, model):
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'info','cloud_consent',json.dumps({'provider':'groq','model':model,'consent':True})))
+
+    def reserve_cloud(self, session_id, reservation):
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'info','cloud_request',json.dumps(reservation)))
+        return self.cloud_usage(session_id)
+
+    def cloud_usage(self, session_id):
+        rows = [json.loads(row[0]) for row in self.conn.execute(
+            "SELECT payload_json FROM events WHERE session_id=? AND type='cloud_request'", (session_id,))]
+        return {'requests':len(rows),'estimated_usd':sum(r['estimated_usd'] for r in rows),
+                'billed_audio_s':sum(r['billed_audio_s'] for r in rows)}

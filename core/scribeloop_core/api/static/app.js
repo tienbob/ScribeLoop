@@ -3,8 +3,9 @@ const $ = id => document.getElementById(id);
 let key = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
-let stopPending = false, authenticated = false, replayAvailable = true, recordingAvailable = false, recordPending = false;
-let notes = new Map(), languageLocks = new Map();
+let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
+let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
+let notes = new Map(), languageLocks = new Map(), speakerTurns = new Map(), liveProgress = new Map();
 const partials = new Map();
 let socket, activeId = null, selectedId = null, sessions = new Map(), segments = new Map();
 const liveStates = new Set(['loading', 'replaying', 'preparing', 'recording', 'stopping']);
@@ -91,15 +92,17 @@ function renderDiscovery() {
   const reason = !authenticated ? 'Reconnect to set up recording.' :
     !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
     activeId ? 'Stop the active session before starting another.' :
-    processing ? 'Wait for local transcription to finish.' :
+    transcription.cloud && !transcription.configured ? 'Configure GROQ_API_KEY in your local .env, then restart ScribeLoop.' :
+    processing ? 'Wait for transcription to finish.' :
     recordPending ? 'Preparing your request…' :
     discovery.permission !== 'authorized' ? 'Enable microphone access before recording.' :
     !$('title').value.trim() ? 'Add a meeting title.' :
     !chosenSource ? 'Choose an audio source and microphone, then press Confirm source.' :
     !$('record-consent').checked ? 'Confirm participant permission above to enable Record.' :
+    transcription.cloud && !$('cloud-consent').checked ? 'Confirm sending this meeting audio to Groq before Record.' :
     'Ready. Start your call, then press Record meeting.';
   $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
-    !$('record-consent').checked || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
+    !$('record-consent').checked || (transcription.cloud && (!transcription.configured || !$('cloud-consent').checked)) || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
   text('record-help',reason);
   text('record-meeting',recordPending ? 'Preparing…' : 'Record meeting ↗');
   $('recording-bar').hidden = authenticated && !activeId && !processing && !recordPending;
@@ -109,7 +112,7 @@ function renderDiscovery() {
   text('elapsed-time', active && authenticated ? formatDuration(Date.now()-active.started_at) : '');
   text('active-scope', !authenticated ? 'Reconnect to verify capture status. Disconnecting this page does not stop an active recording.' : active?.source === 'meeting' ?
     `${scopeDescription(active.capture)} · ${active.capture?.microphone_name || 'Microphone identity unavailable'}` :
-    active ? 'Public audio replay · microphone is not open' : 'Local processing · no new audio capture');
+    active ? 'Public audio replay · microphone is not open' : 'Transcription processing · no new audio capture');
   $('stop').hidden = !activeId;
   $('stop').disabled = stopPending || !authenticated;
   text('stop',stopPending ? 'Stopping…' : active?.source === 'meeting' ? 'Stop recording' : 'Stop replay');
@@ -128,6 +131,9 @@ function renderDiscovery() {
   $('meeting-language').disabled = !authenticated || locked;
   $('title').disabled = locked;
   $('record-consent').disabled = !authenticated || locked;
+  $('cloud-consent-row').hidden = !transcription.cloud;
+  $('cloud-consent').disabled = !authenticated || locked;
+  text('cloud-provider',transcription.cloud ? `Groq · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated request cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
   text('scope-warning', chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
@@ -172,7 +178,7 @@ function renderHistory() {
       const button=document.createElement('button'); button.type='button';
       const title=document.createElement('span'), meta=document.createElement('small');
       button.append(title,meta);
-      button.onclick=()=>{ selectedId=session.id; render(); };
+      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; render(); };
       node={button,title,meta}; historyNodes.set(session.id,node);
     }
     if (node.title.textContent !== session.title) node.title.textContent=session.title;
@@ -185,8 +191,19 @@ function renderHistory() {
     if ($('history').children[index] !== node.button) $('history').insertBefore(node.button,$('history').children[index] || null);
   });
 }
+function speakerLabel(row, turns) {
+  if (row.stream === 'mic') return 'Microphone';
+  const overlaps=turns.filter(t=>t.start_ms < row.end_ms && t.end_ms > row.start_ms);
+  if (!overlaps.length) return 'Meeting audio · speaker unknown';
+  const labels=new Set(overlaps.map(t=>t.label));
+  if (labels.size !== 1 || labels.has(null)) return 'Meeting audio · overlapping / uncertain speakers';
+  const intervals=overlaps.map(t=>[Math.max(t.start_ms,row.start_ms),Math.min(t.end_ms,row.end_ms)]).sort((a,b)=>a[0]-b[0]);
+  let covered=0,end=-1;
+  intervals.forEach(([start,stop])=>{ covered+=Math.max(0,stop-Math.max(start,end)); end=Math.max(end,stop); });
+  return covered >= .8*(row.end_ms-row.start_ms) ? `Meeting audio · ${overlaps[0].label}` : 'Meeting audio · speaker unknown';
+}
 function renderTranscript(session, rows, emptyMessage) {
-  const signature=JSON.stringify([selectedId,emptyMessage,rows]);
+  const signature=JSON.stringify([selectedId,emptyMessage,rows,speakerTurns.get(selectedId)]);
   if (signature === transcriptView) return;
   transcriptView=signature;
   if (!rows.length) {
@@ -206,12 +223,17 @@ function renderTranscript(session, rows, emptyMessage) {
       const p=document.createElement('p'); article.append(time,p); node={article,time,p}; transcriptNodes.set(id,node); }
     const timestamp=formatDuration(row.start_ms);
     if (node.time.textContent !== timestamp) node.time.textContent=timestamp;
-    const value=session?.source === 'meeting' ? `${row.stream === 'mic' ? 'Microphone' : 'Meeting audio'}: ${row.text}` : row.text;
+    const value=session?.source === 'meeting' ? `${speakerLabel(row,speakerTurns.get(selectedId)||[])}: ${row.text}` : row.text;
     if (node.p.textContent !== value) node.p.textContent=value;
     if ($('transcript').children[index] !== node.article) $('transcript').insertBefore(node.article,$('transcript').children[index] || null);
   });
 }
 
+function partialText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  return Object.entries(value).filter(([,v])=>v).map(([stream,v])=>`${stream === 'mic' ? 'Microphone' : 'Meeting audio'} (provisional): ${v}`).join('\n');
+}
 function render() {
   renderDiscovery();
   renderHistory();
@@ -220,31 +242,45 @@ function render() {
   $('session-heading').textContent = session ? session.title : 'The conversation';
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));
-  $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !$('fixture').value;
-  $('partial').textContent = partials.get(selectedId) || '';
+  $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !replayEnabled || !$('fixture').value;
+  $('partial').textContent = partialText(partials.get(selectedId));
   if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.source === 'meeting' ? 'Meeting recording active' : sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
-  else $('start').textContent = 'Start replay ↗';
+  else $('start').textContent = replayEnabled ? 'Start replay ↗' : 'Local replay disabled in cloud mode';
   const languageLock = languageLocks.get(selectedId);
   text('language-status', languageLock ? `${languageLock.mode === 'auto' ? 'Detected' : 'Selected'}: ${languageLock.language === 'vi' ? 'Tiếng Việt' : 'English'} · fixed for this conversation` :
-    session?.source === 'meeting' ? 'Automatic mode detects early speech once after Stop, before transcription.' : '');
+    session?.source === 'meeting' ? 'Automatic mode identifies the first speech batch once, then keeps that language for the meeting.' : '');
   text('meeting-notes',notes.get(selectedId) || '');
   $('notes-section').hidden = !notes.get(selectedId);
   $('reprocess-controls').hidden = session?.source !== 'meeting';
+  $('saved-cloud-consent-row').hidden = !transcription.cloud;
   $('reprocess-meeting').hidden = session?.source !== 'meeting';
-  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending ||
+  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || (transcription.cloud && (!transcription.configured || !$('saved-cloud-consent').checked)) ||
     [...sessions.values()].some(s=>s.source === 'meeting' && s.status === 'processing');
-  $('reprocess-language').disabled = $('reprocess-meeting').disabled;
+  $('reprocess-language').disabled = !authenticated || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
   text('session-progress', session?.source === 'meeting' ? session.status === 'processing' ?
-    'Transcribing locally. Previous text stays visible until the new pass completes.' :
+    'Transcribing saved audio. Previous text stays visible until the new pass completes.' :
     session.status === 'preparing' ? 'Preparing encrypted storage and selected audio sources…' :
     session.status === 'stopping' ? 'Stopping capture and finishing the encrypted audio…' :
-    session.status === 'recording' ? 'Recording audio. Your transcript appears after Stop.' :
+    session.status === 'recording' ? 'Recording encrypted audio. Groq sends text after short audio batches; Stop remains available while requests are running.' :
     session.status === 'failed' ? 'Recording or transcription failed. Check the message above; saved audio remains encrypted.' : '' : '');
+  const idle = authenticated && !activeId && !recordPending && ![...sessions.values()].some(s=>s.status === 'processing');
+  $('saved-tools').hidden = session?.source !== 'meeting';
+  $('recover-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status);
+  $('resume-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status) ||
+    (Boolean((segments.get(selectedId)||[]).length) && !session?.has_checkpoints) ||
+    (transcription.cloud && (!transcription.configured || !$('saved-cloud-consent').checked));
+  $('delete-meeting').disabled = !idle || !$('delete-consent').checked;
+  $('apply-retention').disabled = !idle || !$('retention-consent').checked;
+  const usage=cloudUsage.get(selectedId);
+  text('cloud-usage',usage ? `Groq requests: ${usage.requests} · reserved estimate $${Number(usage.estimated_usd).toFixed(4)}. Actual billing depends on your Groq account.` : '');
+  const progress=liveProgress.get(selectedId);
+  text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'catching_up' ? 'Catching up' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
+  if (session?.recovery) text('session-progress','Recovered / interrupted audio. Only authenticated complete frames were retained; missing tail duration is unknown. Capture was not restarted.');
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   const emptyMessage = !replayAvailable ? 'Storage is unavailable. Reconnect or restart the local server.' :
-    session?.status === 'processing' ? 'Audio capture stopped. Transcribing locally…' :
-    session?.source === 'meeting' && liveStates.has(session.status) ? 'Recording audio. Words appear after Stop.' :
+    session?.status === 'processing' ? 'Audio capture stopped. Transcribing the remaining audio batches…' :
+    session?.source === 'meeting' && liveStates.has(session.status) ? 'Recording audio. Waiting for early speech and the first stable words…' :
     session?.status === 'failed' ? 'This session failed. Check the message above.' :
     liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No speech has been transcribed in this session.';
   renderTranscript(session,rows,rows.length ? '' : emptyMessage);
@@ -265,7 +301,11 @@ function connect() {
       connecting=false; notice('');
       authenticated = true; recordingAvailable = data.recording_available === true; recordPending=false;
       notes = new Map(Object.entries(data.notes || {}));
+      speakerTurns = new Map(Object.entries(data.speaker_turns || {})); liveProgress.clear();
+      transcription=data.transcription || {cloud:false,configured:true};
+      cloudUsage=new Map(Object.entries(data.cloud_usage || {}));
       languageLocks = new Map(Object.entries(data.language_locks || {}));
+      replayEnabled = data.replay_enabled !== false;
       replayAvailable = data.replay_available !== false; partials.clear();
       clearSource(); updateDiscovery(data.discovery);
       $('storage-status').textContent = {encrypted:'Encrypted on this machine', 'public-demo':'Public demo · unencrypted', memory:'Temporary memory'}[data.storage] || 'Storage status unavailable';
@@ -289,6 +329,27 @@ function connect() {
       pendingSource=null; chosenSource=data.source;
       $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
+    } else if (data.type === 'cloud_usage') {
+      cloudUsage.set(data.session_id,data); render();
+    } else if (data.type === 'speaker_turns') {
+      speakerTurns.set(data.session_id,data.turns); render();
+    } else if (data.type === 'transcription_stage') {
+      liveProgress.set(data.session_id,{mode:'finalizing',lag_ms:0,streams:{}}); render();
+    } else if (data.type === 'transcription_progress') {
+      const state=liveProgress.get(data.session_id) || {streams:{}};
+      state.streams[data.stream || 'loopback']=data;
+      state.lag_ms=Math.max(...Object.values(state.streams).map(p=>p.lag_ms));
+      state.mode=Object.values(state.streams).some(p=>p.mode === 'deferred') ? 'deferred' : state.lag_ms > 12000 ? 'catching_up' : 'live';
+      liveProgress.set(data.session_id,state); render();
+    } else if (['transcription_error','speaker_warning','recovery_complete'].includes(data.type)) {
+      recordPending=false; notice(data.message); render();
+    } else if (data.type === 'session_deleted') {
+      sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
+      speakerTurns.delete(data.session_id); languageLocks.delete(data.session_id); liveProgress.delete(data.session_id);
+      recordPending=false; if (selectedId === data.session_id) selectedId=null;
+      $('delete-consent').checked=false; render();
+    } else if (data.type === 'retention_complete') {
+      recordPending=false; $('retention-consent').checked=false; notice(`Removed ${data.deleted} expired meetings.`); render();
     } else if (data.type === 'language_locked') {
       languageLocks.set(data.session_id,data); render();
     } else if (data.type === 'transcript_replaced') {
@@ -298,19 +359,24 @@ function connect() {
     } else if (data.type === 'recording_error') {
       recordPending=false; notice(data.message); render();
     } else if (data.type === 'session') {
-      if (data.session.source === 'meeting') { recordPending=false; $('record-consent').checked=false; }
+      if (data.session.source === 'meeting') { recordPending=false; $('record-consent').checked=false; $('cloud-consent').checked=false; }
       sessions.set(data.session.id,data.session);
+      if (['completed','failed','interrupted'].includes(data.session.status)) liveProgress.delete(data.session.id);
       if (liveStates.has(data.session.status)) { const newActive=activeId !== data.session.id; activeId=data.session.id; if (newActive || !selectedId) selectedId=activeId; }
       else { if (activeId === data.session.id) { activeId=null; stopPending=false; } partials.delete(data.session.id); }
       render();
     } else if (data.type === 'segment') {
       const rows=segments.get(data.session_id)||[];
       if (!rows.some(r => r.id === data.segment.id)) rows.push(data.segment);
-      segments.set(data.session_id,rows); partials.delete(data.session_id);
+      segments.set(data.session_id,rows);
+      const pending=partials.get(data.session_id); if (pending && typeof pending === 'object') delete pending[data.segment.stream || 'loopback']; else partials.delete(data.session_id);
       if (selectedId === data.session_id) text('transcript-update',`${rows.length} confirmed transcript segments available.`); render();
     } else if (data.type === 'partial') {
-      partials.set(data.session_id, data.segment.text);
-      if (selectedId === data.session_id) $('partial').textContent=data.segment.text;
+      if (sessions.get(data.session_id)?.source !== 'meeting') { partials.set(data.session_id,data.segment.text); if (selectedId === data.session_id) $('partial').textContent=data.segment.text; return; }
+      const previous=partials.get(data.session_id);
+      const values=typeof previous === 'object' ? previous : {};
+      values[data.stream || 'loopback']=data.segment.text; partials.set(data.session_id,values);
+      if (selectedId === data.session_id) $('partial').textContent=partialText(values);
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
@@ -336,7 +402,7 @@ function connect() {
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
 $('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:$('consent').checked}); };
 $('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
-$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('title').focus(); };
+$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('title').focus(); };
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { if (busy()) return; clearSource(); renderDiscovery(); };
@@ -350,7 +416,7 @@ $('record-meeting').onclick = () => {
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    consent_confirmed:$('record-consent').checked,language:$('meeting-language').value || 'auto'});
+    consent_confirmed:$('record-consent').checked,cloud_consent:$('cloud-consent').checked,language:$('meeting-language').value || 'auto'});
   renderDiscovery();
 };
 
@@ -360,9 +426,33 @@ setInterval(() => { if (activeId) renderDiscovery(); },1000);
 
 $('reprocess-meeting').onclick = () => {
   if ($('reprocess-meeting').disabled) return;
-  recordPending=send({action:'reprocess',session_id:selectedId,language:$('reprocess-language').value || 'auto'});
+  recordPending=send({action:'reprocess',session_id:selectedId,language:$('reprocess-language').value || 'auto',cloud_consent:$('saved-cloud-consent').checked});
+  $('saved-cloud-consent').checked=false;
   render();
 };
 
 $('title').oninput = renderDiscovery;
 $('reconnect').onclick = () => connect();
+
+function savedAction(action) {
+  const button=$(action === 'recover' ? 'recover-meeting' : 'resume-meeting');
+  if (button.disabled) return;
+  recordPending=send({action,session_id:selectedId,language:$('reprocess-language').value || 'auto',cloud_consent:$('saved-cloud-consent').checked}); $('saved-cloud-consent').checked=false; render();
+}
+$('recover-meeting').onclick=()=>savedAction('recover');
+$('resume-meeting').onclick=()=>savedAction('resume');
+$('delete-consent').onchange=render;
+$('retention-consent').onchange=render;
+$('delete-meeting').onclick=()=>{
+  if ($('delete-meeting').disabled) return;
+  recordPending=send({action:'delete',session_id:selectedId,confirmed:$('delete-consent').checked}); render();
+};
+$('apply-retention').onclick=()=>{
+  if ($('apply-retention').disabled) return;
+  const days=Number($('retention-days').value);
+  if (!Number.isInteger(days) || days<1 || days>3650) { notice('Choose retention between 1 and 3650 days.'); return; }
+  recordPending=send({action:'retention',days,confirmed:$('retention-consent').checked}); render();
+};
+
+$('cloud-consent').onchange=renderDiscovery;
+$('saved-cloud-consent').onchange=render;
