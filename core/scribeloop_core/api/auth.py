@@ -8,10 +8,15 @@
 - Host header validated against a fixed allowlist (DNS-rebinding defense).
 - Stronger alternative (preferred where available): a Unix domain socket
   owned by the shell process.
+
+The development CLI defaults to a keyless demo with same-origin, loopback-only
+WebSockets. These token helpers remain the default embedded API authentication
+and are enabled by the CLI's --require-launch-key option.
 """
 from __future__ import annotations
 
 import secrets
+from urllib.parse import urlsplit
 
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -23,11 +28,40 @@ def new_token() -> str:
 
 def host_allowed(host: str) -> bool:
     """Validate the Host header against the allowlist (DNS-rebinding defense)."""
-    return (host or "").split(":")[0].strip("[]").lower() in ALLOWED_HOSTS
+    if not host or any(ord(char) <= 32 or ord(char) >= 127 for char in host):
+        return False
+    try:
+        parsed = urlsplit('//' + host)
+        port = parsed.port
+        return (parsed.hostname in ALLOWED_HOSTS and parsed.username is None
+                and parsed.password is None and not parsed.path and not parsed.query
+                and not parsed.fragment and (port is None or 0 < port <= 65535))
+    except ValueError:
+        return False
 
 
 def check_first_message(message: str | bytes, token: str) -> bool:
     """First-message auth for WebSocket clients (constant-time compare)."""
     if isinstance(message, bytes):
         message = message.decode("utf-8", errors="replace")
-    return secrets.compare_digest(message.strip(), token)
+    try:
+        return secrets.compare_digest(message.strip().encode('utf-8'), token.encode('utf-8'))
+    except UnicodeError:
+        return False
+
+
+def origin_allowed(origin: str | None, host: str) -> bool:
+    """No Origin is permitted for token-authenticated native clients; browser
+    origins must be well-formed and match the serving authority exactly.
+    """
+    if origin is None:
+        return True
+    if any(ord(char) <= 32 or ord(char) >= 127 for char in origin):
+        return False
+    try:
+        parsed = urlsplit(origin)
+        return (parsed.scheme in {'http', 'https'} and parsed.netloc == host
+                and host_allowed(parsed.netloc) and not parsed.path
+                and not parsed.query and not parsed.fragment)
+    except ValueError:
+        return False

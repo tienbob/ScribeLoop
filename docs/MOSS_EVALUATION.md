@@ -1,5 +1,8 @@
 # MOSS-Transcribe-Diarize local evaluation — 2026-10-21
 
+> Historical Python/PyTorch evaluation. The app's newer selectable GGUF profile
+> is [Local MOSS Q6_K](LOCAL_MOSS.md); float16 defaults below apply to the old harness.
+
 ## Progress and current defaults
 
 **Initial evaluation and five-minute development setup: done (2026-10-21).**

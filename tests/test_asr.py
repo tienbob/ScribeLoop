@@ -94,3 +94,29 @@ def test_ambiguous_model_files_fail_instead_of_silently_selecting(model):
     (path / "encoder-other.onnx").touch()
     with pytest.raises(ValueError, match="ambiguous"):
         SherpaOnnxStreaming(path)
+
+
+def test_whisper_replay_uses_cached_model_and_bounds_decoder_padding(monkeypatch):
+    from scribeloop_core.pipeline.asr import ChunkedFasterWhisper
+
+    config = {}
+
+    class Model:
+        def __init__(self, name, **kwargs):
+            config.update(kwargs)
+
+        def transcribe(self, audio, **kwargs):
+            return [SimpleNamespace(text='valid', start=-.1, end=1.5, avg_logprob=-.2),
+                    SimpleNamespace(text='past audio', start=1.1, end=2, avg_logprob=-.2)], \
+                   SimpleNamespace(language='en')
+
+    monkeypatch.setitem(sys.modules, 'faster_whisper', SimpleNamespace(WhisperModel=Model))
+    backend = ChunkedFasterWhisper(chunk_s=1, local_files_only=True)
+    assert config['local_files_only'] is True
+    assert config['cpu_threads'] == 2
+    frame = AudioFrame(np.zeros(16000, dtype=np.float32), 'loopback', 0, 0)
+    result = backend.feed(frame)
+    assert len(result) == 1
+    assert result[0]['start_ms'] == 0 and result[0]['end_ms'] == 1000
+    result = backend.feed(frame)
+    assert result[0]['start_ms'] == 1000 and result[0]['end_ms'] == 2000

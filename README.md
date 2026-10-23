@@ -17,17 +17,41 @@ scribeloop/
 └── audio/                 # runtime session recordings (gitignored)
 ```
 
-## Dev setup
+## Cloud development setup
+
+Deepgram Nova-3 streaming with anonymous speaker labels is the default meeting backend. Install core/security dependencies
+without local ML packages, configure `DEEPGRAM_API_KEY` in the ignored `.env`, and
+restart the server. New and saved audio each require explicit cloud consent.
+The model selector also offers **Local · MOSS Q6_K — after recording**: English/
+Chinese transcription and anonymous speakers without cloud upload. See
+[local setup and limitations](docs/LOCAL_MOSS.md). Deepgram remains the live default.
+Choose **Microphone only** under Recording source for live mic transcription with
+Deepgram, or after-Stop mic transcription with Local MOSS. No app audio or Screen
+Recording permission is needed for that scope.
+See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
+The [documentation index](docs/README.md) separates current instructions from historical evaluations.
+The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.
+Restart the server after updating. Add `--require-launch-key` to opt into token authentication.
+
+```bash
+uv pip install -e ".[dev,security,sqlcipher]"
+```
+
+The optional `local-asr`, `diar` and `sherpa` extras are for historical evaluations.
+The new Q6_K option uses transcribe.cpp and does not require PyTorch. Local speech
+models are not loaded by cloud meetings.
+
+## Optional local evaluation setup
 
 ```bash
 python -m venv .venv
 # Windows:      .venv\Scripts\activate
 # macOS/Linux:  source .venv/bin/activate
-pip install -e ".[dev,diar,sherpa]"
+pip install -e ".[dev,local-asr,diar,sherpa]"
 pytest
 ```
 
-> The full ML stack (torch + pyannote) is ~2–3 GB. For a light start: `pip install -e ".[dev]"`.
+> The full ML stack (torch + pyannote) is ~2–3 GB. Cloud setup above does not require this stack.
 
 ## Platform note (development on Windows)
 
@@ -73,7 +97,15 @@ Development work is closed for now. Results and deferred release criteria are tr
 - [x] Five-minute development default: ES2004a 300–600 s, float16 + SDPA
 - [ ] Complete multi-meeting corpus, codec variants, live-latency baselines, and target sign-off
 
-Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
+Historical five-minute PyTorch MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 **82.93 s processing**. These are exploratory results from one meeting, not release
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.
+
+## Phase 1: macOS development closed
+
+Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Deepgram. Use Auto (default) for supported multilingual conversations, or choose a fixed language such as Tiếng Việt. No local speech models load in the default path.
+
+M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
+
+Encrypted cloud startup no longer needs a public WAV fixture. See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.

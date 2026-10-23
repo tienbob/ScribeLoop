@@ -2,6 +2,7 @@
 import os
 import struct
 import sys
+import threading
 
 import numpy as np
 import pytest
@@ -98,3 +99,60 @@ def test_health_callback_failure_stops_capture(tmp_path):
     with pytest.raises(RuntimeError, match='consumer failed'):
         next(source.monitored_frames(broken_callback))
     assert source._process.poll() is not None
+
+
+@pytest.mark.parametrize('multiplexed', [False, True])
+def test_close_during_child_creation_leaves_no_running_child(tmp_path, monkeypatch, multiplexed):
+    from scribeloop_core.capture.multiplexed import MultiplexedPCMSource
+
+    source_type = MultiplexedPCMSource if multiplexed else PCMProcessSource
+    source = source_type(helper(tmp_path, 'time.sleep(10)\n'), timeout_s=.2)
+    import scribeloop_core.capture.pcm_process as transport
+    original = transport.subprocess.Popen
+    created = threading.Event()
+    release = threading.Event()
+    closing = threading.Event()
+    children = []
+    errors = []
+
+    def delayed_start(*args, **kwargs):
+        child = original(*args, **kwargs)
+        children.append(child)
+        created.set()
+        assert release.wait(2)
+        return child
+
+    def consume():
+        try:
+            list(source.frames())
+        except Exception as error:  # noqa: BLE001 - collect any reader-thread failure
+            errors.append(error)
+
+    def close():
+        closing.set()
+        source.close()
+
+    monkeypatch.setattr(transport.subprocess, 'Popen', delayed_start)
+    reader = threading.Thread(target=consume)
+    closer = threading.Thread(target=close)
+    reader.start()
+    try:
+        assert created.wait(2)
+        closer.start()
+        assert closing.wait(2)
+        release.set()
+        closer.join(2)
+        reader.join(2)
+        assert not reader.is_alive() and not closer.is_alive()
+        assert children[0].poll() is not None, 'A close/start race orphaned the helper'
+        assert errors == []
+    finally:
+        release.set()
+        source.close()
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+        reader.join(2)
+        if closer.ident is not None:
+            closer.join(2)
