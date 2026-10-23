@@ -1,5 +1,14 @@
 # Phase 1 — meeting capture and live transcript MVP (2026-10-22)
 
+**Current checkpoint (2026-10-23):** encrypted dual-track Brave recording,
+post-Stop local MOSS float16 + SDPA transcription, early language locking, saved
+reprocessing, and UX fixes are implemented. Microphone access is authorized and
+a short real Vietnamese recording has been captured; recognition quality is not
+accepted. The local suite passes 234 tests, including recorder disk/cleanup/blocked-Stop
+faults and a generated five-minute encrypted round-trip. Full M4 fault/physical acceptance,
+M5 recovery, M6 live transcription/speakers, M7 app coverage, and desktop packaging
+remain open. Earlier increment details below are historical snapshots.
+
 **Update:** an opt-in encrypted five-minute Brave call test is now connected.
 See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
 M2/M3 verification below describes those increments before this integration.

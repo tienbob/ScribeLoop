@@ -72,6 +72,7 @@ class RecordingRunner:
         frames = queue.Queue(maxsize=self.queue_size)
         outcome = []
         created_key = False
+        capture_failed = False
         samples = {'mic': 0, 'loopback': 0}
         try:
             # Keys and both writers must exist before even constructing a source.
@@ -133,8 +134,12 @@ class RecordingRunner:
                 writer.close()
             return samples
         except BaseException:
+            capture_failed = True
             for writer in writers.values():
-                writer.abort()
+                # One failed close must not leak the other track or mask the
+                # recording failure that triggered cleanup.
+                with contextlib.suppress(Exception):
+                    writer.abort()
             # A failed native run retains its authenticated encrypted prefix for
             # future recovery. A failure before source construction has no audio.
             if source is None and created_key:
@@ -144,11 +149,20 @@ class RecordingRunner:
             raise
         finally:
             abort.set()
-            if source is not None:
-                source.close()
-            if producer is not None:
-                producer.join(timeout=3)
-            self.source = None
+            try:
+                if source is not None:
+                    try:
+                        source.close()
+                    except Exception:
+                        if not capture_failed:
+                            raise
+                        log.warning('Native source cleanup also failed')
+            finally:
+                try:
+                    if producer is not None:
+                        producer.join(timeout=3)
+                finally:
+                    self.source = None
 
     async def _run(self, session_id, selection):
         loop = asyncio.get_running_loop()

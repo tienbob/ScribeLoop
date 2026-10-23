@@ -215,3 +215,113 @@ async def test_failed_reprocess_preserves_previous_transcript(setup):
     await asyncio.wait_for(runner.task,3)
     assert [r['text'] for r in store.segments(sid)]==['Original']
     assert any(e['type']=='recording_error' for e in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['write', 'footer', 'abort'])
+async def test_disk_failure_cleans_both_writers_and_source(setup, monkeypatch, failure):
+    store, audio, events, publish = setup
+    source = Source()
+    original = audio.writer
+    writers = []
+    aborted = []
+
+    def writer(sid, stream):
+        item = original(sid, stream)
+        writers.append(item)
+        original_abort = item.abort
+        def abort():
+            aborted.append(stream)
+            original_abort()
+            if failure == 'abort' and stream == 'mic':
+                raise OSError('cleanup failure')
+        item.abort = abort
+        if stream == 'mic':
+            def fail(*args):
+                raise OSError('disk full')
+            if failure == 'footer':
+                item.close = fail
+            else:
+                item.write = fail
+        return item
+
+    monkeypatch.setattr(audio, 'writer', writer)
+    def forbidden(*args):
+        raise AssertionError('Failed disk output must not be transcribed')
+    runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish,
+                             transcriber=forbidden, max_s=.04)
+    session = runner.start(None, {}, 'Disk fault', consent_confirmed=True)
+    await asyncio.wait_for(runner.task, 3)
+    assert store.get(session['id'])['status'] == 'failed'
+    assert runner.active_id is None and runner.source is None
+    assert source.closed
+    assert set(aborted) == {'mic', 'loopback'}
+    assert all(item.closed for item in writers)
+    assert any(e['type'] == 'recording_error' for e in events)
+
+
+@pytest.mark.asyncio
+async def test_blocked_stop_times_out_and_closes_native_reader(setup):
+    store, audio, events, publish = setup
+    source = Source()
+    def frames():
+        for stream in ('mic', 'loopback'):
+            yield AudioFrame(np.zeros(320, dtype=np.float32), stream, 0, 0)
+        source.stopped.wait(2)
+    source.frames = frames
+    source.request_stop = lambda: False  # Unresponsive graceful shutdown.
+    runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish,
+                             stop_timeout_s=.05)
+    session = runner.start(None, {}, 'Blocked Stop', consent_confirmed=True)
+    await wait_for(lambda: any(e.get('session', {}).get('status') == 'recording' for e in events))
+    runner.stop(session['id'])
+    await asyncio.wait_for(runner.task, 1)
+    assert source.closed and runner.source is None and runner.active_id is None
+    assert store.get(session['id'])['status'] == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_five_minute_encrypted_tracks_preserve_offset_and_samples(setup):
+    store, audio, _events, publish = setup
+    source = Source()
+    def frames():
+        # Accelerated recorder check, not a wall-clock or physical latency test.
+        for i in range(3000):
+            for stream, offset, level in (('loopback', 0, .02), ('mic', 150, .04)):
+                yield AudioFrame(np.full(1600, level, dtype=np.float32), stream,
+                                 i * 100 + offset, 0)
+            time.sleep(.0001)  # Keep normal queue bounds; don't test overflow here.
+    source.frames = frames
+    def verify(audio, sid, emit, cancelled):
+        for stream, offset, level in (('loopback', 0, .02), ('mic', 150, .04)):
+            count = 0
+            for index, frame in enumerate(audio.frames(sid, stream)):
+                assert frame.t_ms == index * 100 + offset
+                assert np.all(frame.pcm == np.float32(level))
+                count += frame.pcm.size
+            assert count == 300 * 16000
+    runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish,
+                             transcriber=verify)
+    session = runner.start(None, {}, 'Generated five minutes', consent_confirmed=True)
+    await asyncio.wait_for(runner.task, 15)
+    assert store.get(session['id'])['status'] == 'completed'
+    assert store.get(session['id'])['audio_duration_ms'] == 300000
+    assert source.closed and runner.active_id is None
+    assert len(list(audio.root.rglob('*.slpa'))) == 2
+
+
+@pytest.mark.asyncio
+async def test_source_close_failure_clears_reference_and_releases_slot(setup):
+    store, audio, _events, publish = setup
+    source = Source()
+    original_close = source.close
+    def close():
+        original_close()
+        raise OSError('Native cleanup error')
+    source.close = close
+    runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish, max_s=.02)
+    session = runner.start(None, {}, 'Cleanup failure', consent_confirmed=True)
+    await asyncio.wait_for(runner.task, 3)
+    assert runner.source is None and runner.active_id is None
+    assert source.closed
+    assert store.get(session['id'])['status'] == 'failed'

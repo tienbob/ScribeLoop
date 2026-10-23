@@ -217,3 +217,36 @@ independent encrypted stream writers, authenticated consent/Record/Stop, persist
 stream metadata, and post-Stop local transcript notes. This is ready for a short
 physical routing test once OS microphone permission is enabled. Full M4 acceptance
 is still pending; M5 recovery/catch-up and M6 production attribution remain open.
+
+
+### M4 hardening increment — 2026-10-23 (implemented)
+
+The local Brave test already delivered encrypted dual-track capture and post-Stop
+MOSS transcription; automatic early language locking and UX fixes are implemented.
+Earlier milestone descriptions are historical, not current permission/model state.
+Next close the recorder fault-test gaps: disk write/footer failure, blocked Stop,
+cleanup failures, and a generated five-minute encrypted round-trip with distinct
+tracks and a known start offset. Ensure every writer and native source receives
+cleanup even when another cleanup action raises; preserve the original failure.
+Run the native generated transport check separately. These generated checks do
+not establish physical clock drift, real Teams/Slack routing, or ASR accuracy.
+M4 stays open until those physical acceptance checks are evidenced; M5 follows.
+
+
+Result: cleanup now attempts both writer aborts independently, always joins the
+native reader and clears its source reference, and preserves an existing capture
+failure if source cleanup also fails. A source-close failure after otherwise
+successful capture remains a visible failure and never starts transcription.
+Six added regressions cover write/footer/abort failure, unresponsive graceful
+Stop, source-close failure, and a five-minute encrypted dual-track round-trip.
+The round-trip is accelerated and uses generated PCM; no devices or ASR open.
+
+Validation: **234 Python tests passed**, frontend regressions and 50-module import
+smoke passed, and changed Python files passed Ruff. The native generated helper
+produced 4,800,000 samples per track, a 150 ms initial offset, and 0.4375 ms offset
+change over five minutes. Local aggregate report:
+`data/native/m4-generated-transport.json` (generated signals; not physical drift).
+No real recording was started. Next gate is a consented controlled physical test
+of both tracks and their timing, then remaining device/storage fault acceptance.
+M5 authenticated-prefix recovery/checkpointing remains the next implementation
+milestone; current strict readers intentionally reject incomplete files.
