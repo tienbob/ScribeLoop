@@ -56,6 +56,11 @@ checks free of heavy speech runtimes; exercise encryption and vectors in a Linux
 CI job with required native dependencies. Check the current branch's CI after
 pushing fixes to its existing PR. Preserve open physical/quality gates and carry
 the local live-window prototype into the Phase 2 plan, not the shipped feature list.
+Windows diagnostic follow-up: the test body reaches 100% with failures, but error
+reporting does not finish. Temporarily stop at the first failure with a short
+traceback and save Windows output as a CI artifact; restore the full suite after
+repairing the first concrete platform error.
+
 Linux/macOS now pass remotely. Windows stalls despite per-test timeout coverage;
 add a whole-session faulthandler watchdog to cover collection/executor shutdown
 and expose its blocking stack rather than waiting for the runner job limit.
