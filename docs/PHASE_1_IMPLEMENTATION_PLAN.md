@@ -47,6 +47,17 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Audit follow-up: validate provider completion before advancing the saved audio
+checkpoint. A graceful close must not discard provisional words or acknowledge
+audio beyond the provider's reported processed duration. Add offline fault tests
+for both cases and retain normal silence-only completion.
+
+Completed: final metadata now checks the processed duration, and outstanding
+provisional speech blocks the final checkpoint advance. Three offline regressions
+cover unfinished speech, truncated processing and successful silence completion.
+Verification: 302 Python tests, five frontend regression groups, 57 module imports,
+changed-file Ruff and `git diff --check` passed. No provider credits were used.
+
 1. Remove the obsolete mandatory public-WAV argument from encrypted cloud startup;
    keep a fixture required only for explicit public replay mode.
 2. Run the Python/frontend/import/package checks and reconcile current docs.

@@ -159,7 +159,8 @@ def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, l
         with config.connector(url,additional_headers={'Authorization':'Token '+config.api_key},
                 open_timeout=10,close_timeout=2,max_size=1_000_000,proxy=None) as ws:
             closing = None
-            metadata = False
+            processed_ms = None
+            provisional_end = None
             refresh = 0
             while not cancelled.is_set():
                 if closing is None and time.monotonic() >= refresh:
@@ -189,19 +190,27 @@ def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, l
                 except TimeoutError:
                     continue
                 except ConnectionClosedOK:
-                    if closing is None or not metadata:
+                    if closing is None or processed_ms is None or processed_ms < sent:
                         raise DeepgramError('Stream ended before completion') from None
+                    if provisional_end is not None and provisional_end > confirmed:
+                        raise DeepgramError('Stream ended with unconfirmed transcript; resume saved audio') from None
+                    # Metadata may acknowledge trailing silence, but must never
+                    # turn outstanding provisional speech into a saved checkpoint.
                     emit({'type':'confirmed_window','stream':stream,'segments':[],'end_ms':sent})
                     return
                 event = json.loads(raw)
                 if event.get('type') == 'Error':
                     raise DeepgramError('Provider rejected streaming audio; no retry was made')
                 if event.get('type') == 'Metadata':
-                    metadata = True
+                    duration = event.get('duration')
+                    if isinstance(duration,(int,float)) and not isinstance(duration,bool) and np.isfinite(duration) and duration >= 0:
+                        processed_ms = base+round(duration*1000)
                 if event.get('type') != 'Results':
                     continue
                 alt = event['channel']['alternatives'][0]
                 if not event.get('is_final'):
+                    if alt.get('transcript','').strip():
+                        provisional_end = base+round((event['start']+event['duration'])*1000)
                     emit({'type':'partial','stream':stream,'segment':{'text':alt.get('transcript','')}})
                     continue
                 end = base+round((event['start']+event['duration'])*1000)

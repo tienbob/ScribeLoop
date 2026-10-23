@@ -63,6 +63,45 @@ def event(words):
     return {'channel':{'alternatives':[{'transcript':'one two three','words':words}]}}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', ['provisional', 'short_duration', 'silence'])
+async def test_graceful_close_only_confirms_processed_audio_without_pending_words(state, fault):
+    store,audio,_events,publish = state
+
+    class IncompleteSocket(Socket):
+        def recv(self, timeout):
+            if self.sent_ms > self.reported:
+                self.reported = self.sent_ms
+                return json.dumps({'type':'Results','is_final':False,'start':0,
+                    'duration':self.sent_ms/1000,'channel':{'alternatives':[
+                        {'transcript':'unfinished words' if fault == 'provisional' else ''}]}})
+            if self.closed:
+                if not self.metadata:
+                    self.metadata = True
+                    return json.dumps({'type':'Metadata',
+                        'duration':0 if fault == 'short_duration' else self.sent_ms/1000})
+                raise ConnectionClosedOK(None,None)
+            time.sleep(.01)
+            raise TimeoutError
+
+    source = ControlledSource()
+    runner = DeepgramRecordingRunner(store,audio,lambda *a,**k:source,publish,
+        config=DeepgramConfig(api_key='hidden-test-key',connector=lambda *a,**k:IncompleteSocket()))
+    sid = runner.start(None,{'cloud_consent':True,'language':'en'},'Close fault',
+        consent_confirmed=True)['id']
+    await wait_for(lambda:store.cloud_usage(sid)['requests'] >= 2)
+    runner.stop(sid)
+    await runner.task
+    checkpoints = store.checkpoints(sid)
+    assert list(audio.frames(sid,'mic')), 'Original audio remains available'
+    if fault == 'silence':
+        assert all(c['confirmed_ms'] == 12150 for c in checkpoints.values())
+        assert store.get(sid)['status'] == 'completed'
+    else:
+        assert all(c['confirmed_ms'] == 0 for c in checkpoints.values())
+        assert store.get(sid)['status'] != 'completed'
+
+
 def test_word_speakers_split_and_missing_identity_stays_unknown():
     rows = speaker_rows(event([
         {'word':'one','start':0,'end':.1,'speaker':0},

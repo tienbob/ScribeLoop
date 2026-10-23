@@ -35,7 +35,7 @@ running; no automatic paid retry or alternative backend is started.
 
 ## Verification
 
-- **299 Python tests passed**, frontend regression groups passed, and 57 application
+- **302 Python tests passed**, frontend regression groups passed, and 57 application
   modules passed lightweight import smoke without loading local speech models.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
