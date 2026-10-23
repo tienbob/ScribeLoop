@@ -50,6 +50,22 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Local live feasibility experiment: benchmark bounded overlapping MOSS Q6_K windows
+against existing public English meeting audio, with timing and normalized WER.
+Check repeated/missing boundary words and speaker-ID consistency across independent
+generations. Keep cloud disabled and the app's proven after-Stop default unchanged
+until the experiment establishes a usable live strategy. Do not replay private
+recordings or equate faster-than-real-time batch inference with native streaming.
+
+Experiment completed: resident 5-second overlapping windows decode in 0.526 s
+median / 0.949 s maximum, with 17.39% WER after rejecting an invalid initial
+silence response. Whole-minute WER is 13.77%. Raw speaker IDs reset between short
+windows, so they cannot become persistent person labels. Full-prefix decoding at
+five minutes takes 31.664 s and cannot sustain a five-second cadence. Keep the app
+default unchanged; a future live path needs bounded context, a resident worker,
+boundary validation and speaker continuity. Reports and reproduction instructions
+are in [Local MOSS](LOCAL_MOSS.md). No capture or cloud API was used.
+
 Demo connection change: the development CLI opens the local web UI without a
 launch key by default, as requested. Keep loopback binding, exact same-origin
 browser/Host validation and explicit capture/upload consent. Retain token auth

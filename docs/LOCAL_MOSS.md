@@ -88,3 +88,58 @@ Offline regressions cover model routing, local capture-before-inference, speaker
 persistence, language/setup rejection, authenticated tracks, atomic provider
 replacement, no provider mixing, large PCM transfer and cancellation. UI tests
 cover location labels, model-specific language choices and separate cloud consent.
+
+## Live-window experiment, 2026-10-23
+
+Public AMI, first 60 seconds of the pinned fixture; fixed English; native Metal
+backend `MTL0` on this development Mac. The experiment keeps one native model and
+session resident, unlike the current one-shot app worker. No capture device or
+cloud service was used. Times below are measured decode times; arrival/backlog
+times in the detailed report are simulated, not app end-to-end measurements.
+
+| Strategy | WER after invalid-timestamp rejection | Median decode | Slowest decode |
+| --- | ---: | ---: | ---: |
+| Entire 60-second clip | 13.77% (19/138) | 3.694 s | 3.694 s |
+| 5-second updates, 2-second left overlap | 17.39% (24/138) | 0.526 s | 0.949 s |
+| 10-second updates, 2-second left overlap | 18.12% (25/138) | 0.649 s | 1.295 s |
+| Growing prefix every 10 seconds | 13.77% final (19/138) | 2.021 s | 3.674 s |
+
+Peak process RSS for this complete 60-second comparison was **711.5 MiB**, not a
+VRAM measurement. The initial 5-second window contained no reference speech and
+produced hallucinated refusal text with timestamps at 5–6 seconds, beyond its
+input. Matching the app's timing validation rejects that response. Including it
+raises the raw stitched WER to **24.64% (34/138)**. Rejection can withhold bad text;
+it does not prove that valid-timestamp speech is hallucination-free.
+
+Speaker continuity is a separate blocker. In both short-window strategies,
+raw speaker ID 1 initially aligned with AMI speaker D and then speaker A. These
+are reference-word/segment overlap votes, not a DER score. Reusing raw speaker
+IDs as persistent person labels would merge different people. Growing prefixes
+showed no dominant-reference ID switches in this minute, but that is not general
+speaker-quality acceptance.
+
+One separate **five-minute** whole-clip pass completed in **31.664 seconds**,
+WER **20.42% (156/764)**, peak process RSS **1868.6 MiB**. This confirms that full
+prefix regeneration will outgrow a five-second update budget at the existing
+development limit. It does not predict bounded rolling-window latency.
+
+Conclusion: local chunked text updates are computationally feasible. A live app
+path still needs a resident, cancellable worker; validated boundary stitching;
+silence/invalid-response handling; and speaker continuity across windows. The
+current after-Stop mode remains unchanged so this experiment does not weaken
+speaker separation or add an automatic second transcription pass.
+
+Reproduce the bounded local experiment (requires the installed runtime):
+
+```bash
+.venv/bin/python scripts/benchmark_moss_live.py --seconds 60
+.venv/bin/python scripts/benchmark_moss_live.py --seconds 300 --strategies whole \
+  --output data/phase1/moss-live-scaling-300
+# Reanalyze cached results without GPU inference:
+.venv/bin/python scripts/benchmark_moss_live.py --seconds 60 --rescore
+```
+
+Detailed outputs, including per-window text, timings, rejected responses and raw
+speaker-ID/reference votes, are in ignored `data/phase1/moss-live-trial/results.md`
+and `results.json`. The scaling result is under
+`data/phase1/moss-live-scaling-300/`. No private recording was replayed.
