@@ -15,8 +15,9 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator, TypeVar
+from typing import TypeVar
 
 log = logging.getLogger(__name__)
 
@@ -93,13 +94,13 @@ class SummaryUpdated(Event):
 class _Subscription:
     """Async iterator over one subscriber's queue; unsubscribe on aclose()."""
 
-    def __init__(self, queue: asyncio.Queue, bus: "EventBus", event_type: type) -> None:
+    def __init__(self, queue: asyncio.Queue, bus: EventBus, event_type: type) -> None:
         self._queue = queue
         self._bus = bus
         self._event_type = event_type
         self._closed = False
 
-    def __aiter__(self) -> "_Subscription":
+    def __aiter__(self) -> _Subscription:
         return self
 
     async def __anext__(self) -> Event:

@@ -9,7 +9,6 @@ it as data, never as user intent.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -60,8 +59,7 @@ class LLMClient:
         text = raw.strip()
         if text.startswith("```"):
             text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
+            text = text.removeprefix("json")
         try:
             return Summary.model_validate_json(text)
         except Exception as e:
@@ -71,5 +69,5 @@ class LLMClient:
         try:
             self._client.models.list()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 - health probe treats any client failure as unhealthy
             return False

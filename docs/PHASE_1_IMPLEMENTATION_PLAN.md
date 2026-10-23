@@ -47,6 +47,17 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Cleanup scope: reconcile historical cloud/local-ASR wording, index current versus
+historical documentation, apply mechanical lint fixes, and remove disposable
+build/test caches. Preserve runtime data, credentials, model files and optional
+evaluation tools; no transcription behavior changes are planned.
+
+Cleanup completed: current/historical documentation is indexed, contradictory
+Groq-default text and obsolete local-ASR TODO claims are corrected, and mechanical
+lint fixes are applied. All 302 Python tests, five frontend regression groups,
+57 module imports and repository-wide Ruff pass. Disposable build/test/Python
+caches were removed after verification; runtime and evaluation data are retained.
+
 Audit follow-up: validate provider completion before advancing the saved audio
 checkpoint. A graceful close must not discard provisional words or acknowledge
 audio beyond the provider's reported processed duration. Add offline fault tests

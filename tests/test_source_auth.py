@@ -1,7 +1,6 @@
 """Capture source tests (source.py) — WAV replay + auth helpers."""
 import numpy as np
 import soundfile as sf
-
 from scribeloop_core.api.auth import check_first_message, host_allowed, new_token
 from scribeloop_core.capture.source import (
     FRAME_MS,

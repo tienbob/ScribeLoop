@@ -2,7 +2,7 @@
 
 > **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
 
-**Current decision:** Groq Turbo is integrated as the default after user acceptance of public Vietnamese samples. See [completed checkpoint and measured limits](PHASE_1_CLOSEOUT.md). Provider investigation below records earlier options, not the current integration plan.
+**Historical decision:** Groq Turbo was integrated after user acceptance of public Vietnamese samples, then replaced by Deepgram streaming. See [current checkpoint and measured limits](PHASE_1_CLOSEOUT.md). Provider investigation below records earlier options, not the current integration plan; quoted prices are historical observations.
 
 User requested a low-cost cloud solution because local MOSS/community-1 inference
 is too heavy for the development machine. Heavy local runs were stopped. This

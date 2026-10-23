@@ -6,15 +6,14 @@ Contract: a backend consumes ``AudioFrame`` objects and emits
 
 Phase 0a bake-off participants (§8 0a):
 - ``ChunkedFasterWhisper`` — faster-whisper (CTranslate2; CPU/CUDA; CPU-only
-  on macOS — no Metal backend), chunked decode. LocalAgreement confirmation
-  policy is the Phase 0a TODO below.
+  on macOS — no Metal backend), chunked decode. Retained for offline evaluation;
+  the default meeting path uses Deepgram streaming.
 - sherpa-onnx streaming Zipformer — natively streaming (optional dep).
 - whisper.cpp / Moonshine — measured from a macOS/Linux host or separate
   harness (whisper.cpp is a C++ build; Moonshine is a separate extra).
 
-Lag-cap policy (§2.3) applies at the *pipeline* level, not here: the runner
-downshifts model size (Whisper family) or pauses and defers to the offline
-pass (native streaming), with upshift hysteresis.
+The architecture's local-model lag/downshift policy remains a future design;
+these evaluation adapters do not implement automatic model switching.
 """
 from __future__ import annotations
 
@@ -53,9 +52,8 @@ class ChunkedFasterWhisper(StreamingASR):
     """Chunked-decode baseline for the bake-off.
 
     Buffers frames and transcribes when the buffer reaches ``chunk_s`` (or on
-    ``flush``). Emits only ``is_final=True`` text at this stage — the
-    LocalAgreement partial/confirm policy (consecutive decodes must agree
-    before text is confirmed) is the Phase 0a TODO that makes this live-usable.
+    ``flush``). Emits only ``is_final=True`` text. This offline baseline does
+    not implement LocalAgreement partial/confirm behavior.
     """
 
     name = "faster-whisper"

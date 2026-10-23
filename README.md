@@ -23,6 +23,7 @@ Deepgram Nova-3 streaming with anonymous speaker labels is the default meeting b
 without local ML packages, configure `DEEPGRAM_API_KEY` in the ignored `.env`, and
 restart the server. New and saved audio each require explicit cloud consent.
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
+The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 
 ```bash
 uv pip install -e ".[dev,security,sqlcipher]"
