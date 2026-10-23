@@ -220,3 +220,47 @@ exclusive attempt marker and deliberately refuses repeat runs against that outpu
 there is no automatic reset, retry, or paid fallback. Intended full audio duration
 was 16.4375 seconds; the full-trial nominal estimate of $0.000548 is not actual
 usage/billing for this rejected attempt. Key and upstream error body were omitted.
+
+## Bounded Deepgram English streaming plan — 2026-10-23
+
+User clarified English is the primary language and configured DEEPGRAM_API_KEY.
+Before changing the app backend, run one 20-second, real-time paced public AMI
+ES2004a mixed-headset excerpt (300–320 seconds). Verify the existing 300–600-second
+fixture SHA-256 and select the matching timestamped reference words. Use Nova-3,
+English, 16 kHz mono linear16, 100 ms frames, interim results, 300 ms endpointing,
+and speaker diarization v1. One connection, no retries, 45-second wall timeout,
+exclusive attempt marker, and sanitized failures protect limited trial credits.
+Persist final-only WER plus first interim/final timings and inspectable three-column
+HTML. This does not switch production, capture devices or upload private audio.
+Reference: [Live Audio](https://developers.deepgram.com/reference/speech-to-text/listen-streaming),
+[CloseStream](https://developers.deepgram.com/docs/close-stream).
+
+### Deepgram streaming result — completed, one request
+
+Nova-3 English processed all 20 seconds of public AMI audio with zero retries.
+Handshake took 0.787 s. First provisional text arrived 7.553 s from connection
+attempt / 6.766 s after audio streaming began. The first annotated reference word
+starts at audio time 6.38 s, so the observed first-text delay after that word's
+onset was **0.386 s**. This is a first-word observation, not a p50 latency result.
+First confirmed text arrived 11.627 s from connection attempt. Audio transmission
+ended at 20.789 s; final processing completed at 21.426 s (**0.637 s tail**).
+
+Final text: “A kind of dog? Yep. It's actually sitting. So sorry? It's sitting.
+It's not standing. I see”. WER was **23.08% (6 errors / 26 normalized reference
+words)**. The reference contains repetitions/fillers and overlapping speakers;
+this tiny excerpt is not a representative accuracy benchmark and cannot be
+compared directly with the earlier 300-second Groq/MOSS scores. Speaker labels
+were requested but their correctness was not scored. No app backend switch or
+private recording was made.
+
+Inspect `data/phase1/deepgram-streaming-inspection/results.html` for the requested
+sound-file / transcript / WER columns, embedded audio, reference and measurements;
+`results.json` retains interim/final events and timestamps. The one-request
+nominal base-rate estimate was $0.00161 using the previously checked $0.29/hour
+rate, not actual charges or confirmation of remaining trial credit. The script
+uses an exclusive attempt marker and refuses repeat calls. Offline fixtures check
+interim/final accumulation and failure handling; lint/preflight pass.
+
+Next: a separately authorized larger English sample can evaluate accuracy and
+word-latency distribution before deciding whether to integrate Deepgram as the
+streaming app backend. The production default remains Groq Turbo.
