@@ -15,6 +15,10 @@ that scope to `MacOSMicrophoneSource` and the helper's existing `--microphone-on
 mode. No SCK session is opened. Readiness requires only mic frames; an empty,
 authenticated output container preserves saved-format compatibility. Cloud uses
 one live connection; Local MOSS runs the saved mic after Stop.
+Encrypted storage tolerates up to 1 ms of apparent overlap caused by integer-ms
+rounding of continuous 170/171-sample resampler packets. Native nanosecond clock
+validation is unchanged; larger stored overlaps are rejected. Capture failures
+retain sanitized diagnostic codes instead of exposing native stderr or secrets.
 
 [M3 audit and fixes](NATIVE_CAPTURE_AUDIT.md) cover lifecycle races, resampling,
 stream deadlines, metadata refresh, and source-selection regressions.

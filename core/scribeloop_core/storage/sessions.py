@@ -100,6 +100,9 @@ class SessionStore:
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
             session['transcript_provider'] = json.loads(provider[0])['provider'] if provider else capture.get('provider')
+            failure = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='recording_failure' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            session['failure'] = json.loads(failure[0]) if failure else None
             audio = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
                 'ORDER BY id DESC LIMIT 1', (session['id'],)).fetchone()
@@ -213,6 +216,11 @@ class SessionStore:
         row = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='language_locked' "
             'ORDER BY id DESC LIMIT 1', (session_id,)).fetchone()
         return json.loads(row['payload_json']) if row else None
+
+    def record_failure(self,session_id,diagnostic):
+        with self.conn:
+            self.conn.execute('INSERT INTO events(ts,session_id,level,type,payload_json) VALUES(?,?,?,?,?)',
+                (self._now(),session_id,'warning','recording_failure',json.dumps(diagnostic)))
 
     def record_audio_duration(self, session_id, samples):
         duration = round(max(samples.values(), default=0) * 1000 / 16000)

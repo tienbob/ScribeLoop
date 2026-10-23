@@ -13,6 +13,7 @@ import threading
 import time
 
 from ..storage.db import DATABASE_ERRORS
+from .failures import failure_diagnostic
 from .language import LanguageDetectionError
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ class RecordingRunner:
         live = asyncio.create_task(self._process(session_id, live=True, finalize=False)) if self.use_live else None
         diar = asyncio.create_task(self._diarize(session_id)) if self.use_live and self.diarizer is not False else None
         reported_live_error = False
+        stage = 'capture'
         try:
             while not capture.done():
                 await asyncio.wait({capture, ready_wait}, timeout=.1,
@@ -221,6 +223,7 @@ class RecordingRunner:
                     stopping = True
                     await self._state(session_id, 'stopping')
             samples = await capture
+            stage = 'transcription'
             persist_progress()
             self.store.record_audio_duration(session_id, samples)
             self.capture_done.set()
@@ -241,13 +244,14 @@ class RecordingRunner:
             with contextlib.suppress(Exception):
                 await capture
             log.warning('Meeting recording/processing failed (%s)', type(exc).__name__)
+            diagnostic = failure_diagnostic(exc,stage)
             with contextlib.suppress(*DATABASE_ERRORS):
+                self.store.record_failure(session_id,diagnostic)
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
+                'diagnostic':diagnostic,
                 'message': ('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
-                           if isinstance(exc, LanguageDetectionError) else 'Recording or transcription failed. Check microphone/Screen Recording '
-                           'permission, running source, disk space, provider configuration and network. '
-                           'Local saved audio remains encrypted; no automatic provider fallback was used.')})
+                           if isinstance(exc, LanguageDetectionError) else diagnostic['message'])})
         finally:
             self.cancel_processing.set()
             self.capture_done.set()
@@ -285,12 +289,15 @@ class RecordingRunner:
             await self._process(session_id, replace=True)
         except Exception as exc:  # noqa: BLE001 - retain original transcript on model/storage failure
             log.warning('Meeting reprocessing failed (%s)', type(exc).__name__)
+            diagnostic = failure_diagnostic(exc,'transcription')
             with contextlib.suppress(*DATABASE_ERRORS):
+                self.store.record_failure(session_id,diagnostic)
                 await self._state(session_id, 'failed')
             await self.publish({'type':'recording_error', 'session_id':session_id,
+                'diagnostic':diagnostic,
                 'message':('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
                            if isinstance(exc, LanguageDetectionError) else
-                           'Transcription failed. Previous transcript and encrypted audio retained; check provider, network or quota.')})
+                           diagnostic['message']+' Previous transcript retained.')})
 
     async def _process(self, session_id, *, replace=False, live=False, finalize=True):
         # Bounded output queue keeps transcript persistence on the DB thread.
@@ -454,7 +461,9 @@ class RecordingRunner:
     async def _recover_saved(self, session_id):
         try:
             await self._state(session_id,'processing')
-            report = await asyncio.to_thread(self.audio.recover_session,session_id)
+            session = self.store.get(session_id)
+            streams = ('mic',) if session.get('capture',{}).get('scope') == 'microphone' else ('mic','loopback')
+            report = await asyncio.to_thread(self.audio.recover_session,session_id,streams=streams)
             self.store.set_audio_paths(session_id,self.audio)
             self.store.recovery_report(session_id,report)
             self.store.record_audio_duration(session_id,{s:r['samples'] for s,r in report.items()})

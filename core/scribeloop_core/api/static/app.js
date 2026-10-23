@@ -350,6 +350,7 @@ function render() {
   const progress=liveProgress.get(selectedId);
   text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'local_batch' ? 'Local MOSS · processing saved audio' : progress.mode === 'catching_up' ? 'Catching up' : progress.mode === 'streaming' ? 'Streaming' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
   if (session?.recovery) text('session-progress','Recovered / interrupted audio. Only authenticated complete frames were retained; missing tail duration is unknown. Capture was not restarted.');
+  if (session?.status === 'failed' && session.failure) text('session-progress',`${session.failure.message} [${session.failure.code}]`);
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   const emptyMessage = !replayAvailable ? 'Storage is unavailable. Reconnect or restart the local server.' :
     session?.status === 'processing' ? 'Audio capture stopped. Transcribing the remaining audio batches…' :

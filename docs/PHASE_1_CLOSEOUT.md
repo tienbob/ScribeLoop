@@ -37,7 +37,7 @@ running; no automatic paid retry or alternative backend is started.
 
 ## Verification
 
-- **316 Python tests passed**, seven frontend regression groups passed, and 60 application
+- **321 Python tests passed**, seven frontend regression groups passed, and 61 application
   modules passed lightweight import smoke without loading local speech models.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
@@ -52,6 +52,11 @@ running; no automatic paid retry or alternative backend is started.
   before Stop, local after-Stop processing, empty output-container saved Resume,
   source-consent UI and rejection of unexpected output frames. No private mic audio
   was recorded and no provider credits were used for these checks.
+- A real failed mic-only prefix (timing/count metadata only) revealed fractional
+  resampler packets consistent with a reproduced 0.5 ms rounding rejection.
+  Writer/reader now allow the 1 ms integer-timestamp bound. Regressions verify
+  valid 170/171-sample sequences, rejection of real 2 ms overlaps, mic-only recovery
+  and persisted safe error diagnostics. Physical retry remains user-driven.
 - The package builds with current backend/UI assets and no credentials or audio.
 - Native generated-signal checks previously delivered two 4,800,000-sample tracks
   with a preserved 150 ms offset and approximately 0.44 ms offset change over five

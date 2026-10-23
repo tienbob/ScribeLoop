@@ -50,6 +50,27 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Failure investigation: the latest three local mic-only sessions failed during
+capture before a recording-complete event or model invocation. Persist sanitized
+failure diagnostics and expose actionable native capture errors without leaking
+transcript, audio or credentials. Fix recovery to accept an intentionally empty
+output track only for explicit microphone scope. Do not restart capture or upload
+saved audio during investigation; physical failure reproduction requires a user retry.
+
+Concrete finding: the latest authenticated prefix contains 170/171-sample mic
+frames at 84/95 ms. Rounding continuous 16 kHz packets to integer milliseconds
+can produce up to nearly 1 ms of apparent overlap (e.g. the next packet at 105 ms
+versus the previous rounded end at 105.6875 ms). The encrypted writer/reader's
+0.5 ms threshold rejects this valid sequence. Use a documented 1 ms quantization
+tolerance in both, preserve actual clock checks, and test larger overlaps still fail.
+
+Fixed: encrypted writer/reader accept the 1 ms rounding bound; the synthetic
+84/95/105 ms sequence round-trips all 300 packets, while 2 ms overlaps still fail.
+Mic-only recovery accepts its intentionally empty output container and preserves
+strict dual-track recovery. Capture failures now persist allowlisted stage/code/
+message diagnostics for reconnect, without raw exception text. No new recording,
+audio upload, provider retry or permission change was performed during diagnosis.
+
 Microphone-only change: expose an explicit Microphone only source in the recording
 UI and API. Use the existing mic-only native helper mode, never open an output
 capture session or require Screen Recording permission for that scope. Encrypted

@@ -30,6 +30,34 @@ def write_sample(path, key):
         writer.write(frame(1000))  # Recorder gap is preserved, not silently closed.
 
 
+def test_fractional_mic_packets_survive_integer_timestamp_rounding(tmp_path):
+    from scribeloop_core.capture.clock import SessionClock
+
+    key=secrets.token_bytes(32)
+    path=tmp_path/'mic.slpa'
+    samples=0
+    timings=[]
+    clock=SessionClock(0)
+    with EncryptedAudioWriter(path,SID,'mic',key) as writer:
+        for count in [170,171,171]*100:
+            t=clock.milliseconds(84_100_000+samples*1_000_000_000//16000)
+            writer.write(AudioFrame(np.zeros(count,dtype='float32'),'mic',t,0))
+            timings.append(t)
+            samples+=count
+    assert timings[:3]==[84,95,105], 'Third valid packet used to fail after 341 samples'
+    restored=list(read_audio(path,SID,'mic',key))
+    assert [f.t_ms for f in restored]==timings
+    assert sum(len(f.pcm) for f in restored)==samples
+
+
+def test_real_timestamp_overlap_still_fails(tmp_path):
+    key=secrets.token_bytes(32)
+    with EncryptedAudioWriter(tmp_path/'mic.slpa',SID,'mic',key) as writer:
+        writer.write(AudioFrame(np.zeros(160,dtype='float32'),'mic',0,0))
+        with pytest.raises(ValueError,match='timestamp'):
+            writer.write(AudioFrame(np.zeros(160,dtype='float32'),'mic',8,0))
+
+
 def test_round_trip_preserves_pcm_stream_and_timestamps_without_raw_file(tmp_path):
     key = secrets.token_bytes(32)
     path = tmp_path/'loopback.slpa'

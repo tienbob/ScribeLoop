@@ -361,3 +361,5 @@ assert.match(transcriptLine(0),/Microphone.*Live microphone words/);
 assert.match(get('active-scope').textContent,/Microphone only/);
 assert.equal(get('stop').disabled,false);
 console.log('Microphone-only source, live transcript and upload consent passed');
+liveEvent({type:'session',session:{id:'mic',source:'meeting',title:'Mic',status:'failed',started_at:Date.now(),failure:{code:'capture_clock_discontinuity',stage:'capture',message:'Native audio timestamps jumped.'}}});
+assert.match(get('session-progress').textContent,/Native audio timestamps jumped.*capture_clock_discontinuity/);

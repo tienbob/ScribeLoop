@@ -25,6 +25,9 @@ FRAME = struct.Struct('<QI')
 FOOTER = struct.Struct('<QQd')
 MAX_SAMPLES = SAMPLE_RATE
 MAX_CIPHERTEXT = FRAME.size + MAX_SAMPLES * 4 + 16
+# Native packets are continuous in nanoseconds, but SLPA timestamps are rounded
+# integer milliseconds. Adjacent rounding errors can differ by almost 1 ms.
+TIMESTAMP_ROUNDING_MS = 1
 
 
 class AudioIntegrityError(ValueError):
@@ -107,7 +110,7 @@ class EncryptedAudioWriter:
         if (frame.stream != self.stream or pcm.ndim != 1 or not 0 < pcm.size <= MAX_SAMPLES
                 or pcm.dtype != np.dtype(np.float32) or not np.isfinite(pcm).all()
                 or not isinstance(frame.t_ms, (int, np.integer)) or isinstance(frame.t_ms, bool)
-                or not 0 <= frame.t_ms <= 2**63 - 1 or frame.t_ms < self.last_end - .5):
+                or not 0 <= frame.t_ms <= 2**63 - 1 or frame.t_ms < self.last_end - TIMESTAMP_ROUNDING_MS):
             raise ValueError('Invalid PCM frame or recorder timestamp')
         self._record(0, FRAME.pack(frame.t_ms, pcm.size) + pcm.astype('<f4').tobytes())
         self.samples += pcm.size
@@ -207,7 +210,7 @@ def read_audio(path: Path, session_id: str, stream: str, key: bytes, *, _prefix=
             if not 0 < count <= MAX_SAMPLES or len(plaintext) != FRAME.size + count * 4:
                 raise AudioIntegrityError('Invalid encrypted PCM frame size')
             pcm = np.frombuffer(plaintext[FRAME.size:], dtype='<f4').astype(np.float32)
-            if not np.isfinite(pcm).all() or t_ms > 2**63 - 1 or t_ms < last_end - .5:
+            if not np.isfinite(pcm).all() or t_ms > 2**63 - 1 or t_ms < last_end - TIMESTAMP_ROUNDING_MS:
                 raise AudioIntegrityError('Invalid encrypted PCM samples or timestamps')
             samples += count
             last_end = t_ms + count * 1000 / SAMPLE_RATE
@@ -272,7 +275,7 @@ class SessionAudioStore:
                 os.fsync(source.fileno())
         return frames, report
 
-    def recover_session(self, session_id):
+    def recover_session(self, session_id, *, streams=('mic','loopback')):
         """Explicit idle-session operation. Originals remain unchanged.
 
         Authenticate both tracks before changing either selected path. Each new
@@ -281,9 +284,14 @@ class SessionAudioStore:
         are checked again and the remaining original is recovered on the retry.
         """
         from uuid import uuid4
+        streams = tuple(streams)
+        if streams not in {('mic',),('mic','loopback')}:
+            raise ValueError('Invalid recovery stream selection')
         snapshots = {stream:self.prefix(session_id, stream, original=True) for stream in ('mic','loopback')}
-        if any(not frames for frames, _ in snapshots.values()):
+        if any(not snapshots[stream][0] for stream in streams):
             raise AudioIntegrityError('No authenticated audio in a selected stream')
+        if streams == ('mic',) and snapshots['loopback'][0]:
+            raise AudioIntegrityError('Unexpected output audio in a microphone-only recording')
         staged = []
         try:
             for stream, (frames, report) in snapshots.items():

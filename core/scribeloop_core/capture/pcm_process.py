@@ -71,7 +71,7 @@ class PCMProcessSource:
             if not chunk:
                 if allow_eof and not data:
                     return b''
-                raise RuntimeError('Truncated native audio packet')
+                raise RuntimeError('Truncated native audio packet: '+self._diagnostic())
             data.extend(chunk)
         return bytes(data)
 

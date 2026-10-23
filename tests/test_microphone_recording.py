@@ -147,3 +147,57 @@ def test_api_mic_only_streams_before_stop_with_one_connection(tmp_path):
                 break
         else:
             pytest.fail('Mic recording did not complete')
+
+
+@pytest.mark.asyncio
+async def test_mic_only_recovery_accepts_intentionally_empty_output(state):
+    import numpy as np
+    from scribeloop_core.capture.source import AudioFrame
+    from scribeloop_core.storage.audio import AudioIntegrityError
+
+    store,audio,_,publish=state
+    sid=store.create_recording('Interrupted mic',{'scope':'microphone','provider':'local-moss'})['id']
+    audio.create_session(sid)
+    for stream in ('mic','loopback'):
+        writer=audio.writer(sid,stream)
+        if stream=='mic':
+            writer.write(AudioFrame(np.zeros(1600,dtype='float32'),'mic',0,0))
+        writer.abort()
+    store.transition(sid,'failed')
+    with pytest.raises(AudioIntegrityError):
+        audio.recover_session(sid)  # Dual-track recovery must still require both tracks.
+    runner=ModelRecordingRunner(store,audio,None,publish)
+    runner.recover_saved(sid)
+    await runner.task
+    assert store.get(sid)['status']=='interrupted'
+    assert len(list(audio.frames(sid,'mic')))==1
+    assert list(audio.frames(sid,'loopback'))==[]
+
+
+@pytest.mark.asyncio
+async def test_sanitized_native_failure_is_saved_without_secret_exception_text(state):
+    import numpy as np
+    from scribeloop_core.capture.source import AudioFrame
+    from scribeloop_core.pipeline.recording import RecordingRunner
+
+    store,audio,events,publish=state
+    class BrokenMic(MicSource):
+        def frames(self):
+            yield AudioFrame(np.zeros(170,dtype='float32'),'mic',84,0)
+            raise RuntimeError('Native capture ended: Audio clock discontinuity or drift exceeded 2 ms; secret-api-key')
+    runner=RecordingRunner(store,audio,lambda *a,**k:BrokenMic(),publish,transcriber=lambda *a:None)
+    sid=runner.start(CaptureSelection(scope='microphone',microphone_device_id='default'),
+        {'scope':'microphone'},'Failure',consent_confirmed=True)['id']
+    await runner.task
+    failure=store.get(sid)['failure']
+    assert failure['code']=='capture_clock_discontinuity' and failure['stage']=='capture'
+    assert 'secret-api-key' not in str(failure)
+    assert any(e['type']=='recording_error' and e['diagnostic']==failure for e in events)
+
+
+def test_unknown_failure_diagnostic_never_exposes_arbitrary_text():
+    from scribeloop_core.pipeline.failures import failure_diagnostic
+
+    diagnostic=failure_diagnostic(RuntimeError('secret recording transcript token=abc'),'capture')
+    assert diagnostic['code']=='capture_failed'
+    assert 'secret' not in str(diagnostic) and 'token=abc' not in str(diagnostic)
