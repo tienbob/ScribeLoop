@@ -50,6 +50,22 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Microphone-only change: expose an explicit Microphone only source in the recording
+UI and API. Use the existing mic-only native helper mode, never open an output
+capture session or require Screen Recording permission for that scope. Encrypted
+capture must become ready from mic frames alone; retain an empty authenticated
+output container for saved-format compatibility. Deepgram streams the mic live
+using one connection; Local MOSS processes it after Stop. Preserve participant
+and cloud consent, Stop, model selection, speaker labels and saved actions. Add
+offline coverage without recording private microphone audio or using API credits.
+
+Completed: microphone-only is selectable in UI/API and routed to the existing
+native mic helper. Readiness/failure checks respect selected streams; unexpected
+output frames fail closed. Empty output tracks create no cloud connection or
+local inference. Offline API/lifecycle tests prove live mic text before Stop,
+single connection, speakers, saved Resume, local after-Stop behavior and consent.
+Verification: 316 Python tests, seven frontend groups, Ruff and import smoke.
+
 Model selection change: add explicit Cloud · Deepgram Nova-3 (live) and Local ·
 MOSS Q6_K (after recording) choices. Each operation uses exactly one backend;
 local execution never uploads or falls back to cloud. Preserve encrypted capture,

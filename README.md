@@ -25,6 +25,9 @@ restart the server. New and saved audio each require explicit cloud consent.
 The model selector also offers **Local · MOSS Q6_K — after recording**: English/
 Chinese transcription and anonymous speakers without cloud upload. See
 [local setup and limitations](docs/LOCAL_MOSS.md). Deepgram remains the live default.
+Choose **Microphone only** under Recording source for live mic transcription with
+Deepgram, or after-Stop mic transcription with Local MOSS. No app audio or Screen
+Recording permission is needed for that scope.
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 

@@ -52,7 +52,7 @@ class SelectSource(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['select_source']
     request_id: int = Field(gt=0)
-    scope: Literal['application', 'system']
+    scope: Literal['application', 'system', 'microphone']
     app_id: str | None = Field(default=None, min_length=1, max_length=256)
     microphone_id: str = Field(min_length=1, max_length=256)
     candidate_id: str | None = Field(default=None, min_length=1, max_length=600)

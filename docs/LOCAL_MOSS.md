@@ -11,6 +11,8 @@ Deepgram is still the default. Each operation uses one selected backend. A local
 failure retains encrypted audio and never invokes a cloud provider. Neither
 backend isolates overlapping voices into separate audio files. Model speaker IDs
 are anonymous, scoped to a track and generation, and do not establish real names.
+The **Microphone only** recording source works with either backend. Cloud provides
+live mic text; Local MOSS processes it after Stop, with no output capture or upload.
 
 ## Setup
 

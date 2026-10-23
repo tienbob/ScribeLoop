@@ -90,6 +90,10 @@ class MacOSMeetingAudioSource:
             raise OSError('Native meeting capture requires macOS')
         if not isinstance(selection, CaptureSelection):
             raise TypeError('An explicit validated capture selection is required')
+        if selection.scope == 'microphone':
+            self._source = MacOSMicrophoneSource(selection.microphone_device_id,
+                consent_confirmed=True,helper_path=helper_path,timeout_s=timeout_s)
+            return
         helper = Path(helper_path or 'data/native/scribeloop-meeting').resolve()
         if not helper.is_file():
             raise FileNotFoundError('Build the meeting capture helper first')

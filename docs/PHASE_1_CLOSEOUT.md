@@ -14,7 +14,7 @@ uploading audio. Older PyTorch MOSS and Groq experiments are historical diagnost
 | Area | Current implementation |
 | --- | --- |
 | Discovery | Metadata-only app activity observer, candidate state machine, dismissal/debounce, manual source fallback; detection never starts recording |
-| Capture | Selected app/system output and separate microphone, native macOS helper, shared-clock timestamps, resampling and bounded transport |
+| Capture | Explicit microphone-only or app/system output + microphone, native macOS helper, shared-clock timestamps, resampling and bounded transport; mic-only needs no output capture/Screen Recording permission |
 | Recorder | SLPA authenticated encrypted tracks, SQLCipher metadata, native key store, storage before capture, recorder-independent inference and Stop/drain |
 | Recovery | Authenticated-prefix recovery into fresh encrypted containers; durable per-track checkpoints; explicit saved resume/reprocess; key-aware deletion and retention cleanup |
 | Transcription | Explicit Cloud · Deepgram Nova-3 (live, default) or Local · MOSS Q6_K (after Stop); one selected backend, no automatic provider fallback/retry/final second pass |
@@ -37,7 +37,7 @@ running; no automatic paid retry or alternative backend is started.
 
 ## Verification
 
-- **310 Python tests passed**, six frontend regression groups passed, and 60 application
+- **316 Python tests passed**, seven frontend regression groups passed, and 60 application
   modules passed lightweight import smoke without loading local speech models.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
@@ -48,6 +48,10 @@ running; no automatic paid retry or alternative backend is started.
   large PCM transfer and cancellation. A real 20-second local public-audio worker
   smoke test completed in 2.08 seconds with six timed rows and two speaker IDs;
   this does not establish quality or full-meeting speed.
+- Mic-only regressions cover native helper routing, single-connection cloud text
+  before Stop, local after-Stop processing, empty output-container saved Resume,
+  source-consent UI and rejection of unexpected output frames. No private mic audio
+  was recorded and no provider credits were used for these checks.
 - The package builds with current backend/UI assets and no credentials or audio.
 - Native generated-signal checks previously delivered two 4,800,000-sample tracks
   with a preserved 150 ms offset and approximately 0.44 ms offset change over five

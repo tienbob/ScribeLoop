@@ -84,6 +84,7 @@ class RecordingRunner:
         created_key = False
         capture_failed = False
         samples = {'mic': 0, 'loopback': 0}
+        selected_streams = ('mic',) if getattr(selection,'scope',None) == 'microphone' else tuple(samples)
         synced = dict(samples)
         try:
             # Keys and both writers must exist before even constructing a source.
@@ -132,19 +133,21 @@ class RecordingRunner:
                     frame = frames.get(timeout=.05)
                 except queue.Empty:
                     continue
+                if frame.stream not in selected_streams:
+                    raise ValueError('Audio arrived outside the selected capture scope')
                 writers[frame.stream].write(frame)
                 samples[frame.stream] += frame.pcm.size
                 if checkpoint and samples[frame.stream]-synced[frame.stream] >= 32000:
                     writers[frame.stream].checkpoint()
                     synced[frame.stream] = samples[frame.stream]
                     checkpoint(frame.stream,round(writers[frame.stream].last_end))
-                if not announced and all(samples.values()):
+                if not announced and all(samples[stream] for stream in selected_streams):
                     announced = True
                     ready()
             producer.join()
             if outcome:
                 raise outcome[0]
-            if not all(samples.values()) and not self.stop_requested.is_set():
+            if not all(samples[stream] for stream in selected_streams) and not self.stop_requested.is_set():
                 raise RuntimeError('A selected capture stream produced no audio')
             for stream, writer in writers.items():
                 writer.close()

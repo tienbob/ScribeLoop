@@ -140,10 +140,11 @@ class DiscoveryService:
     async def select(self, *, scope, app_id, microphone_id, candidate_id=None):
         async with self._lock:
             # Re-read installed identities, not just client-supplied app/bundle IDs.
-            try:
-                await self._load_apps()
-            except Exception:  # noqa: BLE001 - sanitize installation-provider failures
-                raise ValueError('Cannot verify selected installation') from None
+            if scope != 'microphone':
+                try:
+                    await self._load_apps()
+                except Exception:  # noqa: BLE001 - sanitize installation-provider failures
+                    raise ValueError('Cannot verify selected installation') from None
             await self._load_devices()
             await self._broadcast()
             microphone = next((row for row in self._devices.microphones if row.id == microphone_id), None)
@@ -152,8 +153,8 @@ class DiscoveryService:
             app = next((app for app in self._apps if app.app_id == app_id), None)
             if scope == 'application' and app is None:
                 raise ValueError('App is not available')
-            if scope == 'system' and (app_id is not None or candidate_id is not None):
-                raise ValueError('System scope cannot select an app suggestion')
+            if scope in {'system','microphone'} and (app_id is not None or candidate_id is not None):
+                raise ValueError('System/microphone scope cannot select an app suggestion')
             if candidate_id is not None:
                 candidate = next((row for row in self.snapshot()['candidates']
                                   if row['id'] == candidate_id), None)
@@ -163,7 +164,8 @@ class DiscoveryService:
                 scope=scope, bundle_ids=(app.app_id,) if scope == 'application' else (),
                 microphone_device_id=microphone_id)
             return {'scope': selection.scope, 'app_id': app_id,
-                    'name': app.name if app else 'All system audio', 'kind':app.kind if app else None,
+                    'name': 'Microphone only' if scope == 'microphone' else app.name if app else 'All system audio',
+                    'kind':app.kind if app else None,
                     'microphone_id': microphone_id, 'candidate_id': candidate_id,
                     'microphone_name': microphone.name if microphone else 'System default microphone',
                     'recording_enabled': False}

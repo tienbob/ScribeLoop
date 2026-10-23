@@ -4,6 +4,24 @@ Updated 2026-10-23. This test remains deferred until the user is ready for a rea
 meeting. The app does not automatically start a recording or upload saved audio.
 See [launch instructions and acceptance matrix](PHASE_1_CLOSEOUT.md).
 
+## Microphone-only recording
+
+For a voice note or in-room conversation, select **Microphone only · no app audio**
+under Recording source, choose the microphone, then Confirm source. No meeting
+app needs to be running. This scope uses microphone permission only; it does not
+open app/system audio capture or require Screen Recording permission.
+
+Choose **Cloud · Deepgram Nova-3 — live**, confirm permission to record and the
+separate microphone upload consent, then **Record microphone**. Text and speaker
+labels appear while recording; Stop finalizes the encrypted audio. For
+**Local · MOSS Q6_K — after recording**, no upload consent is needed and the
+transcript appears after Stop. The five-minute development limit still applies.
+The microphone records all voices it can hear, including loudspeaker playback;
+this is not acoustic isolation. Saved recovery, Resume and Transcribe again work
+with this scope, preserving the selected model's behavior.
+
+## Teams in Brave, with app audio and microphone
+
 1. Start the encrypted server and open its fresh launch URL. No public WAV is
    required for the cloud app. If the database is in use, stop the older server
    before restarting; do not delete lock files or start a second owner.

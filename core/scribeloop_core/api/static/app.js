@@ -46,6 +46,7 @@ function renderSpeakers(session,rows) {
 function text(id, value) { if ($(id).textContent !== value) $(id).textContent = value; }
 function scopeDescription(source) {
   if (!source?.scope) return 'Capture scope unavailable';
+  if (source.scope === 'microphone') return 'Microphone only · no app or system audio';
   if (source.scope === 'system') return 'All system audio · all apps';
   const kind = source.kind || discovery.apps.find(app=>app.id === source.app_id)?.kind;
   return kind === 'browser' ? `All tabs in ${source.name}` : `All audio from ${source.name || 'the selected app'}`;
@@ -69,8 +70,8 @@ function chooseSource(candidate = null) {
   const value = $('meeting-source').value;
   if (busy() || !value || !authenticated || !$('meeting-microphone').value || pendingSource !== null) return;
   const command = {action:'select_source', request_id:++sourceRequest,
-    scope:value === 'system' ? 'system' : 'application',
-    app_id:value === 'system' ? null : value.slice(4),
+    scope:value === 'microphone' ? 'microphone' : value === 'system' ? 'system' : 'application',
+    app_id:['system','microphone'].includes(value) ? null : value.slice(4),
     microphone_id:$('meeting-microphone').value,
     candidate_id:candidate?.id || null};
   if (send(command)) {
@@ -91,11 +92,12 @@ function updateDiscovery(value) {
   if (appsState !== renderedApps) {
     renderedApps = appsState;
     $('meeting-source').replaceChildren();
-    option($('meeting-source'),'','Choose an app or audio scope');
+    option($('meeting-source'),'','Choose a recording source');
+    option($('meeting-source'),'microphone','Microphone only · no app audio');
     discovery.apps.forEach(app => option($('meeting-source'),`app:${app.id}`,app.name + (app.kind === 'browser' ? ' · all browser audio' : '') + (app.running === false ? ' · not running' : '')));
     option($('meeting-source'),'system','All system audio · includes other apps');
   }
-  const validSource = oldSource === 'system' || discovery.apps.some(app => `app:${app.id}` === oldSource);
+  const validSource = ['system','microphone'].includes(oldSource) || discovery.apps.some(app => `app:${app.id}` === oldSource);
   $('meeting-source').value = validSource ? oldSource : '';
   if (microphonesState !== renderedMicrophones) {
     renderedMicrophones = microphonesState;
@@ -136,11 +138,12 @@ function renderDiscovery() {
     !chosenSource ? 'Choose an audio source and microphone, then press Confirm source.' :
     !$('record-consent').checked ? 'Confirm participant permission above to enable Record.' :
     transcription.cloud && !$('cloud-consent').checked ? `Confirm sending this meeting audio to ${providerName()} before Record.` :
+    chosenSource?.scope === 'microphone' ? 'Ready. Press Record microphone to capture your selected mic.' :
     'Ready. Start your call, then press Record meeting.';
   $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
     !$('record-consent').checked || !transcription.configured || (transcription.cloud && !$('cloud-consent').checked) || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
   text('record-help',reason);
-  text('record-meeting',recordPending ? 'Preparing…' : 'Record meeting ↗');
+  text('record-meeting',recordPending ? 'Preparing…' : chosenSource?.scope === 'microphone' ? 'Record microphone ↗' : 'Record meeting ↗');
   $('recording-bar').hidden = authenticated && !activeId && !processing && !recordPending;
   text('recording-state', !authenticated ? connecting ? 'Connecting…' : activeId || processing ? 'Connection lost · recording status unverified' : 'Disconnected · reconnect to restore your notebook' :
     active ? (active.source === 'meeting' ? active.status.toUpperCase() : 'REPLAYING PUBLIC AUDIO') :
@@ -171,12 +174,12 @@ function renderDiscovery() {
   $('record-consent').disabled = !authenticated || locked;
   $('cloud-consent-row').hidden = !transcription.cloud;
   $('cloud-consent').disabled = !authenticated || locked;
-  text('cloud-consent-copy',`Send this meeting’s microphone and selected app audio to ${providerName()} for cloud transcription.`);
+  text('cloud-consent-copy',chosenSource?.scope === 'microphone' ? `Send only this microphone recording to ${providerName()} for live cloud transcription.` : `Send this meeting’s microphone and selected app audio to ${providerName()} for cloud transcription.`);
   text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${providerName()} for this transcription/resume request.`);
   text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
-  text('scope-warning', chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
+  text('scope-warning', chosenSource?.scope === 'microphone' ? `Only ${chosenSource.microphone_name || 'the selected microphone'} will be captured. No app/system audio or Screen Recording permission is needed. Cloud processes speech live; Local MOSS transcribes after Stop.` : chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
     'Confirm a source to see exactly what will be captured.');
   const statuses = {
     available:'Watching app audio activity. Suggestions may also be media playback or microphone tests.',

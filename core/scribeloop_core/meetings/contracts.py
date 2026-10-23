@@ -52,7 +52,7 @@ class MeetingCandidate(MetadataModel):
 class CaptureSelection(MetadataModel):
     """Explicit scope; an empty app selection never means whole-system."""
 
-    scope: Literal['application', 'system']
+    scope: Literal['application', 'system', 'microphone']
     bundle_ids: tuple[str, ...] = ()
     microphone_device_id: str = Field(min_length=1, max_length=256)
 
@@ -61,7 +61,7 @@ class CaptureSelection(MetadataModel):
         if not self.microphone_device_id.strip() or self.microphone_device_id.startswith('-'):
             raise ValueError('Microphone selection must not be blank')
         if (self.scope == 'application') != bool(self.bundle_ids):
-            raise ValueError('Application scope requires bundles; system scope forbids them')
+            raise ValueError('Application scope requires bundles; system/microphone scopes forbid them')
         if any(not item.strip() or item.startswith('-') for item in self.bundle_ids):
             raise ValueError('Invalid bundle identifier')
         if len(set(self.bundle_ids)) != len(self.bundle_ids):

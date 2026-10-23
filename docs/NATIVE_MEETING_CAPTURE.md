@@ -10,6 +10,11 @@ resampling, bounded writes, and graceful drain. **Generated-signal checks pass;
 physical capture/alignment and real Teams/Slack routing remain unverified.**
 The encrypted development API now accepts explicit consented Record/Stop for
 five-minute tests; see the current test instructions above.
+The UI/API also expose **Microphone only**. `MacOSMeetingAudioSource` dispatches
+that scope to `MacOSMicrophoneSource` and the helper's existing `--microphone-only`
+mode. No SCK session is opened. Readiness requires only mic frames; an empty,
+authenticated output container preserves saved-format compatibility. Cloud uses
+one live connection; Local MOSS runs the saved mic after Stop.
 
 [M3 audit and fixes](NATIVE_CAPTURE_AUDIT.md) cover lifecycle races, resampling,
 stream deadlines, metadata refresh, and source-selection regressions.
@@ -38,7 +43,7 @@ Device listing does not prove the device works or grant recording consent.
 
 ## Native source behavior
 
-- `MacOSMeetingAudioSource` requires a validated explicit app/system scope,
+- `MacOSMeetingAudioSource` requires a validated explicit app/system/microphone scope,
   microphone ID, and strict consent before constructing a capture command.
   Iterating its frames starts one helper with independent loopback/mic tracks.
 - `MacOSMicrophoneSource` supports mic-only capture without SCK/display access.
