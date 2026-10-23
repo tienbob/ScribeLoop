@@ -2,8 +2,10 @@
 
 Updated 2026-10-23. This replaces the superseded local-MOSS and Groq plans;
 previous decisions remain in Git history and the provider evaluation documents.
-The current backend is **Deepgram Nova-3 streaming with v1 diarization**. Each
-meeting uses one provider, with no automatic fallback or final second pass.
+The default backend is **Deepgram Nova-3 streaming with v1 diarization**. The
+explicit **Local · MOSS Q6_K** option runs after Stop, without uploading audio.
+Each operation uses one selected backend, with no automatic fallback or final
+second pass. See [local model setup and limits](LOCAL_MOSS.md).
 
 ## Development scope
 
@@ -26,7 +28,8 @@ app-coverage requirements stay required and visibly open below.
 
 - Capture selected app output and microphone into separate encrypted tracks;
   browser scope includes every tab in that browser. Detection never records.
-- Stream each source to the same Deepgram provider. Keep Stop available during
+- Cloud streams each source to the same Deepgram provider; Local MOSS processes
+  authenticated saved tracks sequentially after Stop. Keep Stop available during
   processing; provider failure preserves otherwise healthy encrypted recording.
 - Persist only confirmed text. Speaker identity, rows and checkpoints commit
   together. Labels are anonymous and scoped to a connection/source; new connections
@@ -46,6 +49,23 @@ app-coverage requirements stay required and visibly open below.
   retains the prior transcript until the replacement succeeds.
 
 ## Finalization work authorized by “finish phase 1”
+
+Model selection change: add explicit Cloud · Deepgram Nova-3 (live) and Local ·
+MOSS Q6_K (after recording) choices. Each operation uses exactly one backend;
+local execution never uploads or falls back to cloud. Preserve encrypted capture,
+source-scoped anonymous speakers, consent, Stop and saved replacement semantics.
+MOSS uses pinned transcribe.cpp bindings in an isolated worker and a verified GGUF; availability
+and English/Chinese language limits must be visible before recording. Install and
+validate the runtime against public audio without consuming provider credits.
+
+Completed: the UI/API selects one backend for new or saved audio, keeps cloud
+consent separate, scopes speaker IDs to each track/generation and rejects mixed
+provider Resume. Local saved replacements are atomic. Q6_K is downloaded and
+hash-verified; the pinned runtime is built. Public 20-second worker and encrypted
+pipeline checks succeeded (2.08 s and 5.686 s respectively), with no cloud requests.
+Verification: 310 Python tests, six frontend groups, 60 lightweight imports,
+repository Ruff, diff checks and wheel-content inspection. Real-call/quality
+acceptance remains open. See [setup and measured limitations](LOCAL_MOSS.md).
 
 Cleanup scope: reconcile historical cloud/local-ASR wording, index current versus
 historical documentation, apply mechanical lint fixes, and remove disposable

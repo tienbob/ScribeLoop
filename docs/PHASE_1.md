@@ -4,6 +4,9 @@ Updated 2026-10-23. The macOS development scope is finalized: confirmed native
 sources feed encrypted capture, Deepgram streaming and anonymous speaker labels,
 with Auto/fixed languages, history/notes, recovery and explicit saved actions.
 Each meeting uses one provider with no automatic alternative or second pass.
+The explicit [Local MOSS Q6_K option](LOCAL_MOSS.md) added afterward runs English/
+Chinese transcription and speaker labels after Stop. The UI labels processing
+location and timing; Deepgram remains the live default.
 
 The [authoritative closeout](PHASE_1_CLOSEOUT.md) contains verified results,
 current launch instructions, the support matrix and later real-call checklist.

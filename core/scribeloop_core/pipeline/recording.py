@@ -1,7 +1,7 @@
 """Opt-in five-minute encrypted recording with independent transcription workers.
 
 Native reads and disk writes have a bounded queue; inference never blocks capture
-Stop. The app supplies a single cloud streaming/diarization profile. Local models are explicit diagnostics.
+Stop. The selected backend owns transcription; capture never switches providers.
 """
 from __future__ import annotations
 
@@ -367,7 +367,7 @@ class RecordingRunner:
         else:
             if replace:
                 self.store.revise_transcript(session_id, replacement,
-                    provider=self.cloud.public()['provider'] if hasattr(self,'cloud') else None)
+                    provider=self.cloud.public()['provider'] if hasattr(self,'cloud') else getattr(self,'provider',None))
                 await self.publish({'type':'transcript_replaced', 'session_id':session_id,
                                     'segments':self.store.segments(session_id)})
             await self._finish(session_id)

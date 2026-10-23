@@ -50,7 +50,7 @@ class SessionStore:
         if key is None:
             return None
         import re
-        if not re.fullmatch(r'deepgram:[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
+        if not re.fullmatch(r'(deepgram|moss):[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
             raise ValueError('Invalid speaker identity scope')
         identity = session_id+':'+key
         existing = self.conn.execute('SELECT id FROM session_speakers WHERE id=?',(identity,)).fetchone()
@@ -96,7 +96,10 @@ class SessionStore:
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'provider','model','cloud_consent','cloud_budget_usd','language')}
+                'provider','model','engine','cloud_consent','cloud_budget_usd','language')}
+            provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            session['transcript_provider'] = json.loads(provider[0])['provider'] if provider else capture.get('provider')
             audio = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
                 'ORDER BY id DESC LIMIT 1', (session['id'],)).fetchone()

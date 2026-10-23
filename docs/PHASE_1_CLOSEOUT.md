@@ -5,8 +5,9 @@ signed off.** Real-meeting testing and signing remain deferred as previously
 requested by the user. The original quality, physical and app-coverage requirements
 remain required; the checklist below records them without treating deferral as a pass.
 
-This is the authoritative current status. Local MOSS and Groq experiments are
-historical diagnostics; neither is the default meeting backend.
+This is the authoritative current status. Deepgram remains the default. A later
+explicit [Local MOSS Q6_K option](LOCAL_MOSS.md) now transcribes after Stop without
+uploading audio. Older PyTorch MOSS and Groq experiments are historical diagnostics.
 
 ## Delivered
 
@@ -16,9 +17,10 @@ historical diagnostics; neither is the default meeting backend.
 | Capture | Selected app/system output and separate microphone, native macOS helper, shared-clock timestamps, resampling and bounded transport |
 | Recorder | SLPA authenticated encrypted tracks, SQLCipher metadata, native key store, storage before capture, recorder-independent inference and Stop/drain |
 | Recovery | Authenticated-prefix recovery into fresh encrypted containers; durable per-track checkpoints; explicit saved resume/reprocess; key-aware deletion and retention cleanup |
-| Transcription | Deepgram Nova-3 streaming, provisional text and confirmed rows; one provider per meeting, no automatic fallback/retry/final second pass |
+| Transcription | Explicit Cloud · Deepgram Nova-3 (live, default) or Local · MOSS Q6_K (after Stop); one selected backend, no automatic provider fallback/retry/final second pass |
 | Speakers | Word-level v1 diarization; speaker-change rows, durable anonymous person labels, source-aware roster/badges, notes/history restoration; unknown attribution stays unknown |
 | Languages | Auto multilingual default for en/es/fr/de/hi/ru/pt/ja/it/nl; eleven fixed choices including Vietnamese. Returned word language is retained. No ineffective language-hint control or false first-language-lock claim |
+| Local model | Pinned, verified 768 MB Q6_K GGUF and transcribe.cpp native worker; Auto/fixed English or Chinese, sequential tracks, cancellation/timeout, no plaintext audio files |
 | Cloud controls | Backend-only key, separate new/saved upload consent, durable ten-second audio reservations before upload, estimated $0.15/80-reservation cap shared across saved actions and both tracks |
 | Local API/UI | Loopback token authentication, strict origin/host checks and CSP, visible recording/scope/Stop, timestamped transcript and transcript excerpt notes |
 | Launch | Encrypted cloud mode starts without an old public WAV fixture. Explicit public-demo mode still requires an authorized fixture |
@@ -35,12 +37,17 @@ running; no automatic paid retry or alternative backend is started.
 
 ## Verification
 
-- **302 Python tests passed**, frontend regression groups passed, and 57 application
+- **310 Python tests passed**, six frontend regression groups passed, and 60 application
   modules passed lightweight import smoke without loading local speech models.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
   speaker persistence/reconnect/notes, automatic language routing, language changes
   without new person identities, saved actions and deletion/retention.
+- Local/cloud routing additionally covers setup/language guards, no cloud use in
+  local mode, speaker persistence, provider replacement, no mixed-provider Resume,
+  large PCM transfer and cancellation. A real 20-second local public-audio worker
+  smoke test completed in 2.08 seconds with six timed rows and two speaker IDs;
+  this does not establish quality or full-meeting speed.
 - The package builds with current backend/UI assets and no credentials or audio.
 - Native generated-signal checks previously delivered two 4,800,000-sample tracks
   with a preserved 150 ms offset and approximately 0.44 ms offset change over five

@@ -64,6 +64,7 @@ class StartRecording(SelectSource):
     language: LanguageChoice = 'auto'
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
+    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
 
     @field_validator('title')
     @classmethod
@@ -80,6 +81,7 @@ class ReprocessRecording(BaseModel):
     cloud_consent: bool = False
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
+    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
 
 
 class SavedMeeting(BaseModel):
@@ -89,6 +91,7 @@ class SavedMeeting(BaseModel):
     language: LanguageChoice = 'auto'
     confirmed: bool = False
     cloud_consent: bool = False
+    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
 
 
 class RetentionRequest(BaseModel):
@@ -157,13 +160,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.recording = None
             if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
                 from ..capture.macos_client import MacOSMeetingAudioSource
-                from ..pipeline.deepgram_meeting import DeepgramRecordingRunner
+                from ..pipeline.model_selection import ModelRecordingRunner
                 from ..storage.audio import SessionAudioStore
                 from ..storage.keys import NativeKeyStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           key_store if key_store is not None else NativeKeyStore())
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
-                    if recording_factory else DeepgramRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,config=cloud_config))
+                    if recording_factory else ModelRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,cloud_config=cloud_config))
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             try:
                 await app.state.discovery.start()
@@ -243,6 +246,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     (app.state.recording.active_id if app.state.recording else None),
                 'recording_available': app.state.recording is not None,
                 'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
+                'transcription_models': app.state.recording.profiles() if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
                 'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
                 'replay_available': not app.state.runner.unavailable,
                 'replay_enabled': explicit_replay_backend or not hasattr(app.state.recording,'cloud'), 'storage': app.state.storage,
@@ -299,6 +303,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             request = ReprocessRecording.model_validate(command)
                             if not app.state.recording or app.state.runner.active_id:
                                 raise ValueError('Local reprocessing is unavailable')
+                            if hasattr(app.state.recording,'select_model'):
+                                app.state.recording.select_model(request.model)
                             app.state.recording.reprocess(request.session_id, language=request.language,
                                 **({'cloud_consent':request.cloud_consent} if hasattr(app.state.recording,'cloud') else {}))
                         elif command.get('action') in {'recover','resume','delete'}:
@@ -309,6 +315,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if request.action == 'recover':
                                 recorder.recover_saved(request.session_id)
                             elif request.action == 'resume':
+                                if hasattr(recorder,'select_model'):
+                                    recorder.select_model(request.model)
                                 recorder.resume(request.session_id, language=request.language,
                                     **({'cloud_consent':request.cloud_consent} if hasattr(recorder,'cloud') else {}))
                             else:
@@ -342,8 +350,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 microphone_device_id=request.microphone_id)
                             if app.state.runner.active_id:
                                 raise ValueError('A replay is active')
+                            if hasattr(recorder,'select_model'):
+                                recorder.select_model(request.model)
                             source = {**source,'language':request.language,'cloud_consent':request.cloud_consent,
-                                      'asr_engine':recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
+                                      'asr_engine':request.model if hasattr(recorder,'select_model') else recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
                             await publish({'type': 'session', 'session': session})

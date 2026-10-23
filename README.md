@@ -22,6 +22,9 @@ scribeloop/
 Deepgram Nova-3 streaming with anonymous speaker labels is the default meeting backend. Install core/security dependencies
 without local ML packages, configure `DEEPGRAM_API_KEY` in the ignored `.env`, and
 restart the server. New and saved audio each require explicit cloud consent.
+The model selector also offers **Local · MOSS Q6_K — after recording**: English/
+Chinese transcription and anonymous speakers without cloud upload. See
+[local setup and limitations](docs/LOCAL_MOSS.md). Deepgram remains the live default.
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 
@@ -29,8 +32,9 @@ The [documentation index](docs/README.md) separates current instructions from hi
 uv pip install -e ".[dev,security,sqlcipher]"
 ```
 
-The optional `local-asr`, `diar`, `sherpa` and isolated MOSS runtimes are for
-explicit local experiments. They are not required or started by cloud meetings.
+The optional `local-asr`, `diar` and `sherpa` extras are for historical evaluations.
+The new Q6_K option uses transcribe.cpp and does not require PyTorch. Local speech
+models are not loaded by cloud meetings.
 
 ## Optional local evaluation setup
 
@@ -88,7 +92,7 @@ Development work is closed for now. Results and deferred release criteria are tr
 - [x] Five-minute development default: ES2004a 300–600 s, float16 + SDPA
 - [ ] Complete multi-meeting corpus, codec variants, live-latency baselines, and target sign-off
 
-Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
+Historical five-minute PyTorch MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 **82.93 s processing**. These are exploratory results from one meeting, not release
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.

@@ -10,7 +10,7 @@ See [launch instructions and acceptance matrix](PHASE_1_CLOSEOUT.md).
 2. Start a consented short Teams call in Brave. Choose/confirm Brave and the
    intended microphone in ScribeLoop. Browser scope includes every Brave tab;
    use headphones and close unrelated audio tabs.
-3. Keep Auto for its ten supported languages, or choose a fixed language. Select
+3. Select **Cloud · Deepgram Nova-3 — live**. Keep Auto for its ten supported languages, or choose a fixed language. Select
    Tiếng Việt for Vietnamese. Auto follows supported language changes; it does
    not apply hints or lock the first language.
 4. Confirm participant permission and the separate Deepgram upload consent,

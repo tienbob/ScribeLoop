@@ -55,7 +55,8 @@ class DeepgramConfig:
     def public(self):
         return {'provider':self.provider, 'model':self.model, 'cloud':True,
             'configured':bool(self.api_key), 'speaker_labels':True, 'streaming':True,
-            'languages':LANGUAGE_NAMES, 'default_language':'auto', 'auto_language':True,
+            'languages':{'auto':'Auto · multilingual',**{k:v for k,v in LANGUAGE_NAMES.items() if k in LANGUAGE_CHOICES}},
+            'default_language':'auto', 'auto_language':True,
             'auto_languages':list(AUTO_LANGUAGES), 'language_hints':False,
             'budget_usd':self.budget_usd, 'max_requests':self.max_requests,
             'nominal_usd_per_audio_hour':self.rate, 'updates':'streaming provisional and confirmed text'}

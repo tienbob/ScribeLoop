@@ -7,6 +7,7 @@ launch commands, verification and remaining acceptance gates.
 
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
 - [Deepgram streaming and speaker labels](DEEPGRAM_STREAMING.md)
+- [Local MOSS Q6_K setup and model selection](LOCAL_MOSS.md)
 - [Browser call test](BROWSER_CALL_TEST.md)
 - [Meeting capture requirements](MEETING_CAPTURE.md)
 - [Native meeting capture](NATIVE_MEETING_CAPTURE.md)

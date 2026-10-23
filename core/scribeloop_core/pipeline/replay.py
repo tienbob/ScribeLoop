@@ -29,7 +29,7 @@ class ReplayChunk(BaseModel):
     is_final: bool = Field(strict=True)
     language: str | None = Field(default=None, max_length=64)
     confidence: float | None = None
-    speaker_key: str | None = Field(default=None, pattern=r"^deepgram:[0-9a-f]{32}:(mic|loopback):[0-9]{1,4}$")
+    speaker_key: str | None = Field(default=None, pattern=r"^(deepgram|moss):[0-9a-f]{32}:(mic|loopback):[0-9]{1,4}$")
 
     @model_validator(mode='after')
     def valid(self):
