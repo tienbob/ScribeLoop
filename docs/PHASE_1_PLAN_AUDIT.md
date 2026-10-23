@@ -1,5 +1,7 @@
 # Codebase audit against revised Phase 1 plan
 
+> Historical pre-implementation audit. Most missing macOS components below are now implemented; these old line numbers/verdicts are not current status. See the [final implementation/support matrix](PHASE_1_CLOSEOUT.md). Physical, speaker-quality, real-app and Linux gaps remain explicitly open.
+
 Audit date: **2026-10-22**. Baseline: commit `6d55a7b` and
 [meeting capture requirements](MEETING_CAPTURE.md). Static code inspection plus
 existing automated tests; no new recording, app permission request, real call,

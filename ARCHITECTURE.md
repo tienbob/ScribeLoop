@@ -354,13 +354,7 @@ CREATE TABLE events (
 
 ## 8. Phased roadmap
 
-**Phase 1 replay milestone audited (2026-10-22; full MVP still open):** public WAV replay → cached Whisper chunked ASR →
-confirmed SQLite segments → authenticated browser transcript UI is implemented.
-SQLCipher/native-keystore storage and authenticated encrypted-audio primitives
-are implemented ([details](docs/SECURE_STORAGE.md)); real recordings remain disabled
-until the recorder is connected to that lifecycle. VAD/LocalAgreement,
-speaker attribution, native recorder integration, and full resume remain pending.
-See [Phase 1 progress](docs/PHASE_1.md).
+**Phase 1 macOS development closed (2026-10-23):** selected output + microphone feed encrypted recording, Deepgram streaming and anonymous person labels, Auto/fixed languages, history/notes and explicit recovery/resume/deletion. One provider per meeting, no automatic fallback or final second pass. Encrypted startup no longer needs replay assets. Full MVP/quality acceptance remains open: real calls were deferred, speaker quality and representative WER/latency are not signed off, physical/app coverage is unverified, Linux is not delivered, and packaged desktop/signing remain deferred. See [authoritative closeout](docs/PHASE_1_CLOSEOUT.md). Earlier replay/local-model increments are historical.
 
 **2026-10-22 local-development handoff:** native ScreenCaptureKit fallback compiles,
 framed transport and health diagnostics are implemented, and 62 tests pass. Basic

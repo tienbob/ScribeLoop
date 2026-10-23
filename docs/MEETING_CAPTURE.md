@@ -1,10 +1,11 @@
 # Automatic meeting detection and audio capture
 
 Requirement recorded **2026-10-22**, before implementation changes. Status:
-**partially implemented**: a metadata-only observer and candidate state machine
-exist, with authenticated candidate/dismissal UI and manual source selection
-([implementation and limits](MEETING_DETECTION.md)). Validated active-call
-integration and an integrated live recorder are not yet delivered.
+**implemented for macOS development; real-call acceptance open**. Discovery,
+authenticated source/consent controls, native dual-track encrypted capture and
+Deepgram streaming speakers are connected. Real Teams/Slack/browser support is
+not signed off. See the [current closeout](PHASE_1_CLOSEOUT.md); the requirements
+below remain the original acceptance contract.
 
 ## Product behavior
 

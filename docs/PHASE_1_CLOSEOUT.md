@@ -1,54 +1,120 @@
-# Phase 1 development closeout — 2026-10-23
+# Phase 1 — macOS development closeout
 
-> **Current default update (2026-10-23):** Deepgram streaming and individual anonymous speaker labels replace Groq short batches. See [current behavior and open speaker-quality gate](DEEPGRAM_STREAMING.md). Earlier measurements/defaults below are historical.
+Updated 2026-10-23. **Development scope closed. Release/quality acceptance is not
+signed off.** Real-meeting testing and signing remain deferred as previously
+requested by the user. The original quality, physical and app-coverage requirements
+remain required; the checklist below records them without treating deferral as a pass.
 
-**The cloud development checkpoint is complete. Original full Phase 1 acceptance remains open.** The user accepted the public Vietnamese sample and deferred real-meeting testing. This closes implementation work for this checkpoint, not release approval.
+This is the authoritative current status. Local MOSS and Groq experiments are
+historical diagnostics; neither is the default meeting backend.
 
 ## Delivered
 
-- Groq `whisper-large-v3-turbo` is the default meeting backend. The backend reads `GROQ_API_KEY` from environment or the repository `.env`; keys never enter browser snapshots or reports. Local ASR/diarization dependencies are optional extras.
-- Native microphone and selected output capture feed separate encrypted SLPA tracks and SQLCipher metadata. Capture and Stop drain independently of inference. Discovery suggests sources; only explicit Record starts capture.
-- New recordings require participant permission and separate cloud-upload consent. Resume/reprocess require saved-audio cloud consent again. Browser capture includes all tabs in the selected browser.
-- Short audio batches produce confirmed text while recording, share an early detected language lock, preserve gaps/timestamps, and catch up from durable checkpoints. Manual Vietnamese/English overrides are available. No automatic paid final pass, retry, local speech model, or remote speaker identity is added.
-- M5 explicit authenticated-prefix recovery writes fresh encrypted containers, retains originals, and never starts capture. Resume, permanent deletion and explicit retention cleanup are available. Full-file verification remains strict; reprocess verifies both tracks before uploading either.
-- Cloud reservations commit before upload. Limits are 80 requests and nominal $0.05 per saved session, shared across resume/reprocess; failed reservations remain counted. These application estimates are not a provider billing guarantee. Quota/network/model failure leaves otherwise healthy encrypted recording running.
-
-## Evidence
-
-286 Python tests passed, frontend regressions passed, and all 55 application modules passed lightweight import smoke. Fault tests cover interrupted/tampered audio, checkpoints/recovery, deletion retries, consent, durable cloud reservations, quota failure, and no duplicate resume after revision. Browser controls were checked on desktop and at 400px width without starting capture.
-
-The real cloud coordinator check used five public VIVOS Vietnamese clips plus silence, paced over 30 seconds and duplicated into two test tracks. First text arrived at **13.80 seconds**, before capture stopped at **29.93 seconds**; processing completed at **33.17 seconds**. Both tracks reached recorded/confirmed checkpoints of 30,000 ms, Vietnamese locked automatically, and no errors were reported. Peak client RSS was **78.73 MiB** and no local ML runtime loaded. Four reservations represented 55.3 billable audio seconds, nominal **$0.00061444**. This is a public synthetic routing test, not a physical meeting or broad latency benchmark.
-
-Local report: `data/phase1/cloud-coordinator-check.json`. Reproduce only with explicit public-upload authorization: `scripts/check_cloud_meeting.py --consent-public-upload` (see script CLI).
-
-The inspectable Vietnamese report is `data/phase1/groq-vietnamese-inspection/results.html`: five clips, 14.19 seconds, 37 normalized reference units, **10.81% WER** for both tested Groq models. Vietnamese whitespace scoring counts syllables and number formatting differences. This tiny sample does not establish general meeting accuracy. Turbo scored **31.06% WER** on the separate five-minute AMI sample. See [cloud investigation and trials](CLOUD_TRANSCRIPTION.md).
-
-## Acceptance and support matrix
-
-| Area | Current evidence / remaining gate |
+| Area | Current implementation |
 | --- | --- |
-| macOS native capture | Implemented; generated timing/transport checks pass. Controlled physical audio, timing, device failures and real-call routing still need acceptance. |
-| Teams via Brave | Earlier manually selected test produced text with poor local-model Vietnamese accuracy. New cloud backend has public-audio validation; real Teams cloud call remains deferred. Browser audio scope includes all tabs. |
-| Automatic call detection | Metadata observer/candidates/manual fallback implemented. Teams/Slack automatic detection reliability in real calls remains unverified. Detection never authorizes capture. |
-| Teams desktop, Slack, Zoom, other browsers | Source plumbing exists; app-by-app real-call acceptance remains unverified. |
-| Transcript latency | Short batches require approximately 10–20 seconds of audio plus network time; observed first text 13.80 seconds. Original partial p50 <2 seconds target is unmet. |
-| Speaker attribution / overlap | Separate microphone/output labels only in cloud default. Individual remote identities and 2–3 speaker acceptance are unavailable. Local community-1 experiments are diagnostic, not default support. Overlapping remote speech may reduce recognition accuracy. |
-| Accuracy | Public samples measured; original representative corpus WER ≤18% and target sign-off remain open. |
-| Linux / packaged desktop | Not validated. Current browser UI hosts local development; native desktop packaging is deferred. Signing/notarization was explicitly deferred by the user. |
-| Notes and summaries | Timestamped transcript notes are available. Generated summaries and structured meeting notes belong to later work. |
+| Discovery | Metadata-only app activity observer, candidate state machine, dismissal/debounce, manual source fallback; detection never starts recording |
+| Capture | Selected app/system output and separate microphone, native macOS helper, shared-clock timestamps, resampling and bounded transport |
+| Recorder | SLPA authenticated encrypted tracks, SQLCipher metadata, native key store, storage before capture, recorder-independent inference and Stop/drain |
+| Recovery | Authenticated-prefix recovery into fresh encrypted containers; durable per-track checkpoints; explicit saved resume/reprocess; key-aware deletion and retention cleanup |
+| Transcription | Deepgram Nova-3 streaming, provisional text and confirmed rows; one provider per meeting, no automatic fallback/retry/final second pass |
+| Speakers | Word-level v1 diarization; speaker-change rows, durable anonymous person labels, source-aware roster/badges, notes/history restoration; unknown attribution stays unknown |
+| Languages | Auto multilingual default for en/es/fr/de/hi/ru/pt/ja/it/nl; eleven fixed choices including Vietnamese. Returned word language is retained. No ineffective language-hint control or false first-language-lock claim |
+| Cloud controls | Backend-only key, separate new/saved upload consent, durable ten-second audio reservations before upload, estimated $0.15/80-reservation cap shared across saved actions and both tracks |
+| Local API/UI | Loopback token authentication, strict origin/host checks and CSP, visible recording/scope/Stop, timestamped transcript and transcript excerpt notes |
+| Launch | Encrypted cloud mode starts without an old public WAV fixture. Explicit public-demo mode still requires an authorized fixture |
 
-## Run the demo later
+Source tracks use separate connections to the **same** provider. They do not
+establish cross-track or cross-connection person identity. New resumed connections
+receive fresh anonymous labels; names and biometric recognition are not implemented.
+Speaker attribution does not separate overlapping voices into isolated audio.
 
-Install `.[dev,security,sqlcipher]` into the existing environment as needed. The Groq key is already saved locally. Restart an older server with Ctrl+C before launching updated code; a database cannot be opened by two servers at once.
+The conservative app estimate is $0.60/audio-hour including diarization, not actual
+account billing. Continuous PCM includes silence. Development capture remains
+bounded to five minutes. Provider errors leave otherwise healthy encrypted capture
+running; no automatic paid retry or alternative backend is started.
+
+## Verification
+
+- **299 Python tests passed**, frontend regression groups passed, and 57 application
+  modules passed lightweight import smoke without loading local speech models.
+- Automated checks cover consent/key boundaries, independent capture/Stop,
+  encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
+  speaker persistence/reconnect/notes, automatic language routing, language changes
+  without new person identities, saved actions and deletion/retention.
+- The package builds with current backend/UI assets and no credentials or audio.
+- Native generated-signal checks previously delivered two 4,800,000-sample tracks
+  with a preserved 150 ms offset and approximately 0.44 ms offset change over five
+  minutes. This is generated transport evidence, not physical device timing.
+- The real **60-second public AMI** Deepgram diagnostic returned three speaker IDs
+  against four reference speakers. WER was **17.39% (24/138 normalized words)**.
+  First provisional text arrived **0.375 s after the first reference word began**;
+  completion followed audio transmission by **0.305 s**. These are direct-provider
+  single-sample timings, not an app end-to-end p50/p95 benchmark.
+- Actual saved provider responses were replayed offline through the app splitter
+  and transactional store, producing 16 labeled transcript rows and notes.
+  The Auto integration is covered by mocked responses; the real trial used English.
+- Native browser accessibility inspection confirmed Auto/Vietnamese guidance and
+  the public three-label transcript. Screenshot automation timed out after window
+  changes; pixel-level and narrow-width visual checks remain open.
+
+Inspect the ignored local report
+`data/phase1/deepgram-speaker-validation/results.html`, `speaker-transcript.txt`,
+`app-segments.json`, and `results.json`. The one-minute trial had one connection,
+zero retries and a conservative nominal $0.01 estimate. Remaining free balance and
+actual charges were not verified. Final closeout checks made **no further cloud
+requests, private uploads, recordings or permission changes**.
+
+## Acceptance/support matrix
+
+| Requirement | Status and evidence still needed |
+| --- | --- |
+| Teams web in Brave | Manual scope/UI and an earlier local-model call were exercised. A real call through the current Deepgram path remains deferred. Browser scope includes all tabs |
+| Teams desktop / Slack huddles | Plumbing/candidate tests exist. Real-call detection and correct app/helper audio routing are unverified |
+| Zoom / other browsers | Candidate/source plumbing exists; app-by-app acceptance is unverified |
+| Automatic detection reliability | Measure idle false positives, call misses, delay, mute, listen-only, silence, reconnect and repeated meetings; no automatic call-detection reliability claim yet |
+| Physical capture | Controlled audible mic/output, device changes, five-minute continuity, alignment/drift ≤50 ms and failure handling need real-device validation |
+| Person separation | Implemented and observed as three labels, but the four-speaker reference demonstrates possible misses/merges. Representative 2–3-person attribution, confusion/DER and overlap quality are required and open |
+| Accuracy/latency | Original representative WER ≤18% and partial p50 <2 s remain open; one public excerpt is insufficient sign-off |
+| Resource use | No local ML models are loaded. Full native-capture CPU/RAM and network profiles remain unmeasured for the current backend |
+| Linux | Native discovery/integrated meeting capture is not implemented/validated. Existing experimental source code is not advertised support |
+| Packaged desktop/signing | Browser notebook is the development host. Native packaging, signing and notarization remain deferred; not distribution-ready |
+| Visual QA | Accessibility-state checks and DOM regressions pass; screenshot/narrow-layout verification remains open |
+
+## Launch
+
+The key is already configured locally in ignored `.env` as `DEEPGRAM_API_KEY`.
+Install `.[dev,security,sqlcipher]` in the existing environment if needed. Stop an
+older server with Ctrl+C before opening the same database; only one process can
+own an encrypted database. Then run:
 
 ```bash
 .venv/bin/python -m scribeloop_core.api.server \
   --storage encrypted \
   --database data/phase1/secure-preview.sqlcipher \
-  --public-fixture data/phase1/public-preview.wav \
   --port 8757
 ```
 
-Open the fresh launch URL printed in the terminal. Choose/confirm Brave and microphone, use headphones, check participant and Groq upload consent, then Record. This development test stops after five minutes. Stop finalizes recording while pending text catches up. Saved recovery does not upload; saved Resume/Reprocess needs its own cloud consent. The default cloud app disables the old local-model replay action.
+Open the fresh terminal launch URL. Choose/confirm the app and microphone, select
+Auto or a fixed language, confirm participant permission and Deepgram upload
+consent, then Record. Stop finalizes capture while pending text completes. Recovery
+opens no microphone and uploads nothing; saved Resume/Reprocess needs its own
+consent. English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese,
+Italian and Dutch work in Auto; select **Tiếng Việt** for Vietnamese.
 
-Next acceptance work is a consented real call, controlled physical routing/timing, and app detection checks. Individual remote speaker labels or sub-two-second partials require a separately evaluated streaming/diarization backend. No private saved audio was uploaded during this closeout.
+## Later acceptance run — when ready
+
+1. Use headphones and a consented short English call with two or three people.
+   Each person says a distinct reference sentence; note speaker order and timing.
+2. Verify the microphone contains local speech and app output contains remote
+   speech; confirm scope and Stop. Record actual app/browser/OS versions.
+3. Check speaker changes against the reference, including a brief overlap, and
+   whether provisional text appears during speech. Save errors, counts and timings.
+4. Test idle/mute/listen-only/reconnect/discovery behavior separately from ASR;
+   then run the controlled five-minute physical alignment/continuity check.
+5. Exercise a saved interruption/recovery/resume and complete the remaining
+   support/quality matrix before declaring the full MVP accepted.
+
+Generated summaries and structured meeting notes remain later-phase work;
+Phase 1's notes are transcript excerpts. No Phase 2 implementation is started by
+this closeout. See [current streaming details](DEEPGRAM_STREAMING.md) and
+[implementation matrix](PHASE_1_IMPLEMENTATION_PLAN.md).

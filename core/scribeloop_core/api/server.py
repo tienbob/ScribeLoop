@@ -405,14 +405,16 @@ def main():
     import uvicorn
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--public-fixture', type=Path, required=True,
-                        help='public/authorized non-sensitive test WAV, at most five minutes')
+    parser.add_argument('--public-fixture', type=Path,
+                        help='optional public replay WAV; required only with --storage public-demo')
     parser.add_argument('--storage', choices=['encrypted', 'public-demo'], default='encrypted')
     parser.add_argument('--database', type=Path)
     parser.add_argument('--port', type=int, default=8757)
     parser.add_argument('--no-discovery', action='store_true',
                         help='disable metadata-only automatic meeting discovery')
     args = parser.parse_args()
+    if args.storage == 'public-demo' and args.public_fixture is None:
+        parser.error('--storage public-demo requires --public-fixture')
     if args.database is None:
         if args.storage == 'encrypted':
             from platformdirs import user_data_path
@@ -423,7 +425,7 @@ def main():
     from ..meetings.service import manual_discovery, native_discovery
     app, token = create_app(database=args.database, storage=args.storage,
                             discovery_factory=manual_discovery if args.no_discovery else native_discovery,
-                            fixtures={'development-sample': args.public_fixture})
+                            fixtures={'development-sample': args.public_fixture} if args.public_fixture else {})
     # Fragment is not sent in HTTP requests; client removes it after reading.
     print(f'Open locally: http://127.0.0.1:{args.port}/#token={token}', file=sys.stderr)
     uvicorn.run(app, host='127.0.0.1', port=args.port, ws_max_size=8192, access_log=False)

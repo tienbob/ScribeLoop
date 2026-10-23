@@ -1,364 +1,59 @@
-> **Current status (2026-10-23): cloud development checkpoint complete.** See [closeout and support/acceptance matrix](PHASE_1_CLOSEOUT.md). Historical plans below preserve earlier decisions; Groq Turbo now supersedes local MOSS as the default meeting backend. Real-call/full MVP acceptance remains open.
-
-# Phase 1 implementation plan — meeting detection and capture
-
-Created **2026-10-22** from the [code audit](PHASE_1_PLAN_AUDIT.md) and
-[revised requirements](MEETING_CAPTURE.md). Status: **implementation in progress**.
-Progress: M1 contracts/native query and M2's detector/service/authenticated UI are
-implemented. Host output activity is visible, but input visibility and real-call
-feasibility remain unverified. See [discovery status](MEETING_DETECTION.md).
-M3 native mic/output, device enumeration, shared-clock transport, and graceful
-drain are implemented and pass five-minute generated-signal checks. Physical
-alignment and real-app/OS acceptance remain open; host microphone access is
-denied. See [native status](NATIVE_MEETING_CAPTURE.md).
-Each milestone should be a reviewable commit on a `feature/...` branch, with
-implementation, relevant tests, and a documentation status update together.
-
-## Scope and dependency order
-
-First deliver a usable **macOS Teams/Slack** workflow: automatic candidate prompt
-→ confirmed source and microphone → encrypted dual-stream recording → live text
-→ Stop/recovery. Manual source selection must work independently of discovery.
-Zoom, ambiguous browser candidates, and Linux follow explicit platform checks;
-they remain required coverage, not implied by macOS success. Signed distribution
-remains deferred under the existing local-development decision.
-
-Order: **M1 → M2 → M3 → M4 → M5 → M6 → M7**. Early native discovery/capture
-feasibility checks happen in M1 so unsupported signals do not force a late redesign.
-Real-call validation starts as soon as M4 is usable, before expensive ASR work.
-
-## M1 — Contracts and native feasibility
-
-Addresses audit findings 1, 2, 4, and 7.
-
-- Reconcile architecture descriptions: browser host for local v0, SLPA encrypted
-  recording containers, implemented SCK fallback, and clearly labeled tap/Linux
-  placeholders. Keep WAV as test/import/export format rather than plaintext
-  session storage.
-- Verify macOS metadata API availability and actual Teams/Slack app/helper
-  identities. Observe metadata only; check whether mute and listen-only states
-  remain distinguishable from idle apps. Document ambiguous cases rather than
-  inventing a reliable meeting signal.
-- Define typed observations, candidates, and explicit capture selection:
-  per-app identity or explicitly chosen system output, microphone device,
-  capability/permission state, evidence, and candidate generation/version.
-  Do not persist ongoing app activity history.
-- Define recording states: preparing → recording → stopping →
-  completed/failed; interrupted on restart. Replay keeps its existing semantics.
-  Reserve one session slot across replay and recording. Discovery has its own
-  available/unavailable state and cannot own that slot.
-- Specify a shared native monotonic session origin, stream timestamp mapping,
-  gaps/discontinuities, and device-clock drift handling. Extend/version SLP1 if
-  necessary; preserve replay compatibility. Delivery time is not capture time.
-
-Exit: checked API/identity notes, explicit data/state/clock contracts, and a
-documented fallback for ambiguous detections. No claim of app support yet.
-
-## M2 — Metadata-only discovery and source-selection UI
-
-Implementation delivered locally (2026-10-22): observer/service/state machine,
-authenticated candidates/dismissal, manual app/system choices, unverified default
-mic preference, and disabled Record. API/service/frontend tests and a Brave manual
-source-selection check pass. Real Teams/Slack signal traces and acceptance remain
-open under M1/M7; actual device enumeration remains M3.
-
-Addresses audit finding 1 and the discovery portion of 7.
-
-- Add a macOS observer separate from PCM capture, a supported-app identity
-  registry with explicit helper mappings, and a pure detector state machine.
-- Use configurable debounce and end grace, per-candidate dismissal suppression,
-  stable candidate IDs, and reset after a genuinely new activity episode.
-  Output-only activity may yield an ambiguous candidate; microphone use alone
-  must not be presented as proof of a meeting.
-- Extend authenticated snapshots/events for capabilities and candidates;
-  commands select/dismiss candidates and manually choose sources. Revalidate
-  identities and candidate freshness server-side before recording.
-- Add app/scope/microphone confirmation and permission/error states to the UI.
-  While recorder integration is unfinished, clearly disable Record. Never open
-  a PCM source from discovery, selection, dismissal, or an unauthenticated client.
-
-Exit: deterministic tests cover idle/open apps, transient activity, mute/listen
-ambiguity, repeated/dismissed/multiple candidates, app exit, observer failure,
-and reconnect snapshots. Manual selection still works with discovery unavailable.
-
-## M3 — Separate capture sources and aligned timestamps
-
-Implementation delivered locally (2026-10-22); physical acceptance is open.
-The native helper and Python adapters preserve independent tracks, resample
-48/44.1 kHz generated input, retain a 150 ms offset over five minutes, and drain
-all samples on Stop. Device metadata lists three microphones with denied access.
-No physical mic capture or real meeting routing/alignment is claimed.
-
-Addresses audit findings 2 and 7.
-
-- Implement a native microphone source and explicit source/device enumeration.
-  Adapt the existing per-app SCK source to the shared-clock contract. Retain
-  Core Audio taps as a separate implementation task if the fallback is sufficient
-  for this local milestone; do not require a second output backend just to start.
-- Verify Teams/Slack output routing, including their helper processes. Empty or
-  vanished app selection is an error, never an implicit whole-system fallback.
-- Preserve source identity, capture timestamps, and gaps. Detect device loss,
-  sample-rate changes, helper exit, and permission denial. Reopen only within
-  the already authorized scope; report a discontinuity or stop safely.
-- Use bounded native transport buffering and surface overflow/stall failures;
-  do not promise lossless capture with an unbounded or blocked output callback.
-
-Exit: controlled synthetic transport tests plus a short authorized native check
-show separate local/remote tracks and preserved start offset. Provisional local
-gate: alignment error and drift each ≤50 ms over five minutes; measure and revise
-explicitly if native constraints require it. This is an engineering gate, not an
-already measured result. Record no real meeting until M4's encryption path exists.
-
-## M4 — Recorder-first encrypted session lifecycle
-
-Addresses audit findings 3 and 4.
-
-- Add a recording coordinator that reserves the active slot, validates consent
-  and selection, prepares keys/DB/stream writers, then opens native sources.
-  Persist both stream identities and source/scope metadata. On partial startup
-  failure, close every opened resource and reconcile files/keys/session state.
-- Feed separate SLPA writers before optional ASR processing. Keep native reads,
-  recorder I/O, inference, and UI delivery independently scheduled with bounded
-  queues. If transcription falls behind, retain audio and schedule catch-up;
-  if recording cannot keep up or storage fails, stop visibly with an error.
-- Extend SessionStore to explicit consent, recording states, and per-stream
-  transcript rows. Introduce versioned migrations if schema changes are needed;
-  preserve existing replay history and encrypted DB behavior.
-- Connect authenticated Record/Stop, always-visible activity state, elapsed time,
-  scope/microphone labels, and errors. Stop closes sources and finalizes both
-  streams without waiting for a blocked model call. A model failure must not
-  silently terminate otherwise healthy recording.
-
-Exit: tests inject denied consent, missing app, locked keystore, second-start
-race, one-source startup failure, slow ASR/UI, recorder overflow/disk failure,
-and stop during inference. No PCM before consent; no plaintext recording files;
-all terminal paths release the slot and resources. Run a short Teams/Slack check
-now to expose source-routing problems before proceeding.
-
-## M5 — Recovery, checkpoints, and deletion
-
-Addresses audit finding 5 and restart behavior from 4.
-
-- Define durability boundaries and persist per-stream recorded/confirmed ASR
-  checkpoints. After restart, mark active recording interrupted and inspect its
-  encrypted artifacts; never automatically resume microphone capture.
-- Keep strict full-file reads unchanged. Add a separate authenticated-prefix
-  recovery operation that identifies the last valid complete record, preserves
-  the original artifact, and writes recovered frames into a fresh encrypted file
-  with a new file ID. Never append using an old nonce sequence or treat corruption
-  as ordinary successful completion. Report recovered duration and any tail loss.
-- Resume transcription from a verified audio checkpoint with overlap and
-  deduplication; never duplicate already confirmed segments.
-- Implement authorized session deletion/retention that first stops active users
-  of keys, coordinates DB/audio cleanup, and can retry partial failures. Explain
-  that backups and already unlocked readers limit crypto-shredding guarantees.
-
-Exit: crash/fault tests at startup, record writes, checkpoint commits, footer
-write, and deletion; tampered records fail authentication. Confirmed text remains
-and any recovered audio is explicitly labeled interrupted/recovered.
-
-## M6 — Timeline-aware live transcription and speakers
-
-Addresses audit finding 6.
-
-- Make VAD preserve recorder timestamps across nonzero starts and gaps; use
-  independent state per stream and retain all recorded silence in storage.
-- Add LocalAgreement partial/confirmation policy and bounded inference workers.
-  Persist confirmed text only. Show catching-up state and preserve Stop while
-  inference is busy; use durable audio for backlog processing.
-- Implement near-online community-1, stable cross-chunk speaker identities,
-  and tested attribution. Preserve concurrent turns for overlap; show unknown
-  or uncertain attribution rather than fabricating a speaker. Label the mic
-  stream “Microphone” until own-voice attribution is validated.
-- Keep MOSS batch defaults **float16 + SDPA** and the canonical five-minute
-  development sample. The existing tiny CPU/int8 replay backend is a development
-  baseline, not evidence of production accuracy or an override of MOSS defaults.
-
-Exit: timeline/confirmation/identity tests and paced five-minute measurements of
-WER, speaker attribution/DER, partial/confirmed latency, CPU/GPU use, and memory.
-Compare against architecture targets; record misses instead of declaring success.
-
-## M7 — App matrix and Phase 1 acceptance
-
-Addresses remaining platform gaps and closes the revised requirement only on
-verified configurations.
-
-- Teams desktop and Slack huddles: exercise idle app, real call, mute, listen-only,
-  silence, reconnect, repeated meetings, dismissal, app exit, headset changes,
-  permission denial, manual fallback, Stop, and restart recovery.
-- Measure detector false positives/misses/delay separately from capture and ASR
-  overhead. Set detector thresholds after M1/M2 observations, before final app
-  sign-off. Verify the five-minute clock/continuity gate from M3 under slow ASR.
-- Add Zoom and browser candidate coverage. Browser identity remains ambiguous
-  unless a separately justified capability identifies the meeting; no history
-  scraping or unverified tab-isolated capture claim.
-- Implement Linux discovery/capture adapters and run equivalent host checks.
-  Track unsupported or unavailable host cases explicitly; macOS completion alone
-  cannot close cross-platform acceptance.
-- Publish a support matrix with OS/app versions, measured outcomes, limitations,
-  and unresolved targets. Keep Phase 0 corpus/signing gates separately visible.
-
-Exit: revised meeting acceptance plus the remaining original Phase 1 criteria
-are evidenced, or each missing gate is explicitly left open. Documentation must
-distinguish delivered local macOS capability from full Phase 1 completion.
-
-## Next implementation increment
-
-Proceed to **M4**: connect the native sources to the recorder-first encrypted
-lifecycle, explicit permission/consent UI, and coordinated Stop/failure handling.
-Keep real recording disabled until that complete lifecycle is ready. Then perform
-controlled hardware checks to close M3's outstanding physical acceptance gate.
-Continue real Teams/Slack metadata feasibility checks as installations and
-controlled calls become available; do not infer them from source-selection success.
-
-
-### M4 development test increment — 2026-10-22
-
-The [Brave call test](BROWSER_CALL_TEST.md) now wires the native helper to
-independent encrypted stream writers, authenticated consent/Record/Stop, persisted
-stream metadata, and post-Stop local transcript notes. This is ready for a short
-physical routing test once OS microphone permission is enabled. Full M4 acceptance
-is still pending; M5 recovery/catch-up and M6 production attribution remain open.
-
-
-### M4 hardening increment — 2026-10-23 (implemented)
-
-The local Brave test already delivered encrypted dual-track capture and post-Stop
-MOSS transcription; automatic early language locking and UX fixes are implemented.
-Earlier milestone descriptions are historical, not current permission/model state.
-Next close the recorder fault-test gaps: disk write/footer failure, blocked Stop,
-cleanup failures, and a generated five-minute encrypted round-trip with distinct
-tracks and a known start offset. Ensure every writer and native source receives
-cleanup even when another cleanup action raises; preserve the original failure.
-Run the native generated transport check separately. These generated checks do
-not establish physical clock drift, real Teams/Slack routing, or ASR accuracy.
-M4 stays open until those physical acceptance checks are evidenced; M5 follows.
-
-
-Result: cleanup now attempts both writer aborts independently, always joins the
-native reader and clears its source reference, and preserves an existing capture
-failure if source cleanup also fails. A source-close failure after otherwise
-successful capture remains a visible failure and never starts transcription.
-Six added regressions cover write/footer/abort failure, unresponsive graceful
-Stop, source-close failure, and a five-minute encrypted dual-track round-trip.
-The round-trip is accelerated and uses generated PCM; no devices or ASR open.
-
-Validation: **234 Python tests passed**, frontend regressions and 50-module import
-smoke passed, and changed Python files passed Ruff. The native generated helper
-produced 4,800,000 samples per track, a 150 ms initial offset, and 0.4375 ms offset
-change over five minutes. Local aggregate report:
-`data/native/m4-generated-transport.json` (generated signals; not physical drift).
-No real recording was started. Next gate is a consented controlled physical test
-of both tracks and their timing, then remaining device/storage fault acceptance.
-M5 authenticated-prefix recovery/checkpointing remains the next implementation
-milestone; current strict readers intentionally reject incomplete files.
-
-
-### M5/M6 implementation — 2026-10-23 (historical implementation stage)
-
-User requested implementation before further real meetings. Implement explicit
-interrupted-prefix recovery into fresh encrypted containers, recorded/confirmed
-checkpoints, retryable authorized deletion/retention, and checkpoint-based catch-up.
-Keep strict full-file verification unchanged and never restart capture on recovery.
-
-Enable bounded local live transcription from authenticated recorded audio, with
-per-stream timeline-preserving VAD, early shared language lock, LocalAgreement
-partials/confirmation, and durable backlog catch-up. Keep MOSS float16 + SDPA as
-the default and reuse a persistent isolated worker across windows. Add delayed
-community-1 speaker turns with conservative session-local identity matching;
-retain overlap and unknown attribution, with no persisted speaker embeddings.
-Expose live/catching-up/recovered/error state and recovery/delete controls.
-Validate using synthetic/fault fixtures and cached public audio only. Hardware,
-real-meeting accuracy, production latency/resource targets and speaker thresholds
-remain measured acceptance gates, not inferred from deterministic tests.
-
-
-### Direction change — cloud inference (2026-10-23)
-
-The user stopped local runs and requested low-cost cloud transcription because
-local model resource use is impractical. See [provider investigation and proposed
-migration](CLOUD_TRANSCRIPTION.md). Soniox streaming is the first recommended
-candidate; Groq is the cheaper file/chunk alternative. Keep encrypted capture and
-M5 recovery local. Do not treat the unfinished local M6 changes as final default
-architecture, and do not upload meetings without explicit cloud-processing consent.
-No cloud integration, paid call or audio upload has been performed yet.
-
-
-### Phase 1 cloud MVP finalization — 2026-10-23 (historical implementation stage)
-
-User accepted the Groq sample and selected Turbo for integration. Replace default
-meeting inference with Groq Turbo short-batch updates during recording; clearly
-label file/chunk behavior rather than claiming native streaming or diarization.
-Keep capture/SLPA/SQLCipher/recovery local. Add separately persisted cloud consent
-for new recording and explicit saved-audio reprocessing/resume, backend-only keys,
-shared early cloud language locking, per-track timeline/checkpoint catch-up,
-request/cost caps and visible quota/network errors. Cloud mode must never load
-MOSS, Whisper language-ID weights or community-1, nor automatically perform a
-second paid full-recording pass. Preserve existing local experiments as explicit
-diagnostics, not the default app path. Test cloud app integration using only
-public audio and generated/fault fixtures; no private-meeting uploads.
-Finalize the implementation checkpoint and publish the support/acceptance matrix.
-Real-call/device/second-OS/signing and release-quality acceptance stay explicitly
-open as previously deferred, rather than being checked off from mocked evidence.
-
-
-### Cloud checkpoint completion — 2026-10-23
-
-Implemented encrypted recorder recovery/checkpoints, default Groq Turbo short-batch inference, early shared language lock, explicit new/saved audio cloud consent, durable request/cost caps, and honest UI progress/source labels. Heavy local ML dependencies are optional. Validated with 286 Python tests, frontend regressions, lightweight imports, public paced cloud audio and desktop/400px browser checks. No private-meeting uploads. M7 support matrix is published in the closeout; physical, real-call, second-OS and release gates remain open. Original M6 streaming/speaker targets are not checked off.
-
-### Required speaker separation — 2026-10-23 (implementation)
-
-Individual speakers are core acceptance, not optional source labels. Replace the
-app default with Deepgram Nova-3 streaming plus its v1 streaming diarizer, using
-one transcription provider per meeting and no second pass/fallback. Keep the two
-capture tracks distinct (two connections to the same provider); anonymous person
-labels must come from provider word-level speakers, split transcript rows at
-speaker changes, persist atomically with checkpoints, restore after reconnect,
-and appear in notes. Never equate microphone source with a known person. Missing
-labels remain unknown; fresh provider connections receive fresh session labels
-rather than assuming identity across resumes/tracks. Keep no biometric registry.
-
-Preserve explicit provider-named upload consent, backend-only credentials,
-encrypted capture/recovery and recorder-independent Stop. English is the initial
-streaming language; explicit language choice precedes recording. Disable automatic
-language mode in this profile instead of silently running a second model. Send
-continuous PCM including silence, not a new local VAD. Reserve bounded audio blocks
-in the durable cost ledger before sending; conservatively budget $0.60/audio hour
-including diarization (estimate, actual account pricing unverified), max $0.15 per
-saved meeting across resume/reprocess. No automatic retries or paid second pass.
-Use mocks/replayed saved public responses for validation; no additional API spend
-or private uploads without a separate bounded test. Speaker accuracy and overlap
-reliability remain real multi-person acceptance gates, not guaranteed by wiring.
-
-Implementation delivered: Deepgram default, final word speaker splits, transactional
-session speaker labels/checkpoints, history and transcript-note restoration,
-provider-specific consent and usage controls, no automatic second model/pass.
-English is selected by default. Real public 60-second response produced three
-speaker IDs and 17.39% WER; reference has four speakers, so the required speaker
-**quality** gate remains open. See [streaming status](DEEPGRAM_STREAMING.md).
-
-### Speaker UI and automatic language selection — 2026-10-23
-
-User requests a speaker-aware UI and restoration of automatic language recognition,
-with multiple expected languages like the Deepgram playground. Before code edits:
-keep the notebook aesthetic, add a speaker roster and distinct label/source rows,
-preserve provisional/final distinction and recording controls. Restore Nova-3
-streaming automatic multilingual mode (`language=multi`) alongside fixed choices.
-Persist actual returned word language on speaker-split segments; status must say
-automatic recognition, not claim an early fixed-language lock. No extra inference
-path or cloud test is needed for this UI/integration change.
-
-Official docs checked 2026-10-23: Nova-3 automatic mode covers en/es/fr/de/hi/ru/pt/
-ja/it/nl; Vietnamese is supported as fixed `vi`, not multilingual auto. `detect_language`
-is batch-only. Repeated `language_hint` belongs to Flux multilingual; Flux feature
-support does not include diarization. Never send unsupported hints or display a
-selection as provider bias/restriction when it is not. Clarification requested on
-whether to show expected-language metadata with this explicit limitation or only
-auto/fixed controls. Continue speaker UI independently while awaiting preference.
-Sources: https://developers.deepgram.com/docs/multilingual-code-switching,
-https://developers.deepgram.com/docs/language-detection,
-https://developers.deepgram.com/docs/models-languages-overview,
-https://developers.deepgram.com/docs/flux/language-prompting,
-https://developers.deepgram.com/docs/flux/feature-overview.
-
-User decision: **Auto + fixed language; omit ineffective hints**. Implemented Nova-3 `language=multi` by default, eleven fixed choices including Vietnamese, language-aware speaker rows, and roster/badge/source UI. 297 Python tests and frontend regressions pass; actual automatic-mode cloud accuracy is not claimed from mocked evidence. No additional API spend. See current streaming doc for visual-QA limits.
+# Phase 1 — current implementation and closeout plan
+
+Updated 2026-10-23. This replaces the superseded local-MOSS and Groq plans;
+previous decisions remain in Git history and the provider evaluation documents.
+The current backend is **Deepgram Nova-3 streaming with v1 diarization**. Each
+meeting uses one provider, with no automatic fallback or final second pass.
+
+## Development scope
+
+The current development host is macOS with native capture and a local authenticated
+browser notebook. The user deferred real-meeting testing and signing. This is not
+packaged desktop or cross-platform release acceptance. The original quality and
+app-coverage requirements stay required and visibly open below.
+
+| Milestone | Implementation | Acceptance still required |
+| --- | --- | --- |
+| M1 Contracts/native feasibility | Source identities, scope, metadata observations and shared-clock contracts implemented | Physical helper/process routing and real-call feasibility per app |
+| M2 Discovery/source UI | Metadata-only candidates, dismissal, source/microphone confirmation, manual fallback, authenticated commands | Teams/Slack false positives, misses, mute/listen-only and detection delay |
+| M3 Native dual-track capture | Microphone/output sources, shared timestamps, resampling, bounded transport and generated five-minute checks | Controlled physical alignment/drift ≤50 ms; headset/device scenarios |
+| M4 Encrypted recorder | Recorder-first SLPA/SQLCipher, keys before sources, bounded capture queue, visible failures, independent Stop/drain | Physical continuity and storage/device failures on actual calls |
+| M5 Recovery/lifecycle | Authenticated-prefix recovery into fresh files, durable recorded/confirmed checkpoints, explicit resume, deletion/retention | End-user recovery exercise after a real interrupted recording |
+| M6 Streaming/speakers | Provisional text, final word speaker splits, persistent anonymous labels and notes, Auto/fixed languages, durable cloud caps | Representative WER ≤18%, partial p50 <2 s, reliable 2–3-person attribution and overlap evaluation |
+| M7 Support/closeout | Current support matrix, regression evidence, known limits and later acceptance checklist published | Actual Teams/Slack/browser app matrix and Linux implementation/host checks |
+
+## Current behavior
+
+- Capture selected app output and microphone into separate encrypted tracks;
+  browser scope includes every tab in that browser. Detection never records.
+- Stream each source to the same Deepgram provider. Keep Stop available during
+  processing; provider failure preserves otherwise healthy encrypted recording.
+- Persist only confirmed text. Speaker identity, rows and checkpoints commit
+  together. Labels are anonymous and scoped to a connection/source; new connections
+  receive fresh labels. Missing attribution stays unknown; names are not inferred.
+- Auto mode uses Nova-3 multilingual recognition (en/es/fr/de/hi/ru/pt/ja/it/nl).
+  Fixed choices include those ten plus Vietnamese. No ineffective hint controls,
+  unsupported `detect_language` parameter or fake first-language lock. The user
+  explicitly chose Auto + fixed language instead of unsupported multiple hints.
+- Require participant permission and separate provider-named upload consent;
+  saved Resume/Reprocess require their own consent. No private audio is uploaded
+  by development checks. Keys stay in environment/ignored `.env`, never snapshots.
+- Continuous audio includes silence. No additional client VAD is introduced.
+  Reserve each ten-second block durably before upload, shared across both sources
+  and saved actions: 80 reservations / nominal $0.15 per saved meeting at the
+  conservative $0.60/audio-hour estimate. Native capture remains five-minute bounded.
+- No automatic paid retry, alternate model or final pass. Explicit reprocessing
+  retains the prior transcript until the replacement succeeds.
+
+## Finalization work authorized by “finish phase 1”
+
+1. Remove the obsolete mandatory public-WAV argument from encrypted cloud startup;
+   keep a fixture required only for explicit public replay mode.
+2. Run the Python/frontend/import/package checks and reconcile current docs.
+3. Close the Phase 1 **development scope**, retain the original unpassed quality,
+   physical and platform gates, and commit. Do not record private calls or consume
+   more provider credits to manufacture acceptance evidence.
+
+See [the authoritative closeout and later test checklist](PHASE_1_CLOSEOUT.md),
+[streaming implementation](DEEPGRAM_STREAMING.md), and
+[meeting acceptance requirements](MEETING_CAPTURE.md).

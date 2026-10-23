@@ -92,10 +92,10 @@ Current five-minute MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
 validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
 Full-meeting MOSS runs are deferred during development.
 
-## Phase 1: cloud development checkpoint complete
+## Phase 1: macOS development closed
 
 Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Deepgram. Use Auto (default) for supported multilingual conversations, or choose a fixed language such as Tiếng Việt. No local speech models load in the default path.
 
 M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
 
-See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.
+Encrypted cloud startup no longer needs a public WAV fixture. See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.
