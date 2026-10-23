@@ -180,3 +180,43 @@ embedded audio playback were verified. Structural checks confirm two tables,
 three columns per row and ten complete transcript/audio entries. Fifteen mocked
 Groq adapter tests and script Ruff checks pass. Rendering from cached results
 makes no new API calls. All ten requests succeeded; no retry was needed.
+
+## Bounded Soniox streaming trial plan — 2026-10-23
+
+User authorized a small streaming trial and warned that free allowance is limited.
+Before changing app defaults, use one WebSocket session and the five cached,
+hash-pinned public VIVOS clips, with 250 ms pauses and one second trailing silence
+(total under 20 seconds, mono 16 kHz PCM). Pace 100 ms frames in real time, enable
+Vietnamese hints, language identification, endpoint detection and diarization.
+Measure connection/first provisional/first confirmed/end timing and final WER.
+Persist the attempt before connecting, refuse overwriting/repeated invocation,
+cap connection lifetime at 45 seconds, and never auto retry. Keep key backend-only
+in SONIOX_API_KEY/environment or ignored .env. Save an inspectable HTML and JSON
+report under ignored data/phase1; no private capture and no production switch.
+Docs checked: [real-time](https://soniox.com/docs/stt/rt/real-time-transcription),
+[WebSocket API](https://soniox.com/docs/api-reference/stt/websocket-api),
+[header authentication](https://soniox.com/docs/guides/websocket-authentication).
+The documented model is stt-rt-v5. Token-based pricing is approximately $0.12/hour
+per [pricing](https://soniox.com/pricing); this is an estimate, not evidence of
+this account's free balance or billed usage.
+
+
+### Soniox trial outcome — account gate, no quality result
+
+One authorized connection was attempted with the locally configured key. WebSocket
+connection opened after 1.226 seconds, then Soniox returned error code **402**.
+The sender stopped after **0.3 seconds** of public PCM had been dispatched. No
+text was returned; WER/first-token latency cannot be measured. No retry was made,
+and the app remains on Groq. The provider error subtype was not retained in this
+initial run, so we cannot distinguish exhausted balance from organization/project
+budget restrictions. [Soniox's error reference](https://soniox.com/docs/api-reference/errors)
+documents these 402 causes. Check API billing/free credits and relevant limits in
+the Soniox console before authorizing a further attempt. No actual account charge
+or remaining free quota was verified.
+
+Inspect local `data/phase1/soniox-streaming-inspection/results.html` or `results.json`.
+The script `scripts/inspect_soniox_streaming.py --consent-public-upload` has an
+exclusive attempt marker and deliberately refuses repeat runs against that output;
+there is no automatic reset, retry, or paid fallback. Intended full audio duration
+was 16.4375 seconds; the full-trial nominal estimate of $0.000548 is not actual
+usage/billing for this rejected attempt. Key and upstream error body were omitted.
