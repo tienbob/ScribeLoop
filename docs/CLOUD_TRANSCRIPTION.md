@@ -140,3 +140,41 @@ and was restricted to mode 0600; its contents were never printed or committed.
 Next: matched public or separately consented Vietnamese audio/reference testing,
 then provider integration with explicit cloud consent and timestamp-preserving
 chunking. The app recording backend has not been switched to Groq by this trial.
+
+
+## Inspectable Vietnamese results — requested 2026-10-23
+
+Create a local HTML report with exactly three columns: sound filename, complete
+transcription text, and WER. Separate model sections identify Turbo versus Large v3
+without adding a fourth column. Include local audio playback and expandable
+reference text inside the transcription cell for direct inspection. Use five
+public Vietnamese reference-labeled clips, preserve their source/revision/license
+and normalized reference text, and never upload saved private meetings. Google
+FLEURS row access failed on a server-side Parquet scan limit; use a small bounded
+streamed VIVOS sample if available. This is read-speech diagnostics, not meeting
+or overlap acceptance. Retain successful request results so rerunning report
+rendering does not make extra API calls. No local speech models run.
+
+
+### Inspectable Vietnamese result file — completed 2026-10-23
+
+Five public VIVOS **test** clips, all speaker VIVOSDEV05, total 14.19 s and 37
+normalized reference words were transcribed by both Groq models. Both obtained
+4/37 errors (**10.81% weighted WER**), with different per-clip errors. Number-word
+formatting differences such as `7` versus `bảy` count under the existing protocol;
+no normalization was changed to improve scores. This tiny single-speaker
+read-speech selection does not establish meeting, multi-speaker or overlap quality.
+
+User-facing artifact: `data/phase1/groq-vietnamese-inspection/results.html`.
+It is a standalone UTF-8 HTML file with embedded audio, exactly three columns
+(filename / full transcript / WER), separate model sections and expandable
+reference transcripts within the text column. Original public clips, source
+revision, license/selection metadata and cached complete responses are retained
+in the same git-ignored directory. VIVOS attribution and CC BY-NC-SA 4.0 research
+scope are included. No private recordings or keys are in the report.
+
+The report was opened in Brave; column layout, reference expansion and actual
+embedded audio playback were verified. Structural checks confirm two tables,
+three columns per row and ten complete transcript/audio entries. Fifteen mocked
+Groq adapter tests and script Ruff checks pass. Rendering from cached results
+makes no new API calls. All ten requests succeeded; no retry was needed.
