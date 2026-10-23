@@ -4,7 +4,8 @@ Scope: the running desktop ScribeLoop notebook and its HTML/CSS/JS. Reviewed
 against the current Vercel Web Interface Guidelines. No capture, permission,
 transcription, or session data was changed during this review. Mobile findings
 come from breakpoint/code inspection; a real mobile viewport was not verified.
-This report records findings; product UI fixes are still pending.
+The findings below are the original audit. Implementation is complete; see the
+closure and verification notes at the end.
 
 ## P1 — Recording control and scope clarity
 
@@ -102,7 +103,7 @@ reduced-motion handling, encrypted-storage status, and browser ambiguity labels.
 Review criteria:
 https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md
 
-## Fix implementation — in progress
+## Fix implementation — completed 2026-10-23
 
 Keep the notebook visual direction. Add a persistent recording/status/Stop bar
 with immutable session scope from authenticated metadata, separate meeting setup
@@ -112,3 +113,34 @@ separate timers from live announcements, expose language/reprocessing near the
 session heading, collapse transcript excerpts, improve contrast/narrow layouts,
 and provide explicit reconnect and accessible navigation/form labels. Do not open
 real capture or modify OS permissions during UI verification.
+
+
+## Closure and verification
+
+All twelve findings have corresponding implementation changes in `7307d6f`:
+
+- Findings 1–4: persistent recording/Stop bar, session-backed capture scope,
+  locked setup during capture, accurate discovery/disconnection messaging, and
+  separate app/browser/system scope warnings.
+- Findings 5–7: consolidated meeting setup, collapsed development replay,
+  actionable Record blockers, and language/reprocessing controls by the result.
+- Findings 8–10: stable keyed history/transcript nodes, state-only announcements,
+  a non-live timer, stronger secondary-text contrast, larger operational text,
+  wrapping controls, and status retained at narrow breakpoints.
+- Findings 11–12: explicitly labeled collapsed transcript excerpts, richer history
+  metadata, sample-backed recording duration, reconnect recovery, skip navigation,
+  and labeled forms/dialogs. Older recordings without duration statistics omit
+  duration rather than deriving it from a potentially changed processing timestamp.
+
+Validation on 2026-10-23: all 228 Python tests passed; frontend replay/meeting
+regressions passed; import smoke checked 50 application modules; changed Python
+files passed Ruff; `git diff --check` passed. Frontend regressions cover active
+scope immutability, control locking, discovery failure, disconnect/reconnect,
+late socket callbacks, timer announcements, and persistent DOM identity.
+
+The authenticated desktop preview was visually checked in Brave. A 390-pixel
+viewport check was attempted but was interrupted by concurrent browser use before
+its width could be confirmed; narrow-layout visual verification remains open.
+No real capture was started or OS permissions changed during this verification.
+These fixes do not establish transcription accuracy, live transcription, or
+completion of the remaining Phase 1 capture-validation milestones.
