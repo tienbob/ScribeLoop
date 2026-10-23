@@ -96,7 +96,7 @@ class SessionStore:
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'provider','model','cloud_consent','cloud_budget_usd')}
+                'provider','model','cloud_consent','cloud_budget_usd','language')}
             audio = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
                 'ORDER BY id DESC LIMIT 1', (session['id'],)).fetchone()
@@ -196,8 +196,11 @@ class SessionStore:
             raise
 
     def set_language_lock(self, session_id, lock):
-        if lock.get('language') not in {'vi','en'} or lock.get('mode') not in {'auto','manual'}:
+        from ..pipeline.languages import LANGUAGE_NAMES
+        if lock.get('language') not in {*LANGUAGE_NAMES,'multi'} or lock.get('mode') not in {'auto','manual','multilingual'}:
             raise ValueError('Invalid language lock')
+        if (lock['language'] == 'multi') != (lock['mode'] == 'multilingual'):
+            raise ValueError('Invalid multilingual mode')
         metadata = {key:lock.get(key) for key in ('language','mode','confidence','sample_s')}
         with self.conn:
             self.conn.execute('INSERT INTO events (session_id,ts,level,type,payload_json) '

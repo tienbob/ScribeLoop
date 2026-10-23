@@ -144,7 +144,7 @@ async def test_explicit_provider_consent_language_and_budget_before_upload(state
     calls=[]
     runner=DeepgramRecordingRunner(store,audio,None,publish,
         config=DeepgramConfig(api_key='hidden-test-key',connector=lambda *a,**k:calls.append(1)))
-    for metadata in ({'cloud_consent':False,'language':'en'},{'cloud_consent':True,'language':'auto'}):
+    for metadata in ({'cloud_consent':False,'language':'en'},{'cloud_consent':True,'language':'xx'}):
         with pytest.raises(ValueError):
             runner.start(None,metadata,'No',consent_confirmed=True)
     assert not store.list() and not calls
@@ -266,3 +266,46 @@ def test_wrong_provider_configuration_is_rejected_before_key_dispatch(state):
     store,audio,_,publish=state
     with pytest.raises(TypeError,match='Deepgram configuration'):
         DeepgramRecordingRunner(store,audio,None,publish,config=GroqConfig(api_key='other-provider-key'))
+
+
+@pytest.mark.asyncio
+async def test_automatic_multilingual_keeps_word_languages_and_speaker_separation(state):
+    from urllib.parse import parse_qs, urlsplit
+    store,audio,_,publish=state
+    urls=[]
+    class MultilingualSocket(Socket):
+        def recv(self,timeout):
+            result=json.loads(super().recv(timeout))
+            if result['type']=='Results':
+                alt=result['channel']['alternatives'][0]
+                alt['languages']=['en','es']
+                for word,code in zip(alt['words'],('en','es'),strict=True):
+                    word['language']=code
+            return json.dumps(result)
+    def connector(url,**kwargs):
+        query=parse_qs(urlsplit(url).query)
+        assert query['language']==['multi'] and query['diarize_model']==['v1']
+        assert 'detect_language' not in query and 'language_hint' not in query
+        urls.append(url)
+        return MultilingualSocket()
+    source=ControlledSource()
+    runner=DeepgramRecordingRunner(store,audio,lambda *a,**k:source,publish,
+        config=DeepgramConfig(api_key='test-key',connector=connector))
+    sid=runner.start(None,{'cloud_consent':True,'language':'auto'},'Multilingual',consent_confirmed=True)['id']
+    await wait_for(lambda:len(store.segments(sid))>=4)
+    runner.stop(sid)
+    await runner.task
+    assert len(urls)==2
+    assert store.language_lock(sid)['mode']=='multilingual'
+    rows=store.segments(sid)
+    assert {r['language'] for r in rows}=={'en','es'}
+    assert len({r['speaker_label'] for r in rows})==4
+    assert runner.cloud.public()['language_hints'] is False
+
+
+def test_same_speaker_changes_language_without_getting_new_person_identity():
+    payload=event([{'word':'hello','speaker':0,'start':0,'end':.1,'language':'en'},
+                   {'word':'hola','speaker':0,'start':.1,'end':.2,'language':'es'}])
+    rows=speaker_rows(payload,stream='loopback',epoch='a'*32,base_ms=0,sent_ms=200,language='multi')
+    assert len(rows)==2 and rows[0]['speaker_key']==rows[1]['speaker_key']
+    assert [r['language'] for r in rows]==['en','es']

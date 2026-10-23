@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..meetings.service import DiscoveryService
+from ..pipeline.languages import LanguageChoice
 from ..pipeline.replay import ReplayRunner
 from ..storage.db import DATABASE_ERRORS, connect, migrate
 from ..storage.sessions import SessionStore
@@ -60,7 +61,7 @@ class SelectSource(BaseModel):
 class StartRecording(SelectSource):
     action: Literal['record']
     title: str = Field(default='Meeting test', min_length=1, max_length=160)
-    language: Literal['vi','en','auto'] = 'auto'
+    language: LanguageChoice = 'auto'
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
 
@@ -78,14 +79,14 @@ class ReprocessRecording(BaseModel):
     action: Literal['reprocess']
     cloud_consent: bool = False
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
-    language: Literal['vi','en','auto'] = 'auto'
+    language: LanguageChoice = 'auto'
 
 
 class SavedMeeting(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['recover', 'resume', 'delete']
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
-    language: Literal['vi','en','auto'] = 'auto'
+    language: LanguageChoice = 'auto'
     confirmed: bool = False
     cloud_consent: bool = False
 

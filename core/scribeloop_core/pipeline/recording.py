@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 
 class RecordingRunner:
+    supported_languages = frozenset({'vi','en','auto'})
     def __init__(self, store, audio, source_factory, publish, *, transcriber=None,
                  queue_size=512, max_s=300, stop_timeout_s=12,
                  live_transcriber=None, diarizer=None, finalize_transcript=None):
@@ -49,7 +50,7 @@ class RecordingRunner:
             raise ValueError('Recording or processing already active')
         self.language = source_metadata.get('language', 'auto')
         self.language_lock = None
-        if self.language not in {'vi','en','auto'}:
+        if self.language not in self.supported_languages:
             raise ValueError('Unsupported language hint')
         session = self.store.create_recording(title, source_metadata)
         self.store.set_audio_paths(session['id'], self.audio)
@@ -267,7 +268,7 @@ class RecordingRunner:
         if (not session or session['source'] != 'meeting' or not session['consent_confirmed']
                 or session['status'] not in {'completed','failed','interrupted'}):
             raise ValueError('Select a saved authorized meeting')
-        if language not in {'vi','en','auto'}:
+        if language not in self.supported_languages:
             raise ValueError('Unsupported language hint')
         self.language = language
         prior = self.store.language_lock(session_id)
@@ -465,7 +466,7 @@ class RecordingRunner:
 
     def resume(self, session_id, *, language='auto'):
         session = self._saved(session_id)
-        if session['status'] == 'deleting' or language not in {'auto','vi','en'}:
+        if session['status'] == 'deleting' or language not in self.supported_languages:
             raise ValueError('Cannot resume this meeting')
         if self.store.segments(session_id) and not self.store.checkpoints(session_id):
             raise ValueError('Use Transcribe again for legacy batch transcripts')

@@ -8,12 +8,15 @@ and output tracks each use a connection to the same provider.
 
 ## Behavior
 
-- English is the default; choose English or Vietnamese before recording. Automatic
-  detect-once mode is disabled for this streaming profile. Audio stays on that
-  selected language; no separate language model or reconnect-for-detection runs.
+- **Auto · multilingual** is the default. Nova-3 recognizes English, Spanish,
+  French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch within
+  the same stream. Recognition follows language changes; it does not lock the
+  first detected language. Pick a fixed language to constrain recognition;
+  Vietnamese is available only as the fixed Tiếng Việt choice in this profile.
+  One provider still handles transcription and speaker labels.
 - Send continuous recorded mono 16 kHz PCM, including silence. Use interim results
   and 300 ms endpointing. No new client VAD is introduced.
-- Final word speaker IDs split transcript rows at speaker changes. Rows receive
+- Final word speaker IDs split transcript rows at speaker changes. In Auto mode, returned word language also splits rows while retaining the same person key. Rows receive
   anonymous `Speaker 1`, `Speaker 2`, etc.; the audio source remains visible too.
   Missing speaker IDs remain unknown. Provisional text is ephemeral and does not
   assert a speaker identity.
@@ -54,8 +57,7 @@ Offline tests cover word speaker changes/unknown labels, separate source namespa
 live rows before Stop, persistent notes/history, API reconnection, no exposed key,
 durable quota reservations, failure isolation, strict saved-track authentication,
 new identities after reprocess, and atomic rollback of speaker/checkpoint writes.
-Frontend tests render two individual speakers and select explicit English in the
-streaming profile. Offline integration checks make no cloud requests. One separately bounded 60-second public validation was run below; no private audio was uploaded.
+Frontend tests render individual speaker badges/rosters, source and language metadata, and automatic multilingual status. Offline integration checks make no cloud requests. One separately bounded 60-second public validation was run below; no private audio was uploaded.
 
 Earlier real 20-second public AMI streaming test: first provisional text was 0.386 s
 after the first annotated reference word's onset; final WER was 23.08% (6/26).
@@ -97,3 +99,38 @@ WER and speaker-labeled text), `speaker-transcript.txt`, `app-segments.json` and
 charge. No private audio was uploaded.
 
 Final verification: **295 Python tests passed**, all frontend regression groups passed, 56 application modules passed lightweight import smoke, and the wheel built with the streaming module/assets and no credentials or audio. Changed Python files pass Ruff and the diff has no whitespace errors.
+
+
+## Language and speaker UI update — 2026-10-23
+
+User chose **Auto + fixed language, omit ineffective hints** after reviewing the
+provider limitation. The dropdown retains Auto and eleven fixed language choices
+(the ten multilingual languages plus Vietnamese). New recording and saved-action
+API models validate the same allowlist. Session metadata retains the requested
+choice; Auto recognition metadata is persisted as multilingual mode, and segment
+languages come from provider word languages rather than a fabricated English label.
+Unknown language stays unknown. Fixed choices retain the selected language.
+
+The UI now shows a colored anonymous-speaker roster, matching badges on transcript
+rows, separate source labels, per-row language names and a clearly marked live
+provisional draft. Speaker names remain anonymous; labels do not guarantee a
+person's identity or correct overlap separation. No provider/model fallback or
+extra inference call was introduced. Existing notebooks and legacy local speaker
+turns remain readable. Launch/Stop, upload consent and source confirmation remain
+explicit. Record resets its cloud-consent checkbox on a new meeting.
+
+Native browser accessibility inspection verified Auto, the Vietnamese guidance,
+three labels from the public fixture, and separate transcript words/metadata.
+Screenshot automation timed out following user window changes, so this update's
+pixel-level and narrow-width visual QA remain pending. No capture/upload occurred
+in the isolated preview. **297 Python tests**, frontend regressions and 57-module
+lightweight import smoke passed; no additional API credits were used.
+
+Nova-3 has no streaming language hints. The user-approved UI does not offer a
+multiple-select that pretends to bias or restrict recognition. Automatic mode
+covers its full supported set. Provider documentation distinguishes Nova-3
+[multilingual streaming](https://developers.deepgram.com/docs/multilingual-code-switching)
+from Flux-only [language hints](https://developers.deepgram.com/docs/flux/language-prompting).
+The separate `detect_language` parameter is [not supported for streaming](https://developers.deepgram.com/docs/language-detection#streaming-and-multilingual-alternatives).
+Automatic multilingual recognition is covered by mocked integration tests here;
+the earlier real public benchmarks used fixed English.

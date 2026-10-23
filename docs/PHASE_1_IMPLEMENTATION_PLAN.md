@@ -336,3 +336,29 @@ provider-specific consent and usage controls, no automatic second model/pass.
 English is selected by default. Real public 60-second response produced three
 speaker IDs and 17.39% WER; reference has four speakers, so the required speaker
 **quality** gate remains open. See [streaming status](DEEPGRAM_STREAMING.md).
+
+### Speaker UI and automatic language selection — 2026-10-23
+
+User requests a speaker-aware UI and restoration of automatic language recognition,
+with multiple expected languages like the Deepgram playground. Before code edits:
+keep the notebook aesthetic, add a speaker roster and distinct label/source rows,
+preserve provisional/final distinction and recording controls. Restore Nova-3
+streaming automatic multilingual mode (`language=multi`) alongside fixed choices.
+Persist actual returned word language on speaker-split segments; status must say
+automatic recognition, not claim an early fixed-language lock. No extra inference
+path or cloud test is needed for this UI/integration change.
+
+Official docs checked 2026-10-23: Nova-3 automatic mode covers en/es/fr/de/hi/ru/pt/
+ja/it/nl; Vietnamese is supported as fixed `vi`, not multilingual auto. `detect_language`
+is batch-only. Repeated `language_hint` belongs to Flux multilingual; Flux feature
+support does not include diarization. Never send unsupported hints or display a
+selection as provider bias/restriction when it is not. Clarification requested on
+whether to show expected-language metadata with this explicit limitation or only
+auto/fixed controls. Continue speaker UI independently while awaiting preference.
+Sources: https://developers.deepgram.com/docs/multilingual-code-switching,
+https://developers.deepgram.com/docs/language-detection,
+https://developers.deepgram.com/docs/models-languages-overview,
+https://developers.deepgram.com/docs/flux/language-prompting,
+https://developers.deepgram.com/docs/flux/feature-overview.
+
+User decision: **Auto + fixed language; omit ineffective hints**. Implemented Nova-3 `language=multi` by default, eleven fixed choices including Vietnamese, language-aware speaker rows, and roster/badge/source UI. 297 Python tests and frontend regressions pass; actual automatic-mode cloud accuracy is not claimed from mocked evidence. No additional API spend. See current streaming doc for visual-QA limits.

@@ -21,6 +21,12 @@ class Element {
 }
 const elements=new Map();
 const get=id => { if (!elements.has(id)) elements.set(id,new Element()); return elements.get(id); };
+function transcriptLine(index) {
+  const body=get('transcript').children.at(index).children[1];
+  const meta=body.children[0], value=body.children[1].textContent;
+  if(meta.hidden) return value;
+  return `${meta.children[2].textContent} · ${meta.children[1].textContent}: ${value}`;
+}
 get('transcript').firstElementChild=new Element();
 get('fixture').value='public';
 get('start').disabled=true;
@@ -61,7 +67,7 @@ get('history').children[0].onclick();
 assert.equal(get('partial').textContent,'ephemeral words');
 deliver({type:'segment',session_id:'active',segment:{id:'segment1',start_ms:0,text:'<script>literal text</script>'}});
 assert.equal(get('partial').textContent,'');
-assert.equal(get('transcript').children[0].children[1].textContent,'<script>literal text</script>');
+assert.equal(transcriptLine(0),'<script>literal text</script>');
 assert.equal(get('history').children[0],originalHistoryButton,'Preserve focused history buttons');
 const originalTranscript=get('transcript').children[0];
 deliver({type:'language_locked',session_id:'active',mode:'manual',language:'en'});
@@ -204,7 +210,7 @@ get('reprocess-meeting').onclick();
 assert.equal(JSON.parse(socket.sent.at(-1)).action,'reprocess');
 assert.equal(JSON.parse(socket.sent.at(-1)).language,'auto');
 deliver({type:'transcript_replaced',session_id:'meeting',segments:[{id:'revised',text:'Tiếng Việt',stream:'mic',start_ms:0}]});
-assert.equal(get('transcript').children.at(-1).children[1].textContent,'Microphone · speaker unknown: Tiếng Việt');
+assert.equal(transcriptLine(-1),'Microphone · Speaker unknown: Tiếng Việt');
 deliver({type:'language_locked',session_id:'meeting',mode:'auto',language:'vi',confidence:.95});
 assert.match(get('language-status').textContent,/Detected: Tiếng Việt.*fixed/);
 assert.ok(socket.sent.length > sentBeforeRecording);
@@ -232,7 +238,7 @@ assert.match(get('partial').textContent,/remote draft/);
 assert.doesNotMatch(get('partial').textContent,/local draft/);
 liveEvent({type:'segment',session_id:'live',segment:{id:'live2',stream:'loopback',text:'remote words',start_ms:0,end_ms:1000}});
 liveEvent({type:'speaker_turns',session_id:'live',turns:[{start_ms:0,end_ms:1000,label:'Speaker 1'},{start_ms:500,end_ms:1000,label:'Speaker 2'}]});
-assert.match(get('transcript').children[1].children[1].textContent,/overlapping \/ uncertain speakers/);
+assert.match(transcriptLine(1),/Overlapping \/ uncertain speakers/);
 liveEvent({type:'transcription_progress',session_id:'live',mode:'catching_up',lag_ms:15000});
 assert.match(get('live-progress').textContent,/Catching up.*0:15/);
 assert.equal(get('stop').disabled,false,'Backlog must not disable Stop');
@@ -277,7 +283,16 @@ liveEvent({type:'snapshot',fixtures:[],sessions:[{id:'people',source:'meeting',t
 assert.equal(get('meeting-language').value,'en');
 assert.match(get('cloud-provider').textContent,/Deepgram/);
 assert.match(get('speaker-status').textContent,/Anonymous speaker labels/);
-assert.match(get('transcript').children[0].children[1].textContent,/Speaker 1: Hello/);
-assert.match(get('transcript').children[1].children[1].textContent,/Speaker 2: Hi/);
+assert.match(transcriptLine(0),/Speaker 1: Hello/);
+assert.match(transcriptLine(1),/Speaker 2: Hi/);
 assert.match(get('cloud-consent-copy').textContent,/Deepgram/);
 console.log('Deepgram streaming speaker labels and explicit language regressions passed');
+
+liveEvent({type:'snapshot',fixtures:[],sessions:[{id:'multi',source:'meeting',title:'Languages',status:'recording',started_at:Date.now()}],active_id:'multi',recording_available:true,transcription:{provider:'deepgram',cloud:true,configured:true,speaker_labels:true,streaming:true,auto_language:true,default_language:'auto',model:'nova-3'},segments:{multi:[{id:'one',stream:'loopback',start_ms:0,end_ms:500,text:'Hello',speaker_label:'Speaker 1',language:'en'},{id:'two',stream:'mic',start_ms:500,end_ms:1000,text:'Hola',speaker_label:'Speaker 2',language:'es'}]},language_locks:{multi:{language:'multi',mode:'multilingual'}}});
+assert.match(get('language-status').textContent,/Auto.*Recognized: English, Spanish/);
+assert.equal(get('speaker-list').children.length,2);
+assert.match(get('speaker-count').textContent,/2 SPEAKER LABELS/);
+assert.equal(get('transcript').children[0].children[1].children[1].textContent,'Hello');
+assert.equal(get('transcript').children[1].children[1].children[0].children[3].textContent,'Spanish');
+assert.equal(get('meeting-language').disabled,true,'Language stays stable while recording');
+console.log('Speaker roster, separate speech text and automatic multilingual status passed');

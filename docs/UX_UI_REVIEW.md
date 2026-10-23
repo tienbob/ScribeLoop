@@ -147,3 +147,6 @@ completion of the remaining Phase 1 capture-validation milestones.
 
 
 Cloud checkpoint check (2026-10-23): new-meeting upload consent, configured-provider status, latency disclosure and source-label limits were visually checked in Brave on desktop and at 400px responsive width. Controls/text fit without horizontal clipping. No recording was started. Frontend regression tests include independent new/saved cloud consent and disabled local replay.
+
+
+2026-10-23 streaming UI update: separate speaker badges, source labels, per-segment language and a speaker roster replace source-prefixed paragraph text. Auto + fixed language choices reflect Nova-3's real capabilities; no ineffective hint multi-select. Native accessibility view confirms the seeded public three-speaker transcript and Auto/Vietnamese guidance. Screenshot automation timed out after user window changes; desktop pixel and narrow-width visual verification for this update remain pending. Frontend regressions exercise rendered roster, plain transcript text, language status and disabled controls during capture.

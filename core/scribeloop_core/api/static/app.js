@@ -14,7 +14,21 @@ let sourceRequest = 0, pendingSource = null, chosenSource = null;
 let renderedCandidates = '', renderedApps = '', renderedMicrophones = '';
 let microphoneNeedsChoice = false, connecting = false;
 const historyNodes = new Map(), transcriptNodes = new Map();
-let transcriptView = '';
+let transcriptView = '', rosterView = '';
+const languageNames={en:'English',vi:'Tiếng Việt',es:'Spanish',fr:'French',de:'German',hi:'Hindi',ru:'Russian',pt:'Portuguese',ja:'Japanese',it:'Italian',nl:'Dutch'};
+function languageName(code) { return languageNames[code] || code; }
+function voiceNumber(label) { return Math.max(0,(Number(/Speaker (\d+)/.exec(label || '')?.[1]) || 1)-1); }
+function avatar(label) { const el=document.createElement('span'); el.className='speaker-avatar'; el.textContent=/Speaker (\d+)/.exec(label || '')?.[1] || '?'; el.setAttribute('data-voice',String(voiceNumber(label)%6)); el.setAttribute('aria-hidden','true'); return el; }
+function renderSpeakers(session,rows) {
+  $('speaker-roster').hidden = session != null && session.source !== 'meeting';
+  const speakers=new Map();
+  rows.forEach(row=>{if(row.speaker_label) speakers.set(row.speaker_label,row.stream === 'mic' ? 'Microphone' : 'Meeting audio');});
+  const signature=JSON.stringify([selectedId,Boolean(rows.length),[...speakers]]);
+  if(signature === rosterView) return;
+  rosterView=signature; $('speaker-list').replaceChildren();
+  for(const [label,source] of speakers) { const chip=document.createElement('div'); chip.className='speaker-chip'; chip.setAttribute('role','listitem'); const name=document.createElement('span'); name.textContent=label; const scope=document.createElement('small'); scope.textContent=source; chip.append(avatar(label),name,scope); $('speaker-list').append(chip); }
+  text('speaker-count',speakers.size ? `${speakers.size} SPEAKER LABEL${speakers.size === 1 ? '' : 'S'}` : rows.length ? 'NO SPEAKER LABELS' : 'AWAITING SPEECH');
+}
 function text(id, value) { if ($(id).textContent !== value) $(id).textContent = value; }
 function scopeDescription(source) {
   if (!source?.scope) return 'Capture scope unavailable';
@@ -129,7 +143,9 @@ function renderDiscovery() {
   }[discovery.permission] || 'Microphone permission has not been checked.');
   $('meeting-source').disabled = !authenticated || locked;
   $('meeting-microphone').disabled = !authenticated || locked;
+  if(active?.capture?.language) $('meeting-language').value=active.capture.language;
   $('meeting-language').disabled = !authenticated || locked;
+  text('meeting-language-help',$('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
   $('title').disabled = locked;
   $('record-consent').disabled = !authenticated || locked;
   $('cloud-consent-row').hidden = !transcription.cloud;
@@ -224,11 +240,24 @@ function renderTranscript(session, rows, emptyMessage) {
     let node=transcriptNodes.get(id);
     if (!node) { const article=document.createElement('article'); article.className='segment';
       const time=document.createElement('span'); time.className='timestamp';
-      const p=document.createElement('p'); article.append(time,p); node={article,time,p}; transcriptNodes.set(id,node); }
+      const body=document.createElement('div'); body.className='segment-content';
+      const meta=document.createElement('div'); meta.className='speaker-meta';
+      const badge=avatar(row.speaker_label), name=document.createElement('span'), source=document.createElement('span'), language=document.createElement('span');
+      name.className='speaker-name'; source.className='speaker-source'; language.className='segment-language';
+      meta.append(badge,name,source,language);
+      const p=document.createElement('p'); body.append(meta,p); article.append(time,body);
+      node={article,time,p,meta,badge,name,source,language}; transcriptNodes.set(id,node); }
     const timestamp=formatDuration(row.start_ms);
     if (node.time.textContent !== timestamp) node.time.textContent=timestamp;
-    const value=session?.source === 'meeting' ? `${speakerLabel(row,speakerTurns.get(selectedId)||[])}: ${row.text}` : row.text;
-    if (node.p.textContent !== value) node.p.textContent=value;
+    node.meta.hidden=session?.source !== 'meeting';
+    const label=speakerLabel(row,speakerTurns.get(selectedId)||[]);
+    const name=row.speaker_label || (/Speaker \d+/.exec(label)?.[0]) || (label.includes('overlapping') ? 'Overlapping / uncertain speakers' : 'Speaker unknown');
+    if(node.name.textContent !== name) node.name.textContent=name;
+    node.badge.textContent=/Speaker (\d+)/.exec(name || '')?.[1] || '?';
+    node.badge.setAttribute('data-voice',String(voiceNumber(name)%6));
+    node.source.textContent=row.stream === 'mic' ? 'Microphone' : 'Meeting audio';
+    node.language.textContent=row.language ? languageName(row.language) : '';
+    if (node.p.textContent !== row.text) node.p.textContent=row.text;
     if ($('transcript').children[index] !== node.article) $('transcript').insertBefore(node.article,$('transcript').children[index] || null);
   });
 }
@@ -252,8 +281,9 @@ function render() {
   if (activeId) $('start').textContent = sessions.get(activeId)?.source === 'meeting' ? 'Meeting recording active' : sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
   else $('start').textContent = replayEnabled ? 'Start replay ↗' : 'Local replay disabled in cloud mode';
   const languageLock = languageLocks.get(selectedId);
-  text('language-status', languageLock ? `${languageLock.mode === 'auto' ? 'Detected' : 'Selected'}: ${languageLock.language === 'vi' ? 'Tiếng Việt' : 'English'} · fixed for this conversation` :
-    session?.source === 'meeting' ? 'Automatic mode identifies the first speech batch once, then keeps that language for the meeting.' : '');
+  const detected=[...new Set((segments.get(selectedId)||[]).map(r=>r.language).filter(Boolean))];
+  text('language-status',languageLock?.mode === 'multilingual' ? `Auto · multilingual${detected.length ? ' · Recognized: '+detected.map(languageName).join(', ') : (segments.get(selectedId)||[]).length ? ' · language not reported' : ' · waiting for speech'}` :  languageLock ? `${languageLock.mode === 'auto' ? 'Detected' : 'Selected'}: ${languageName(languageLock.language)} · fixed for this conversation` :
+    session?.source === 'meeting' ? 'Auto recognizes supported languages as the conversation unfolds. Choose a fixed language for Vietnamese.' : '');
   text('meeting-notes',notes.get(selectedId) || '');
   $('notes-section').hidden = !notes.get(selectedId);
   $('reprocess-controls').hidden = session?.source !== 'meeting';
@@ -287,6 +317,7 @@ function render() {
     session?.source === 'meeting' && liveStates.has(session.status) ? 'Recording audio. Waiting for early speech and the first stable words…' :
     session?.status === 'failed' ? 'This session failed. Check the message above.' :
     liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No speech has been transcribed in this session.';
+  renderSpeakers(session,rows);
   renderTranscript(session,rows,rows.length ? '' : emptyMessage);
 
 }
@@ -412,7 +443,7 @@ function connect() {
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
 $('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:$('consent').checked}); };
 $('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
-$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('title').focus(); };
+$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('cloud-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('title').focus(); };
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { if (busy()) return; clearSource(); renderDiscovery(); };
@@ -466,3 +497,6 @@ $('apply-retention').onclick=()=>{
 
 $('cloud-consent').onchange=renderDiscovery;
 $('saved-cloud-consent').onchange=render;
+
+$('meeting-language').onchange=renderDiscovery;
+$('reprocess-language').onchange=render;

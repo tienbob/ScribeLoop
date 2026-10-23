@@ -19,6 +19,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
 
 from .cloud_meeting import CloudRecordingRunner, pcm_window
+from .languages import AUTO_LANGUAGES, LANGUAGE_CHOICES, LANGUAGE_NAMES, word_language
 
 STREAMS = ('loopback', 'mic')
 
@@ -54,7 +55,8 @@ class DeepgramConfig:
     def public(self):
         return {'provider':self.provider, 'model':self.model, 'cloud':True,
             'configured':bool(self.api_key), 'speaker_labels':True, 'streaming':True,
-            'languages':['en','vi'], 'default_language':'en', 'auto_language':False,
+            'languages':LANGUAGE_NAMES, 'default_language':'auto', 'auto_language':True,
+            'auto_languages':list(AUTO_LANGUAGES), 'language_hints':False,
             'budget_usd':self.budget_usd, 'max_requests':self.max_requests,
             'nominal_usd_per_audio_hour':self.rate, 'updates':'streaming provisional and confirmed text'}
 
@@ -103,12 +105,16 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
         text = word.get('punctuated_word',word.get('word','')).strip()
         if not text:
             continue
-        if groups and groups[-1]['speaker_key'] == key:
+        detected = word_language(word.get('language')) if language == 'multi' else language
+        if language == 'multi' and detected is None:
+            candidates = alternative.get('languages',[])
+            detected = word_language(candidates[0]) if len(candidates) == 1 else None
+        if groups and groups[-1]['speaker_key'] == key and groups[-1]['language'] == detected:
             groups[-1]['end_ms'] = max(groups[-1]['end_ms'],b)
             groups[-1]['text'] += ' '+text
         else:
             groups.append({'stream':stream,'start_ms':a,'end_ms':b,'text':text,
-                'speaker_key':key,'is_final':True,'language':language,'confidence':None})
+                'speaker_key':key,'is_final':True,'language':detected,'confidence':None})
     if not groups and alternative.get('transcript','').strip():
         a = base_ms+round(event['start']*1000)
         b = min(sent_ms,base_ms+round((event['start']+event['duration'])*1000))
@@ -116,7 +122,7 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
             raise DeepgramError('Invalid provider transcript span')
         groups.append({'stream':stream,'start_ms':a,'end_ms':b,
             'text':alternative['transcript'].strip(),'speaker_key':None,
-            'is_final':True,'language':language,'confidence':None})
+            'is_final':True,'language':None if language == 'multi' else language,'confidence':None})
     return groups
 
 
@@ -218,16 +224,19 @@ def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, l
         raise DeepgramError('Deepgram connection security check failed') from None
 
 
-def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='en',checkpoints=None,**_):
-    if language not in {'en','vi'} or not config.api_key:
-        raise DeepgramError('Choose English or Vietnamese and configure Deepgram locally')
+def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto',checkpoints=None,**_):
+    if language not in LANGUAGE_CHOICES or not config.api_key:
+        raise DeepgramError('Choose Auto or a supported language and configure Deepgram locally')
     if done.is_set():
         # Verify both saved tracks before sending either one on an explicit resume.
         for stream in STREAMS:
             for _frame in audio.frames(sid,stream):
                 if cancelled.is_set():
                     return
-    emit({'type':'language_locked','language':language,'mode':'manual','confidence':None,'sample_s':0})
+    automatic = language == 'auto'
+    language = 'multi' if automatic else language
+    emit({'type':'language_locked','language':language,'mode':'multilingual' if automatic else 'manual',
+          'confidence':None,'sample_s':0})
     # A provider failure stops both transcription streams, never native recording.
     failed = threading.Event()
     class Cancel:
@@ -249,6 +258,7 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='en',
 
 
 class DeepgramRecordingRunner(CloudRecordingRunner):
+    supported_languages = LANGUAGE_CHOICES
     def __init__(self,*args,config=None,**kwargs):
         config = config or DeepgramConfig()
         if not isinstance(config,DeepgramConfig):
@@ -264,8 +274,8 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
 
     def start(self,selection,metadata,title, *, consent_confirmed):
         self._authorize(metadata.get('cloud_consent'))
-        if metadata.get('language') not in {'en','vi'}:
-            raise ValueError('Select English or Vietnamese before recording')
+        if metadata.get('language','auto') not in LANGUAGE_CHOICES:
+            raise ValueError('Select Auto or a supported conversation language')
         self.budget = StreamingBudget(self.cloud,{})
         from .recording import RecordingRunner
         return RecordingRunner.start(self,selection,{**metadata,'provider':'deepgram','model':'nova-3',
@@ -277,17 +287,17 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         self.store.grant_cloud(sid,'nova-3',provider='deepgram')
         self.budget = StreamingBudget(self.cloud,self.store.cloud_usage(sid))
 
-    def resume(self,sid, *, language='en',cloud_consent=False):
-        if language not in {'en','vi'}:
-            raise ValueError('Select English or Vietnamese')
+    def resume(self,sid, *, language='auto',cloud_consent=False):
+        if language not in LANGUAGE_CHOICES:
+            raise ValueError('Select Auto or a supported conversation language')
         self._saved(sid)
         if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,'deepgram'}:
             raise ValueError('Saved transcript uses another provider; explicitly replace it instead of mixing backends')
         return super().resume(sid,language=language,cloud_consent=cloud_consent)
 
     def reprocess(self,sid, *, language,cloud_consent=False):
-        if language not in {'en','vi'}:
-            raise ValueError('Select English or Vietnamese')
+        if language not in LANGUAGE_CHOICES:
+            raise ValueError('Select Auto or a supported conversation language')
         return super().reprocess(sid,language=language,cloud_consent=cloud_consent)
 
     def _live(self,audio,sid,emit,cancelled,done,**kwargs):
