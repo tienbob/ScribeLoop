@@ -22,7 +22,7 @@ uploading audio. Older PyTorch MOSS and Groq experiments are historical diagnost
 | Languages | Auto multilingual default for en/es/fr/de/hi/ru/pt/ja/it/nl; eleven fixed choices including Vietnamese. Returned word language is retained. No ineffective language-hint control or false first-language-lock claim |
 | Local model | Pinned, verified 768 MB Q6_K GGUF and transcribe.cpp native worker; Auto/fixed English or Chinese, sequential tracks, cancellation/timeout, no plaintext audio files |
 | Cloud controls | Backend-only key, separate new/saved upload consent, durable ten-second audio reservations before upload, estimated $0.15/80-reservation cap shared across saved actions and both tracks |
-| Local API/UI | Loopback token authentication, strict origin/host checks and CSP, visible recording/scope/Stop, timestamped transcript and transcript excerpt notes |
+| Local API/UI | Keyless loopback demo by default; optional launch-key CLI mode and token-authenticated embedded API; strict origin/host checks and CSP, visible recording/scope/Stop, timestamped transcript and transcript excerpt notes |
 | Launch | Encrypted cloud mode starts without an old public WAV fixture. Explicit public-demo mode still requires an authorized fixture |
 
 Source tracks use separate connections to the **same** provider. They do not
@@ -37,7 +37,7 @@ running; no automatic paid retry or alternative backend is started.
 
 ## Verification
 
-- **321 Python tests passed**, seven frontend regression groups passed, and 61 application
+- **329 Python tests passed**, eight frontend regression groups passed, and 61 application
   modules passed lightweight import smoke without loading local speech models.
 - Automated checks cover consent/key boundaries, independent capture/Stop,
   encrypted recovery/tamper/failure cases, checkpoint rollback, durable cloud caps,
@@ -110,7 +110,11 @@ own an encrypted database. Then run:
   --port 8757
 ```
 
-Open the fresh terminal launch URL. Choose/confirm the app and microphone, select
+Open `http://127.0.0.1:8757/` directly; no launch key is required for this demo.
+The CLI remains bound to loopback; keyless WebSockets require a matching browser
+Origin and a loopback client. Add `--require-launch-key` for the optional token
+mode and its terminal launch URL. Embedded `create_app()` retains token auth by default.
+Choose/confirm the app and microphone, select
 Auto or a fixed language, confirm participant permission and Deepgram upload
 consent, then Record. Stop finalizes capture while pending text completes. Recovery
 opens no microphone and uploads nothing; saved Resume/Reprocess needs its own

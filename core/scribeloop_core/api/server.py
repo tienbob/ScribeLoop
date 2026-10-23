@@ -16,7 +16,7 @@ from typing import Literal
 
 import soundfile as sf
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -108,12 +108,13 @@ class DismissCandidate(BaseModel):
 
 
 def create_app(*, database=None, fixtures=None, backend_factory=None,
-               storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None) -> tuple[FastAPI, str]:
+               storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
+               require_launch_key=True) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
         raise ValueError('Disk storage requires an explicit storage mode and database path')
-    token = new_token()
+    token = new_token() if require_launch_key else ''
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
     for name, path in fixtures.items():
@@ -200,7 +201,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
     @app.get('/')
     async def index():
-        return FileResponse(STATIC / 'index.html')
+        html = (STATIC/'index.html').read_text(encoding='utf-8')
+        return HTMLResponse(html.replace('<html lang="en">',
+            '<html lang="en" data-require-launch-key="'+str(require_launch_key).lower()+'">'))
 
     @app.get('/app.js')
     async def javascript():
@@ -213,7 +216,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     @app.websocket('/ws')
     async def websocket(ws: WebSocket):
         host = ws.headers.get('host', '')
-        if not host_allowed(host) or not origin_allowed(ws.headers.get('origin'), host):
+        if (not host_allowed(host) or not origin_allowed(ws.headers.get('origin'), host)
+                or (not require_launch_key and (ws.headers.get('origin') is None
+                    or ws.client is None or ws.client.host not in {'127.0.0.1','::1'}))):
             await ws.close(code=1008)
             return
         await ws.accept()
@@ -234,10 +239,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             await asyncio.wait_for(ws.send_json(event), timeout=SEND_TIMEOUT_S)
 
         try:
-            message = await asyncio.wait_for(text_frame(256), timeout=AUTH_TIMEOUT_S)
-            if not check_first_message(message, token):
-                await ws.close(code=1008)
-                return
+            if require_launch_key:
+                message = await asyncio.wait_for(text_frame(256), timeout=AUTH_TIMEOUT_S)
+                if not check_first_message(message, token):
+                    await ws.close(code=1008)
+                    return
             clients.add(queue)
             store = app.state.store
             history = store.list()
@@ -420,6 +426,8 @@ def main():
     parser.add_argument('--storage', choices=['encrypted', 'public-demo'], default='encrypted')
     parser.add_argument('--database', type=Path)
     parser.add_argument('--port', type=int, default=8757)
+    parser.add_argument('--require-launch-key',action='store_true',
+                        help='require a per-launch key instead of keyless local demo access')
     parser.add_argument('--no-discovery', action='store_true',
                         help='disable metadata-only automatic meeting discovery')
     args = parser.parse_args()
@@ -434,10 +442,12 @@ def main():
     args.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     from ..meetings.service import manual_discovery, native_discovery
     app, token = create_app(database=args.database, storage=args.storage,
+                            require_launch_key=args.require_launch_key,
                             discovery_factory=manual_discovery if args.no_discovery else native_discovery,
                             fixtures={'development-sample': args.public_fixture} if args.public_fixture else {})
     # Fragment is not sent in HTTP requests; client removes it after reading.
-    print(f'Open locally: http://127.0.0.1:{args.port}/#token={token}', file=sys.stderr)
+    suffix = '#token='+token if args.require_launch_key else ''
+    print(f'Open locally: http://127.0.0.1:{args.port}/'+suffix, file=sys.stderr)
     uvicorn.run(app, host='127.0.0.1', port=args.port, ws_max_size=8192, access_log=False)
 
 

@@ -8,6 +8,10 @@
 - Host header validated against a fixed allowlist (DNS-rebinding defense).
 - Stronger alternative (preferred where available): a Unix domain socket
   owned by the shell process.
+
+The development CLI defaults to a keyless demo with same-origin, loopback-only
+WebSockets. These token helpers remain the default embedded API authentication
+and are enabled by the CLI's --require-launch-key option.
 """
 from __future__ import annotations
 

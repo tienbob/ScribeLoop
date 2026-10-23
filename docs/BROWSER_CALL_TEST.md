@@ -22,7 +22,7 @@ with this scope, preserving the selected model's behavior.
 
 ## Teams in Brave, with app audio and microphone
 
-1. Start the encrypted server and open its fresh launch URL. No public WAV is
+1. Start the encrypted server and open `http://127.0.0.1:8757/`; the demo requires no launch key. No public WAV is
    required for the cloud app. If the database is in use, stop the older server
    before restarting; do not delete lock files or start a second owner.
 2. Start a consented short Teams call in Brave. Choose/confirm Brave and the

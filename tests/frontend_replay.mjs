@@ -363,3 +363,19 @@ assert.equal(get('stop').disabled,false);
 console.log('Microphone-only source, live transcript and upload consent passed');
 liveEvent({type:'session',session:{id:'mic',source:'meeting',title:'Mic',status:'failed',started_at:Date.now(),failure:{code:'capture_clock_discontinuity',stage:'capture',message:'Native audio timestamps jumped.'}}});
 assert.match(get('session-progress').textContent,/Native audio timestamps jumped.*capture_clock_discontinuity/);
+
+const demoElements=new Map();
+const demoGet=id=>{if(!demoElements.has(id))demoElements.set(id,new Element());return demoElements.get(id);};
+demoGet('transcript').firstElementChild=new Element();
+const demoSockets=[];
+class DemoSocket extends Socket { constructor(){super();demoSockets.push(this);} }
+vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf8'),{
+ document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
+ WebSocket:DemoSocket,location:{hash:'',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
+ history:{replaceState(){}},setTimeout,setInterval:()=>null,URLSearchParams,
+});
+assert.equal(demoSockets.length,1,'Demo opens connection without asking for a key');
+demoSockets[0].readyState=Socket.OPEN;demoSockets[0].onopen();
+assert.equal(demoSockets[0].sent.length,0,'No launch key or fake auth frame is sent');
+assert.equal(demoGet('unlock').open,false);
+console.log('Keyless local demo connects directly without an unlock dialog passed');

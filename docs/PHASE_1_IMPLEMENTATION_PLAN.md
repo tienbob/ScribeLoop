@@ -50,6 +50,19 @@ app-coverage requirements stay required and visibly open below.
 
 ## Finalization work authorized by “finish phase 1”
 
+Demo connection change: the development CLI opens the local web UI without a
+launch key by default, as requested. Keep loopback binding, exact same-origin
+browser/Host validation and explicit capture/upload consent. Retain token auth
+for embedded API usage and an explicit `--require-launch-key` CLI switch. Convey
+the mode in server-rendered HTML so the UI opens directly without an unlock dialog.
+
+Completed: demo CLI startup prints a plain localhost URL; the page opens its
+socket directly, with no key frame or unlock dialog. Non-loopback clients,
+missing/cross-origin requests and invalid Hosts remain rejected. Optional token
+mode and normal embedded API authentication remain tested. Recording/upload
+consent is unchanged. Verification: 329 Python tests, eight frontend groups,
+61 lightweight imports, Ruff and diff checks.
+
 Failure investigation: the latest three local mic-only sessions failed during
 capture before a recording-complete event or model invocation. Persist sanitized
 failure diagnostics and expose actionable native capture errors without leaking

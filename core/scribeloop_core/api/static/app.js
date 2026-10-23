@@ -1,5 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const requireLaunchKey = document.documentElement?.dataset?.requireLaunchKey !== 'false';
 let key = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
@@ -363,12 +364,12 @@ function render() {
 }
 function connect() {
   if (connecting || authenticated) return;
-  if (!key) { if (!$('unlock').open) $('unlock').showModal(); return; }
+  if (requireLaunchKey && !key) { if (!$('unlock').open) $('unlock').showModal(); return; }
   connecting=true; $('reconnect').disabled=true;
   $('connection').textContent = 'Connecting…';
   socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   const connection=socket;
-  socket.onopen = () => { if (socket === connection) connection.send(key); };
+  socket.onopen = () => { if (socket === connection && requireLaunchKey) connection.send(key); };
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);

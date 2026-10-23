@@ -30,6 +30,8 @@ Deepgram, or after-Stop mic transcription with Local MOSS. No app audio or Scree
 Recording permission is needed for that scope.
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
+The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.
+Restart the server after updating. Add `--require-launch-key` to opt into token authentication.
 
 ```bash
 uv pip install -e ".[dev,security,sqlcipher]"
