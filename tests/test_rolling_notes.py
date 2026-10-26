@@ -118,3 +118,39 @@ async def test_rolling_only_summarizes_confirmed_closed_sections(state):
     assert len(provider.calls)>calls
     completed_sections=store.conn.execute("SELECT COUNT(*) FROM summary_jobs WHERE node_key LIKE 'section:%' AND state='completed'").fetchone()[0]
     assert completed_sections<len(provider.calls), 'Final reduction reuses section notes'
+
+
+@pytest.mark.asyncio
+async def test_summary_quota_survives_removal_of_derived_jobs(state):
+    store,sid=state
+    rows=add_rows(store,sid,count=1)
+    provider=Provider()
+    engine=RollingNotes(store,provider)
+    await engine.run(sid,rows,revision=1)
+    before=engine.public(sid)
+    with store.conn:
+        store.conn.execute('DELETE FROM summary_jobs WHERE session_id=?',(sid,))
+    assert engine.public(sid)['requests']==before['requests']
+    assert engine.public(sid)['input_bytes']==before['input_bytes']
+    with store.conn:
+        store.conn.execute('UPDATE summary_usage SET requests=128 WHERE session_id=?',(sid,))
+    with pytest.raises(ValueError,match='budget'):
+        await engine.run(sid,rows,revision=1,retry=True)
+    assert len(provider.calls)==1
+
+
+@pytest.mark.asyncio
+async def test_v9_migration_preserves_spent_quota_and_is_idempotent(state):
+    store,sid=state
+    rows=add_rows(store,sid,count=1)
+    engine=RollingNotes(store,Provider())
+    await engine.run(sid,rows,revision=1)
+    with store.conn:
+        store.conn.execute('UPDATE summary_jobs SET attempts=3 WHERE session_id=?',(sid,))
+        size=store.conn.execute('SELECT input_bytes FROM summary_jobs WHERE session_id=?',(sid,)).fetchone()[0]
+        store.conn.execute('DROP TABLE summary_usage')
+        store.conn.execute('PRAGMA user_version=9')
+    migrate(store.conn)
+    migrate(store.conn)
+    budget=engine.public(sid)
+    assert budget['requests']==3 and budget['input_bytes']==3*size

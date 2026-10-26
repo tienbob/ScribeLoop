@@ -20,7 +20,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 DDL = """
 CREATE TABLE sessions (
@@ -201,6 +201,14 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
           embedding_id TEXT PRIMARY KEY REFERENCES speaker_embeddings(id) ON DELETE CASCADE,
           session_speaker_id TEXT NOT NULL REFERENCES session_speakers(id), revision INTEGER NOT NULL,
           start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,reviewed_at INTEGER NOT NULL);
+        """)
+    if version < 10:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS summary_usage (
+          session_id TEXT PRIMARY KEY REFERENCES sessions(id), requests INTEGER NOT NULL DEFAULT 0,
+          input_bytes INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO summary_usage(session_id,requests,input_bytes)
+          SELECT session_id,SUM(attempts),SUM(attempts*input_bytes) FROM summary_jobs GROUP BY session_id;
         """)
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

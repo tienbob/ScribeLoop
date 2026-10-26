@@ -494,3 +494,22 @@ demoGet('forget-person').onclick();
 assert.equal(JSON.parse(ds.sent.at(-1)).action,'forget_person');
 assert.equal(JSON.parse(ds.sent.at(-1)).confirmed,true);
 console.log('Long transcript pagination, rolling-note restore and explicit people controls passed');
+
+// Replacing a long transcript cannot leave a short result on a hidden last page.
+demoEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v3'},fixtures:[],
+ sessions:[{id:sid,source:'meeting',status:'completed',title:'Replace',started_at:1}],active_id:null,
+ segments:{[sid]:longRows},rolling_notes:{[sid]:{summary:summaryDraft,provider:'OpenAI',model:'gpt-5.4-mini'}}});
+demoGet('transcript-previous').onclick();
+const shortRows=longRows.slice(0,4).map(r=>({...r,revision:2}));
+demoEvent({type:'transcript_replaced',session_id:sid,segments:shortRows});
+assert.equal(demoGet('transcript').children.length,4);
+assert.equal(demoGet('transcript-pagination').hidden,true);
+assert.equal(demoGet('rolling-section').hidden,true,'Old source revision cannot retain live notes');
+demoEvent({type:'rolling_notes',session_id:sid,summary:summaryDraft,provider:'OpenAI',model:'gpt-5.4-mini',budget:{}});
+assert.equal(demoGet('rolling-section').hidden,false);
+demoEvent({type:'speakers_corrected',session_id:sid,segments:shortRows,notes:'Updated',summary:null});
+assert.equal(demoGet('rolling-section').hidden,true,'Speaker corrections invalidate old named drafts');
+demoEvent({type:'session_deleted',session_id:sid});
+assert.equal(demoGet('saved-audio').hidden,true);
+assert.equal(demoGet('rolling-section').hidden,true);
+console.log('Revision pagination and stale/deleted rolling-note cleanup passed');

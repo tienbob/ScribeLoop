@@ -118,3 +118,102 @@ async def test_three_hour_resume_uses_cloud_once_per_track_without_full_pcm(stat
     assert all(c['confirmed_ms']==10800000 for c in store.checkpoints(sid).values())
     assert store.get(sid)['status']=='completed'
     await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_scans_past_more_than_one_batch_before_sending_tail(state):
+    store,audio,sid=state
+    for stream in ('mic','loopback'):
+        with audio.writer(sid,stream) as writer:
+            for second in range(20):
+                writer.write(AudioFrame(np.ones(16000,dtype='float32'),stream,second*1000,0))
+        store.checkpoint(sid,stream,recorded_ms=20000)
+        store.commit_window(sid,stream,[],19000)
+    store.transition(sid,'completed')
+    sockets=[]
+    def connector(*args,**kwargs):
+        sock=Socket()
+        sockets.append(sock)
+        return sock
+    async def publish(event):
+        pass
+    runner=CloudRecordingRouter(store,audio,None,publish,cloud_config=DeepgramConfig(api_key='test',connector=connector))
+    runner.resume(sid,language='en',cloud_consent=True)
+    async with asyncio.timeout(5):
+        await runner.task
+    assert len(sockets)==2 and all(s.sent_ms==1000 for s in sockets)
+    assert all(c['confirmed_ms']==20000 for c in store.checkpoints(sid).values())
+    await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_saved_checkpoint_rejects_both_tracks_before_connection(state):
+    store,audio,sid=state
+    for stream in ('mic','loopback'):
+        with audio.writer(sid,stream) as writer:
+            writer.write(AudioFrame(np.ones(16000,dtype='float32'),stream,0,0))
+        store.checkpoint(sid,stream,recorded_ms=1000)
+        store.commit_window(sid,stream,[],1000)
+    store.conn.execute("UPDATE recording_checkpoints SET confirmed_ms=2000 WHERE session_id=? AND stream='mic'",(sid,))
+    store.conn.commit()
+    store.transition(sid,'completed')
+    calls=[]
+    def connector(*args,**kwargs):
+        calls.append(True)
+        return Socket()
+    async def publish(event):
+        pass
+    runner=CloudRecordingRouter(store,audio,None,publish,cloud_config=DeepgramConfig(api_key='test',connector=connector))
+    runner.resume(sid,language='en',cloud_consent=True)
+    await runner.task
+    assert not calls and store.get(sid)['status']=='interrupted'
+    await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_fractional_frame_batches_advance_and_finalize_without_stalling(state):
+    import threading
+
+    from scribeloop_core.pipeline.deepgram_meeting import StreamingBudget, run_streaming
+
+    _,audio,sid=state
+    for stream in ('mic','loopback'):
+        with audio.writer(sid,stream) as writer:
+            # Native resampling commonly produces nonintegral millisecond ends.
+            for i in range(24):
+                writer.write(AudioFrame(np.ones(1601,dtype='float32'),stream,i*100,0))
+    sockets=[]
+    def connector(*args,**kwargs):
+        sock=Socket()
+        sockets.append(sock)
+        return sock
+    config=DeepgramConfig(api_key='test',connector=connector)
+    cancelled,done=threading.Event(),threading.Event()
+    done.set()
+    timer=threading.Timer(3,cancelled.set)
+    def emit(event):
+        if 'ack' in event:
+            event['ack'].set()
+    timer.start()
+    try:
+        await asyncio.to_thread(run_streaming,audio,sid,emit,cancelled,done,
+            config=config,budget=StreamingBudget(config,{}),language='en')
+    finally:
+        timer.cancel()
+    assert not cancelled.is_set(), 'The reader must not stall at a fractional endpoint'
+    assert len(sockets)==2 and all(s.sent_ms==2400 and s.closed for s in sockets)
+
+
+def test_window_memory_is_bounded_even_with_many_tiny_overlapping_frames(state):
+    _,audio,sid=state
+    with audio.writer(sid,'mic') as writer:
+        for i in range(5000):
+            writer.write(AudioFrame(np.ones(1,dtype='float32'),'mic',i//16,0))
+    tracemalloc.start()
+    try:
+        pcm=audio.window(sid,'mic',0,1000)
+        _,peak=tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert pcm.size==312*16
+    assert peak<1_000_000, 'Memory must depend on window size, not frame count'

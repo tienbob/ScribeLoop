@@ -261,19 +261,26 @@ class SessionAudioStore:
                     return report
 
     def window(self, session_id, stream, start_ms, end_ms):
-        from ..pipeline.cloud_meeting import pcm_window
         if not 0<=start_ms<end_ms<=10_805_000 or end_ms-start_ms>305000:
             raise ValueError('Invalid bounded audio window')
-        frames=[]
+        # Allocation depends on the requested duration, never encrypted frame count.
+        pcm=np.zeros(round((end_ms-start_ms)*SAMPLE_RATE/1000),dtype=np.float32)
         with self.cursor(session_id,stream) as cursor:
             while True:
                 batch,report=cursor.read(max_frames=8)
-                frames.extend(f for f in batch if f.t_ms+f.pcm.size*1000/SAMPLE_RATE>start_ms and f.t_ms<end_ms)
+                for frame in batch:
+                    offset=round((frame.t_ms-start_ms)*SAMPLE_RATE/1000)
+                    lo,hi=max(0,offset),min(len(pcm),offset+len(frame.pcm))
+                    if hi>lo:
+                        pcm[lo:hi]=frame.pcm[lo-offset:hi-offset]
                 if report['caught_up']:
                     if not report['complete']:
                         raise AudioIntegrityError('Incomplete playback audio')
                     break
-        return pcm_window(frames,start_ms,min(end_ms,int(report['end_ms'])))
+        end=min(end_ms,int(report['end_ms']))
+        if end<=start_ms:
+            raise ValueError('No audio in selected playback window')
+        return pcm[:round((end-start_ms)*SAMPLE_RATE/1000)]
 
     def forget_session_key(self, session_id):
         """Irreversible crypto-shred; invoke only from an authorized deletion flow.

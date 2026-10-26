@@ -83,7 +83,10 @@ async def test_forget_purges_exemplars_links_vectors_names_notes_and_cache(state
     store.save_grounded_summary(sid,1,fingerprint,notes,provider='test',model='test')
     index=SqliteVecIndex(store.conn,dim=16)
     index.add(sid,0,32000,[row['id']],'Alice spoke',np.ones(16,dtype='float32').tobytes())
+    before=RollingNotes(store,Provider()).public(sid)
     assert registry.forget(person)==[sid]
+    after=RollingNotes(store,Provider()).public(sid)
+    assert after['requests']==before['requests'] and after['input_bytes']==before['input_bytes']
     for table in ('speakers','speaker_embeddings','exemplar_provenance','person_links','person_link_history','grounded_summaries','summary_jobs','embeddings_chunks','embeddings_chunks_vec'):
         assert store.conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]==0
     assert store.segments(sid)[0]['text']=='We discussed the project.'

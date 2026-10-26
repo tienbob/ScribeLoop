@@ -41,8 +41,9 @@ class RollingNotes:
 
     def public(self,sid):
         rows=self.store.conn.execute('SELECT state,attempts,input_bytes FROM summary_jobs WHERE session_id=?',(sid,)).fetchall()
-        return {'requests':sum(r['attempts'] for r in rows),'max_requests':MAX_CALLS,
-                'input_bytes':sum(r['attempts']*r['input_bytes'] for r in rows),'max_input_bytes':MAX_BYTES,
+        usage=self.store.conn.execute('SELECT requests,input_bytes FROM summary_usage WHERE session_id=?',(sid,)).fetchone()
+        return {'requests':usage['requests'] if usage else 0,'max_requests':MAX_CALLS,
+                'input_bytes':usage['input_bytes'] if usage else 0,'max_input_bytes':MAX_BYTES,
                 'pending_review':sum(r['state'] in {'dispatched','failed'} for r in rows)}
 
     def latest(self,sid):
@@ -74,6 +75,8 @@ class RollingNotes:
                 budget['input_bytes']+size>MAX_BYTES or size>100000):
             raise ValueError('Summary authorization or budget exhausted')
         with self.store.conn:
+            self.store.conn.execute('INSERT INTO summary_usage(session_id,requests,input_bytes) VALUES (?,1,?) '
+                'ON CONFLICT(session_id) DO UPDATE SET requests=requests+1,input_bytes=input_bytes+excluded.input_bytes',(sid,size))
             self.store.conn.execute('INSERT INTO summary_jobs '
                 '(id,session_id,revision,node_key,input_hash,provider,model,endpoint,state,attempts,input_bytes) '
                 "VALUES (?,?,?,?,?,?,?,?,'dispatched',1,?) ON CONFLICT(id) DO UPDATE SET "

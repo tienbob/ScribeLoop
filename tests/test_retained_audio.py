@@ -307,3 +307,14 @@ async def test_cleanup_rejects_redirected_recording_directory(retained,tmp_path)
     assert retained.audio.keys.get('audio:'+sid) is not None
     assert (outside/'mic.slpa').is_file()
     assert not retained.status(sid)['available']
+
+
+def test_recovery_preserves_original_audio_expiry_deadline(retained):
+    sid=seed(retained)
+    before=retained.store.audio_policy(sid)['expires_at']
+    with retained.store.conn:
+        retained.store.conn.execute("UPDATE sessions SET status='processing' WHERE id=?",(sid,))
+    retained.store.recover()
+    assert retained.store.get(sid)['status']=='interrupted'
+    assert retained.store.audio_policy(sid)['expires_at']==before
+    assert sid in retained.store.audio_retention_candidates()

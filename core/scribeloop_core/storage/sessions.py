@@ -37,7 +37,7 @@ class SessionStore:
 
     def recover(self):
         with self.conn:
-            self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=? "
+            self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=COALESCE(ended_at,?) "
                               "WHERE status IN ('loading','replaying','preparing','recording','stopping','processing')", (self._now(),))
             self.conn.execute('UPDATE session_streams SET ended_at=(' 
                 'SELECT ended_at FROM sessions WHERE id=session_streams.session_id) '
@@ -468,7 +468,7 @@ class SessionStore:
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
             self.conn.execute('DELETE FROM exemplar_provenance WHERE session_speaker_id IN (SELECT id FROM session_speakers WHERE session_id=?)',(session_id,))
-            for table in ('person_link_history','person_links','summary_jobs','session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            for table in ('summary_usage','person_link_history','person_links','summary_jobs','session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'

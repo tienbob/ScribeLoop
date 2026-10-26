@@ -311,7 +311,7 @@ function speakerLabel(row, turns) {
 }
 function renderTranscript(session, rows, emptyMessage) {
   if(transcriptPageSession!==selectedId) { transcriptPageSession=selectedId; transcriptPageStart=null; }
-  const total=rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-1));
+  const total=rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-500));
   $('transcript-pagination').hidden=total<=500;
   $('transcript-previous').disabled=start===0;
   $('transcript-next').disabled=start+500>=total;
@@ -590,6 +590,7 @@ function connect() {
     } else if (['transcription_error','speaker_warning','recovery_complete'].includes(data.type)) {
       audioPending=false; recordPending=false; notice(data.message); render();
     } else if (data.type === 'session_deleted') {
+      rollingDrafts.delete(data.session_id); audioStates.delete(data.session_id); summaryBudgets.delete(data.session_id);
       savedSummaries.delete(data.session_id); sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
       speakerTurns.delete(data.session_id); languageLocks.delete(data.session_id); liveProgress.delete(data.session_id);
       recordPending=false; if (selectedId === data.session_id) selectedId=null;
@@ -599,10 +600,12 @@ function connect() {
     } else if (data.type === 'language_locked') {
       languageLocks.set(data.session_id,data); render();
     } else if (data.type === 'speakers_corrected') {
+      rollingDrafts.delete(data.session_id);
       speakerPending=false; segments.set(data.session_id,data.segments); notes.set(data.session_id,data.notes);
       savedSummaries.set(data.session_id,data.summary || null);
       text('speaker-edit-status','Speaker corrections saved.'); render();
     } else if (data.type === 'transcript_replaced') {
+      rollingDrafts.delete(data.session_id); transcriptPageStart=null;
       segments.set(data.session_id,data.segments); if(savedSummaries.get(data.session_id)) savedSummaries.get(data.session_id).stale=true; text('transcript-update','Transcript replaced with the completed pass.'); render();
     } else if (data.type === 'notes') {
       notes.set(data.session_id,data.notes); render();

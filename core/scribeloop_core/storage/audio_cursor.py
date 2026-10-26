@@ -111,7 +111,7 @@ class AudioCursor:
                     raise AudioIntegrityError('Invalid SLPA frame size')
                 pcm=np.frombuffer(plain[FRAME.size:],dtype='<f4').astype(np.float32)
                 end=t+count*1000/SAMPLE_RATE
-                if not np.isfinite(pcm).all() or t<self.end_ms-TIMESTAMP_ROUNDING_MS or end>MAX_TIMELINE_MS:
+                if not np.isfinite(pcm).all() or t<self.end_ms-TIMESTAMP_ROUNDING_MS or end>MAX_TIMELINE_MS or self.samples+count>MAX_TIMELINE_MS*SAMPLE_RATE//1000:
                     raise AudioIntegrityError('Invalid SLPA timeline')
                 self.end_ms=end
                 self.samples+=count
