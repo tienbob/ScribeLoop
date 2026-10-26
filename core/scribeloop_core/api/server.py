@@ -1,12 +1,13 @@
 """Authenticated local replay and opt-in encrypted native meeting test workspace.
 
-Native recording requires SQLCipher, macOS, explicit source selection and consent.
-Cloud meeting transcription requires separate explicit consent; credentials stay in the backend.
+Native recording requires SQLCipher, macOS, explicit recording choice and an app agreement.
+Cloud processing uses the durable first-use agreement; credentials stay in the backend.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
 import json
 import sys
@@ -22,11 +23,14 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..llm.rolling import RollingNotes
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
 from ..pipeline.languages import LanguageChoice
 from ..pipeline.replay import ReplayRunner
+from ..speakers.registry import SpeakerRegistry
 from ..storage.db import DATABASE_ERRORS, connect, migrate
+from ..storage.keys import KeyUnavailable
 from ..storage.sessions import SessionStore
 from .auth import check_first_message, host_allowed, new_token, origin_allowed
 
@@ -67,7 +71,8 @@ class StartRecording(SelectSource):
     language: LanguageChoice = 'auto'
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
-    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
+    model: Literal['deepgram'] = 'deepgram'
+    duration_s: Literal[300,3600,10800] = 300
 
     @field_validator('title')
     @classmethod
@@ -84,7 +89,7 @@ class ReprocessRecording(BaseModel):
     cloud_consent: bool = False
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
-    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
+    model: Literal['deepgram'] = 'deepgram'
 
 
 class SavedMeeting(BaseModel):
@@ -94,7 +99,7 @@ class SavedMeeting(BaseModel):
     language: LanguageChoice = 'auto'
     confirmed: bool = False
     cloud_consent: bool = False
-    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
+    model: Literal['deepgram'] = 'deepgram'
 
 
 class SpeakerCorrection(BaseModel):
@@ -130,13 +135,26 @@ class AcceptCall(BaseModel):
     candidate_id: str = Field(min_length=1,max_length=600)
     app_id: str = Field(min_length=1,max_length=256)
     microphone_id: str = Field(default='default',min_length=1,max_length=256)
-    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
+    model: Literal['deepgram'] = 'deepgram'
+    duration_s: Literal[300,3600,10800] = 300
     language: LanguageChoice = 'auto'
     consent_confirmed: bool
     automatic_summary: bool = False
     summary_provider: str | None = None
     summary_model: str | None = None
     summary_endpoint: str | None = None
+
+
+class PersonRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid',strict=True)
+    action: Literal['create_person','link_person','set_person_learning','forget_person']
+    name: str | None = Field(default=None,max_length=80)
+    person_id: str | None = Field(default=None,pattern=r'^[0-9a-f]{32}$')
+    session_id: str | None = Field(default=None,pattern=r'^[0-9a-f]{32}$')
+    revision: int | None = Field(default=None,ge=1)
+    speaker_id: str | None = Field(default=None,max_length=180)
+    enabled: bool | None = None
+    confirmed: bool = False
 
 
 class DismissCandidate(BaseModel):
@@ -159,6 +177,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     auto_tasks = set()
     closing = False
     automatic_scheduled = set()
+    rolling_signatures = {}
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
     for name, path in fixtures.items():
@@ -169,9 +188,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     explicit_replay_backend = backend_factory is not None
     if backend_factory is None:
         def backend_factory():
-            from ..pipeline.asr import ChunkedFasterWhisper
-            return ChunkedFasterWhisper(model_size='tiny', chunk_s=4, language='en',
-                                         local_files_only=True)
+            raise ValueError('Local inference is unavailable in the cloud-only app')
 
     clients = set()
 
@@ -187,6 +204,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             else:
                 queue.put_nowait(event)
         session = event.get('session',{}) if event.get('type') == 'session' else {}
+        if (session.get('source') == 'meeting' and session.get('status') in {'completed','failed','interrupted'}
+                and app.state.audio):
+            await publish({'type':'audio_state','session_id':session['id'],'audio':app.state.audio.status(session['id'])})
         if (not closing and session.get('status') == 'completed' and
                 session.get('capture',{}).get('auto_workflow') and session['id'] not in automatic_scheduled):
             automatic_scheduled.add(session['id'])
@@ -194,29 +214,40 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             auto_tasks.add(task)
             task.add_done_callback(auto_tasks.discard)
 
-    async def automatic_notes(session_id):
+    async def automatic_notes(session_id, *, grant_override=None, expected_task=None, previous_revision=None):
         nonlocal summary_task
         recorder = app.state.recording
-        if recorder and recorder.task:
-            await recorder.task
-        if closing:
+        if expected_task is not None:
+            await asyncio.shield(expected_task)
+        elif recorder and recorder.task:
+            await asyncio.shield(recorder.task)
+        if closing or not app.state.store.agreement()['accepted']:
             return
         store = app.state.store
         session = store.get(session_id)
-        grant = session.get('capture',{}).get('auto_summary') if session else None
+        if not session or (previous_revision is not None and (session['status'] != 'completed' or
+                session['transcript_revision'] <= previous_revision)):
+            return
+        grant = grant_override or session.get('capture',{}).get('auto_summary')
         if not grant:
             return
+        if summary_task is not None and getattr(summary_task,'rolling',False) and getattr(summary_task,'session_id',None)==session_id:
+            await asyncio.shield(summary_task)
         try:
-            if store.conn.execute("SELECT 1 FROM events WHERE session_id=? AND type='automatic_summary_attempt'",
-                                  (session_id,)).fetchone():
+            attempt = 'manual_rerun_summary_attempt' if grant_override else 'automatic_summary_attempt'
+            previous = store.conn.execute('SELECT payload_json FROM events WHERE session_id=? AND type=?',
+                                          (session_id,attempt)).fetchall()
+            if any(not grant_override or json.loads(row[0]).get('revision') == session['transcript_revision']
+                   for row in previous):
                 return
             if (summary_task is not None or not summary_provider or not summary_provider.public()['configured'] or
                     grant != {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}):
                 raise ValueError('Summary endpoint changed or busy')
-            _,fingerprint,messages = store.summary_input(session_id,session['transcript_revision'])
+            _,fingerprint,messages = store.summary_input(session_id,session['transcript_revision'],build_messages=False)
             with store.conn:
                 store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
-                    (session_id,store._now(),'info','automatic_summary_attempt',json.dumps({**grant,'input_hash':fingerprint})))
+                    (session_id,store._now(),'info',attempt,json.dumps({**grant,'input_hash':fingerprint,
+                        'revision':session['transcript_revision']})))
             summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,messages))
             summary_task.session_id = session_id
             await publish({'type':'summary_started','session_id':session_id})
@@ -244,15 +275,73 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 recorder.stop(sid)
                 auto_monitor.clear()
 
-    async def generate_summary(session_id, revision, fingerprint, messages):
+    def recording_busy():
+        recorder = app.state.recording
+        return bool(app.state.runner.active_id or (recorder and (recorder.active_id or
+                    (recorder.task and not recorder.task.done()))))
+
+    async def maintain_audio():
+        while True:
+            retained = app.state.audio
+            if retained and not recording_busy() and app.state.store.agreement()['accepted']:
+                try:
+                    async def expired(sid,retained=retained):
+                        await publish({'type':'audio_state','session_id':sid,'audio':retained.status(sid)})
+                    await retained.cleanup(authorized=lambda:app.state.store.agreement()['accepted'],
+                                           on_expired=expired)
+                except (OSError,KeyUnavailable,*DATABASE_ERRORS):
+                    # No plaintext/error paths in logs. Key-first removal is retryable.
+                    await publish({'type':'audio_cleanup_error',
+                        'message':'Audio cleanup is pending; it will retry while idle. Saved notes are preserved.'})
+            await asyncio.sleep(60)
+
+    async def monitor_rolling():
+        nonlocal summary_task
+        while True:
+            await asyncio.sleep(5)
+            recorder=app.state.recording
+            if not recorder or not recorder.active_id or summary_task is not None or not summary_provider or not summary_provider.public()['configured']:
+                continue
+            sid=recorder.active_id
+            session=app.state.store.get(sid)
+            if (not app.state.store.agreement()['accepted'] or (session.get('capture',{}).get('duration_s') or 300)<=300
+                    or session['capture'].get('auto_summary')!={key:summary_provider.public()[key] for key in ('provider','model','endpoint')}):
+                continue
+            from ..llm.grounded import transcript_hash
+            rows=app.state.store.segments(sid)
+            signature=transcript_hash(rows)
+            if not rows or signature==rolling_signatures.get(sid):
+                continue
+            rolling_signatures[sid]=signature
+            summary_task=asyncio.create_task(generate_rolling(sid,rows,session['transcript_revision']))
+            summary_task.session_id=sid
+            summary_task.rolling=True
+
+    async def generate_rolling(sid,rows,revision):
         nonlocal summary_task
         try:
-            async with asyncio.timeout(70):
-                value = await summary_provider.generate(messages)
+            engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
+            notes=await engine.run(sid,rows,revision=revision,rolling=True)
+            if notes:
+                await publish({'type':'rolling_notes','session_id':sid,'summary':notes[-1],'provider':summary_provider.provider,'model':summary_provider.model,'budget':engine.public(sid)})
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - preserve prior draft, redact provider data
+            await publish({'type':'rolling_notes_error','session_id':sid,
+                'message':'Section notes paused. Saved transcript is safe; Generate summary can explicitly retry.'})
+        finally:
+            summary_task=None
+
+    async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False):
+        nonlocal summary_task
+        try:
+            async with asyncio.timeout(3600):
+                engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
+                value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,retry=retry)
             saved = app.state.store.save_grounded_summary(session_id,revision,fingerprint,value,
                 provider=summary_provider.provider,model=summary_provider.model)
             await publish({'type':'summary_ready','session_id':session_id,'summary':saved,
-                'session':app.state.store.get(session_id)})
+                'session':app.state.store.get(session_id),'budget':engine.public(session_id)})
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - provider boundary preserves prior data and redacts failures
@@ -279,24 +368,39 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.runner = ReplayRunner(store, backend_factory, publish)
             app.state.storage = storage
             app.state.recording = None
+            app.state.audio = None
             if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
                 from ..capture.macos_client import MacOSMeetingAudioSource
-                from ..pipeline.model_selection import ModelRecordingRunner
+                from ..pipeline.model_selection import CloudRecordingRouter
                 from ..storage.audio import SessionAudioStore
                 from ..storage.keys import NativeKeyStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           key_store if key_store is not None else NativeKeyStore())
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
-                    if recording_factory else ModelRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,cloud_config=cloud_config))
+                    if recording_factory else CloudRecordingRouter(store,audio,MacOSMeetingAudioSource,publish,cloud_config=cloud_config))
+                from ..storage.retained_audio import RetainedAudio
+                app.state.audio = RetainedAudio(store,audio)
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
             monitor_task = None
+            retention_task = None
+            rolling_task = None
             try:
                 await app.state.discovery.start()
                 closing = False
                 monitor_task = asyncio.create_task(monitor_calls())
+                retention_task = asyncio.create_task(maintain_audio())
+                rolling_task = asyncio.create_task(monitor_rolling())
                 yield
             finally:
                 closing = True
+                if rolling_task is not None:
+                    rolling_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await rolling_task
+                if retention_task is not None:
+                    retention_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await retention_task
                 if monitor_task is not None:
                     monitor_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -325,7 +429,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         response = await call_next(request)
         response.headers['Content-Security-Policy'] = (
             "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-            "img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+            "img-src 'self'; media-src blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Cache-Control'] = 'no-store'
@@ -360,6 +464,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         await ws.accept()
         queue = asyncio.Queue(maxsize=128)
         sender = reader = None
+        playback_pending = False
 
         async def text_frame(limit):
             frame = await ws.receive()
@@ -384,6 +489,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = app.state.store
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                'agreement':store.agreement(),
+                'people':SpeakerRegistry(store).list(),
+                'summary_budgets':{row['id']:RollingNotes(store,summary_provider).public(row['id']) for row in history},
+                'rolling_notes':{row['id']:RollingNotes(store,summary_provider).latest(row['id']) for row in history if row['source']=='meeting'},
+                'audio_states':{s['id']:app.state.audio.status(s['id']) for s in history if app.state.audio and s['source']=='meeting'},
                 'auto_call':{'session_id':auto_monitor.session_id},
                 'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
                 'summary_active_id':getattr(summary_task,'session_id',None),
@@ -392,10 +502,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     (app.state.recording.active_id if app.state.recording else None),
                 'recording_available': app.state.recording is not None,
                 'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
-                'transcription_models': app.state.recording.profiles() if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
+                'transcription_models': {'deepgram':app.state.recording.profiles()['deepgram']} if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
                 'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
                 'replay_available': not app.state.runner.unavailable,
-                'replay_enabled': explicit_replay_backend or not hasattr(app.state.recording,'cloud'), 'storage': app.state.storage,
+                'replay_enabled': explicit_replay_backend, 'storage': app.state.storage,
                 'discovery': app.state.discovery.snapshot(),
                 'segments': {s['id']: store.segments(s['id']) for s in history},
                 'transcript_revisions': {s['id']: store.revisions(s['id']) for s in history},
@@ -405,24 +515,72 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 'checkpoints': {s['id']:store.checkpoints(s['id']) for s in history}})
 
             async def send_events():
+                nonlocal playback_pending
                 while True:
                     event = await queue.get()
                     await send(event)
+                    if event['type'] == 'audio_playback':
+                        playback_pending = False
                     if event['type'] == 'reconnect_required':
                         await ws.close(code=1013)
                         return
 
             async def receive_commands():
-                nonlocal summary_task
+                nonlocal summary_task,playback_pending
                 while True:
                     command = None
+                    owns_playback = False
                     try:
                         raw = await text_frame(4096)
                         command = json.loads(raw)
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
-                        if command.get('action') == 'start':
-                            if not explicit_replay_backend and hasattr(app.state.recording,'cloud'):
+                        action = command.get('action')
+                        retained = app.state.audio
+                        if retained and retained.busy and action in {'record','accept_call','resume','reprocess','recover','delete','retention','archive_audio','play_audio'}:
+                            raise ValueError('Wait for the audio reader or cleanup')
+                        if action in {'resume','reprocess'} and retained:
+                            retained.require(command.get('session_id'))
+                        if action in {'record','accept_call','resume','reprocess','summarize'}:
+                            if not store.agreement()['accepted']:
+                                await queue.put({'type':'error','context':'meeting',
+                                    'message':'Accept the first-use agreement before recording or processing.'})
+                                continue
+                            # Legacy wire fields are accepted, but authorization now comes
+                            # exclusively from the durable, versioned app agreement.
+                            for field in ('consent_confirmed','cloud_consent','text_consent'):
+                                if field in command:
+                                    if not isinstance(command[field],bool):
+                                        raise ValueError('Invalid legacy authorization field')
+                                    command[field] = True
+                            if action in {'record','accept_call'}:
+                                command['consent_confirmed'] = True
+                            if action in {'record','resume','reprocess'}:
+                                command['cloud_consent'] = True
+                            if action == 'summarize':
+                                command['text_consent'] = True
+                        if action == 'accept_agreement':
+                            if set(command) != {'action','version'} or not isinstance(command['version'],str):
+                                raise ValueError('Invalid agreement')
+                            await publish({'type':'agreement','agreement':store.accept_agreement(command['version'])})
+                        elif action == 'revoke_agreement':
+                            if set(command) != {'action'}:
+                                raise ValueError('Invalid agreement')
+                            state = store.revoke_agreement()
+                            recorder = app.state.recording
+                            if recorder:
+                                if recorder.active_id:
+                                    recorder.stop(recorder.active_id)
+                                cancellation = getattr(recorder,'cancel_processing',None)
+                                if cancellation is not None:
+                                    cancellation.set()
+                            if summary_task:
+                                summary_task.cancel()
+                            for task in list(auto_tasks):
+                                task.cancel()
+                            await publish({'type':'agreement','agreement':state})
+                        elif command.get('action') == 'start':
+                            if not explicit_replay_backend:
                                 raise ValueError('Local model replay is disabled in cloud mode')
                             if app.state.recording and (app.state.recording.active_id or
                                     (app.state.recording.task and not app.state.recording.task.done())):
@@ -469,7 +627,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 recorder.select_model(request.model)
                             title = f"{source['name']} · {datetime.now().astimezone().strftime('%b %d, %H:%M')}"
                             session = recorder.start(selection,{**source,'engine':request.model,
-                                'language':request.language,'cloud_consent':True,'auto_workflow':True,
+                                'language':request.language,'duration_s':request.duration_s,'cloud_consent':True,'auto_workflow':True,
                                 'auto_title':True,'auto_summary':grant},title,consent_confirmed=True)
                             auto_monitor.track(session['id'],request.app_id)
                             with contextlib.suppress(ValueError):
@@ -482,7 +640,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         elif command.get('action') in {'summarize','export_markdown'}:
                             request = SummaryRequest.model_validate(command)
                             rows,fingerprint,messages = store.summary_input(request.session_id,request.revision,
-                                build_messages=request.action == 'summarize')
+                                build_messages=False)
                             if request.action == 'export_markdown':
                                 from ..llm.grounded import export_markdown
                                 await queue.put({'type':'markdown_export','session_id':request.session_id,
@@ -502,9 +660,33 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                             'provider':request.provider,'model':request.model,
                                             'text_consent':request.text_consent})))
                                 summary_task = asyncio.create_task(generate_summary(request.session_id,
-                                    request.revision,fingerprint,messages))
+                                    request.revision,fingerprint,messages,retry=True))
                                 summary_task.session_id = request.session_id
                                 await publish({'type':'summary_started','session_id':request.session_id})
+                        elif action in {'create_person','link_person','set_person_learning','forget_person'}:
+                            request=PersonRequest.model_validate(command)
+                            fields={'create_person':{'action','name'},'link_person':{'action','person_id','session_id','revision','speaker_id'},
+                                'set_person_learning':{'action','person_id','enabled'},'forget_person':{'action','person_id','confirmed'}}[action]
+                            if set(command)!=fields or recording_busy() or summary_task is not None:
+                                raise ValueError('Wait for processing and provide the selected person fields')
+                            registry=SpeakerRegistry(store)
+                            affected=[]
+                            if action=='create_person':
+                                registry.create(request.name)
+                            elif action=='link_person':
+                                registry.link(request.session_id,request.revision,request.speaker_id,request.person_id)
+                                affected=[request.session_id]
+                            elif action=='set_person_learning':
+                                registry.learning(request.person_id,request.enabled)
+                            else:
+                                if not request.confirmed:
+                                    raise ValueError('Confirm permanent person deletion')
+                                affected=registry.forget(request.person_id)
+                            await publish({'type':'people_changed','people':registry.list(),
+                                'sessions':[store.get(sid) for sid in affected],
+                                'segments':{sid:store.segments(sid) for sid in affected},
+                                'notes':{sid:store.notes(sid) for sid in affected},
+                                'grounded_summaries':{sid:store.grounded_summary(sid) for sid in affected}})
                         elif command.get('action') in {'rename_speaker','merge_speaker'}:
                             request = SpeakerCorrection.model_validate(command)
                             recorder = app.state.recording
@@ -524,12 +706,20 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 'summary':store.grounded_summary(request.session_id)})
                         elif command.get('action') == 'reprocess':
                             request = ReprocessRecording.model_validate(command)
-                            if not app.state.recording or app.state.runner.active_id:
-                                raise ValueError('Local reprocessing is unavailable')
+                            if not app.state.recording or app.state.runner.active_id or summary_task is not None:
+                                raise ValueError('Cloud rerun is unavailable or notes are still processing')
                             if hasattr(app.state.recording,'select_model'):
                                 app.state.recording.select_model(request.model)
+                            previous_revision = store.get(request.session_id)['transcript_revision']
                             app.state.recording.reprocess(request.session_id, language=request.language,
                                 **({'cloud_consent':request.cloud_consent} if hasattr(app.state.recording,'cloud') else {}))
+                            automatic_scheduled.add(request.session_id)
+                            if summary_provider and summary_provider.public()['configured']:
+                                grant = {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
+                                task = asyncio.create_task(automatic_notes(request.session_id,grant_override=grant,
+                                    expected_task=app.state.recording.task,previous_revision=previous_revision))
+                                auto_tasks.add(task)
+                                task.add_done_callback(auto_tasks.discard)
                         elif command.get('action') in {'recover','resume','delete'}:
                             request = SavedMeeting.model_validate(command)
                             recorder = app.state.recording
@@ -546,6 +736,28 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 if not request.confirmed:
                                     raise ValueError('Confirm permanent deletion')
                                 recorder.delete_saved(request.session_id)
+                        elif action in {'archive_audio','play_audio'}:
+                            allowed = {'action','session_id','archived' if action == 'archive_audio' else 'stream'}
+                            if action=='play_audio' and 'start_ms' in command:
+                                allowed.add('start_ms')
+                            if set(command) != allowed or not retained or recording_busy():
+                                raise ValueError('Saved audio operation unavailable')
+                            sid = SavedMeeting.model_validate({'action':'recover','session_id':command['session_id']}).session_id
+                            retained.require(sid)
+                            if store.get(sid)['status'] not in {'completed','failed','interrupted'}:
+                                raise ValueError('Select a saved meeting')
+                            if action == 'archive_audio':
+                                store.archive_audio(sid,command['archived'])
+                                await publish({'type':'audio_state','session_id':sid,'audio':retained.status(sid)})
+                            else:
+                                if command['stream'] not in {'mic','loopback'}:
+                                    raise ValueError('Invalid audio track')
+                                if playback_pending:
+                                    raise ValueError('Wait for previous playback delivery')
+                                playback_pending = owns_playback = True
+                                data = await retained.playback(sid,command['stream'],start_ms=command.get('start_ms',0))
+                                await queue.put({'type':'audio_playback','session_id':sid,'stream':command['stream'],
+                                    'wav_base64':base64.b64encode(data).decode('ascii')})
                         elif command.get('action') == 'retention':
                             request = RetentionRequest.model_validate(command)
                             recorder = app.state.recording
@@ -575,7 +787,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 raise ValueError('A replay is active')
                             if hasattr(recorder,'select_model'):
                                 recorder.select_model(request.model)
-                            source = {**source,'language':request.language,'cloud_consent':request.cloud_consent,
+                            grant=({key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
+                                   if summary_provider and summary_provider.public()['configured'] else None)
+                            source = {**source,'auto_workflow':True,'auto_title':request.title.strip() in {'Meeting conversation','Meeting test'},'auto_summary':grant,'language':request.language,'duration_s':request.duration_s,'cloud_consent':request.cloud_consent,
                                       'asr_engine':request.model if hasattr(recorder,'select_model') else recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
@@ -597,21 +811,27 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await app.state.discovery.dismiss(request.candidate_id)
                         else:
                             raise ValueError('Unknown command')
-                    except (ValueError, ValidationError, TypeError, OSError, *DATABASE_ERRORS):
+                    except (ValueError, ValidationError, TypeError, OSError, KeyUnavailable, *DATABASE_ERRORS):
+                        if owns_playback:
+                            playback_pending = False
                         if queue.full():
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
-                            'message': ('Summary/export rejected. Select the current saved transcript, check configuration and text-upload consent, and wait for any summary request to finish.'
+                            'message': ('Summary/export rejected. Select the current saved transcript, check configuration and the first-use agreement, and wait for any summary request to finish.'
                             if action in {'summarize','export_markdown'} else
+                            'Person change rejected. Select a saved speaker/person and wait for processing; Forget requires confirmation.'
+                            if action in {'create_person','link_person','set_person_learning','forget_person'} else
                             'Speaker correction rejected. Reopen the saved transcript; choose a valid name or a speaker from the same track and generation.'
                             if action in {'rename_speaker','merge_speaker'} else
                             'Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
                             if action in {'recover','resume','delete','retention'} else
+                            'Saved audio is unavailable or busy. Check its expiry and try again.'
+                            if action in {'archive_audio','play_audio','reprocess'} else
                             'Source unavailable or suggestion expired. Choose again manually.')
                             if meeting else
                             'Request rejected. Check authorization, fixture, and active replay.'})

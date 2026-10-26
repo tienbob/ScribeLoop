@@ -60,3 +60,4 @@ jobs:
         run: |
           python scripts/build_capture.py --kind meeting
           python scripts/check_meeting_capture.py
+          python scripts/check_meeting_capture.py --duration-s 10800

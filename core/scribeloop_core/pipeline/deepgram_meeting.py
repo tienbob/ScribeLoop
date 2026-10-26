@@ -34,7 +34,7 @@ class DeepgramConfig:
     rate = .60  # Conservative estimate including diarization, not actual billing.
 
     def __init__(self, *, api_key=None, connector=None, budget_usd=.15, max_requests=80):
-        if not 0 < budget_usd <= 1 or not 1 <= max_requests <= 200:
+        if not 0 < budget_usd <= 10 or not 1 <= max_requests <= 7200:
             raise ValueError('Invalid cloud budget')
         if api_key is None:
             api_key = os.environ.get('DEEPGRAM_API_KEY', '').strip()
@@ -127,25 +127,50 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
     return groups
 
 
-def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint):
+def stream_track(audio, sid, stream, emit, cancelled, done, **kwargs):
+    while not cancelled.is_set():
+        try:
+            cursor=audio.cursor(sid,stream)
+            break
+        except FileNotFoundError:
+            if done.is_set():
+                raise
+            cancelled.wait(.05)
+    else:
+        return
+    with cursor:
+        return _stream_cursor(cursor,sid,stream,emit,cancelled,done,**kwargs)
+
+
+def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint):
     sent = confirmed = base = checkpoint
     epoch = uuid4().hex
+    frames=[]
+    def remember(batch):
+        frames.extend(f for f in batch if f.t_ms+f.pcm.size/16>sent)
+        if len(frames)>16 or sum(f.pcm.size for f in frames)>10*16000:
+            raise DeepgramError('Encrypted audio frame timeline is not advancing')
     # Do not open a paid connection until there is recorded audio to send.
     while not cancelled.is_set():
         finished = done.is_set()
         try:
-            frames, report = audio.prefix(sid,stream,durable=True)
+            batch, report = cursor.read(durable=True)
+            remember(batch)
         except FileNotFoundError:
             if done.is_set():
                 raise
             cancelled.wait(.05)
             continue
-        if finished and not report['complete']:
+        if finished and report['caught_up'] and not report['complete']:
             raise DeepgramError('Recover incomplete audio before resume')
-        if report['end_ms'] > sent:
+        if int(report['end_ms']) > sent:
             break
-        if finished:
+        if finished and report['complete']:
+            if checkpoint>int(report['end_ms']):
+                raise DeepgramError('Checkpoint exceeds authenticated audio')
             return
+        if not report['caught_up']:
+            continue
         cancelled.wait(.05)
     if cancelled.is_set():
         return
@@ -166,11 +191,13 @@ def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, l
             while not cancelled.is_set():
                 if closing is None and time.monotonic() >= refresh:
                     finished = done.is_set()
-                    frames,report = audio.prefix(sid,stream,durable=True)
+                    if sent>=int(report['end_ms']) and not report['complete']:
+                        batch,report = cursor.read(durable=True)
+                        remember(batch)
                     available = int(report['end_ms'])
                     emit({'type':'recorded_checkpoint','stream':stream,'end_ms':available})
                     refresh = time.monotonic()+.1
-                    if finished and not report['complete']:
+                    if finished and report['caught_up'] and not report['complete']:
                         raise DeepgramError('Encrypted audio is incomplete')
                     # Send at most one second before reading pending server events.
                     end = min(available,sent+1000,reserved_until)
@@ -178,10 +205,11 @@ def stream_track(audio, sid, stream, emit, cancelled, done, *, config, budget, l
                         pcm = pcm_window(frames,sent,end)
                         ws.send(np.clip(pcm*32767,-32768,32767).astype('<i2').tobytes())
                         sent = end
+                        frames[:]=[f for f in frames if f.t_ms+f.pcm.size/16>sent]
                     if sent >= reserved_until and available > sent:
                         budget.reserve(stream,emit,cancelled)
                         reserved_until += 10000
-                    if finished and sent >= available:
+                    if finished and report['complete'] and sent >= available:
                         ws.send(json.dumps({'type':'CloseStream'}))
                         closing = time.monotonic()
                 if closing is not None and time.monotonic()-closing > 15:
@@ -240,9 +268,12 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
     if done.is_set():
         # Verify both saved tracks before sending either one on an explicit resume.
         for stream in STREAMS:
-            for _frame in audio.frames(sid,stream):
-                if cancelled.is_set():
-                    return
+            report=audio.scan(sid,stream)
+            checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0)
+            if cancelled.is_set():
+                return
+            if not report['complete'] or type(checkpoint) is not int or not 0<=checkpoint<=int(report['end_ms']):
+                raise DeepgramError('Recover incomplete audio or invalid saved checkpoints before resume')
     automatic = language == 'auto'
     language = 'multi' if automatic else language
     emit({'type':'language_locked','language':language,'mode':'multilingual' if automatic else 'manual',
@@ -314,10 +345,6 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         return run_streaming(audio,sid,emit,cancelled,done,config=self.cloud,budget=self.budget,**kwargs)
 
     def _batch(self,audio,sid,emit,cancelled):
-        for stream in STREAMS:
-            for _ in audio.frames(sid,stream):
-                if cancelled.is_set():
-                    return
         done = threading.Event()
         done.set()
         def convert(event):

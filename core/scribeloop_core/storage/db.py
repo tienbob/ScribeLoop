@@ -20,7 +20,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 10
 
 DDL = """
 CREATE TABLE sessions (
@@ -171,6 +171,44 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
           summary_json TEXT NOT NULL, created_at INTEGER NOT NULL,
           FOREIGN KEY(session_id,revision) REFERENCES transcript_revisions(session_id,revision));
         CREATE INDEX IF NOT EXISTS idx_grounded_session ON grounded_summaries(session_id,created_at);
+        """)
+    if version < 6:
+        conn.execute("CREATE TABLE IF NOT EXISTS app_agreement (version TEXT PRIMARY KEY, accepted_at INTEGER NOT NULL, revoked_at INTEGER)")
+    if version < 7:
+        conn.execute("CREATE TABLE IF NOT EXISTS session_audio_policy (session_id TEXT PRIMARY KEY REFERENCES sessions(id), archived INTEGER NOT NULL DEFAULT 0, expired_at INTEGER)")
+    if version < 8:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS summary_jobs (
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL,
+          node_key TEXT NOT NULL, input_hash TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+          endpoint TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, input_bytes INTEGER NOT NULL,
+          summary_json TEXT);
+        CREATE INDEX IF NOT EXISTS idx_summary_jobs_session ON summary_jobs(session_id);
+        """)
+    if version < 9:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS person_links (
+          session_id TEXT NOT NULL, revision INTEGER NOT NULL,
+          speaker_id TEXT NOT NULL REFERENCES session_speakers(id), person_id TEXT NOT NULL REFERENCES speakers(id),
+          PRIMARY KEY(session_id,revision,speaker_id),
+          FOREIGN KEY(session_id,revision) REFERENCES transcript_revisions(session_id,revision));
+        CREATE TABLE IF NOT EXISTS person_link_history (
+          session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL,
+          speaker_id TEXT NOT NULL REFERENCES session_speakers(id), person_id TEXT NOT NULL REFERENCES speakers(id),
+          PRIMARY KEY(session_id,revision,speaker_id,person_id));
+        INSERT OR IGNORE INTO person_link_history SELECT session_id,revision,speaker_id,person_id FROM person_links;
+        CREATE TABLE IF NOT EXISTS exemplar_provenance (
+          embedding_id TEXT PRIMARY KEY REFERENCES speaker_embeddings(id) ON DELETE CASCADE,
+          session_speaker_id TEXT NOT NULL REFERENCES session_speakers(id), revision INTEGER NOT NULL,
+          start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,reviewed_at INTEGER NOT NULL);
+        """)
+    if version < 10:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS summary_usage (
+          session_id TEXT PRIMARY KEY REFERENCES sessions(id), requests INTEGER NOT NULL DEFAULT 0,
+          input_bytes INTEGER NOT NULL DEFAULT 0);
+        INSERT OR IGNORE INTO summary_usage(session_id,requests,input_bytes)
+          SELECT session_id,SUM(attempts),SUM(attempts*input_bytes) FROM summary_jobs GROUP BY session_id;
         """)
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

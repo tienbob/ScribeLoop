@@ -7,6 +7,9 @@ const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
 let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
 let modelProfiles = {};
+let people=[], personPending=false, summaryBudgets=new Map(), rollingDrafts=new Map(), transcriptPageStart=null, transcriptPageSession=null;
+let audioStates=new Map(), audioPending=false, audioURL=null, audioSession=null;
+let agreement={accepted:false,version:null};
 let promptCandidate=null, offeredCalls=new Set(), autoCallState=null;
 let summaryProvider={configured:false}, savedSummaries=new Map(), summaryActiveId=null, summaryPending=false, exportPending=false, summarySession=null;
 let savedModelSession = null;
@@ -23,7 +26,7 @@ let transcriptView = '', rosterView = '', speakerPending = false;
 const languageNames={en:'English',vi:'Tiếng Việt',zh:'Chinese',es:'Spanish',fr:'French',de:'German',hi:'Hindi',ru:'Russian',pt:'Portuguese',ja:'Japanese',it:'Italian',nl:'Dutch'};
 function selectedModel(saved=false) { return $(saved ? 'saved-model' : 'meeting-model').value || 'deepgram'; }
 function profile(saved=false) { return modelProfiles[selectedModel(saved)] || transcription; }
-function modelHelp(p) { return p.provider === 'local-moss' ? `Local · MOSS Q6_K. Audio stays on this machine. Speaker transcript appears after Stop. English / Chinese only. ${p.configured ? 'Installed and ready.' : p.setup || 'Local runtime is not installed.'}` : 'Cloud · Deepgram Nova-3. Live transcription with speaker labels; audio is sent to Deepgram only with your consent.'; }
+function modelHelp(p) { return 'Cloud · Deepgram Nova-3. Live transcription with speaker labels. Stop finalizes this stream; full saved-audio reruns happen only when requested.'; }
 function modelLanguages(id,p) {
   if (!p.languages) return;
   const select=$(id);
@@ -86,7 +89,7 @@ function scopeDescription(source) {
   return kind === 'browser' ? `All tabs in ${source.name}` : `All audio from ${source.name || 'the selected app'}`;
 }
 function providerName() { return transcription.provider === 'deepgram' ? 'Deepgram' : 'Groq'; }
-function busy() { return Boolean(activeId) || recordPending; }
+function busy() { return Boolean(activeId) || recordPending || audioPending; }
 function formatDuration(ms) {
   const seconds = Math.max(0,Math.floor(ms/1000));
   return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
@@ -157,13 +160,13 @@ function closeCallPrompt() {
 function renderCallAssistant() {
   const processing=[...sessions.values()].some(s=>s.status === 'processing');
   const current=discovery.candidates.find(c=>c.id === promptCandidate?.id && c.selectable);
-  if(promptCandidate && (!current || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
+  if(promptCandidate && (!current || !agreement.accepted || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
   text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs the encrypted macOS app.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
   const ending=autoCallState?.session_id === activeId && autoCallState?.state === 'ending';
   $('keep-recording').hidden=!ending;
   $('keep-recording').disabled=!authenticated;
   text('auto-end-status',ending ? `App audio is inactive. Ending in ${autoCallState.remaining_s}s.` : autoCallState?.session_id === activeId && autoCallState?.state === 'unknown' ? 'Call detection uncertain · recording continues' : '');
-  if(!authenticated || !recordingAvailable || busy() || processing || discovery.status !== 'available' || discovery.permission !== 'authorized' || !profile().configured) return;
+  if(!agreement.accepted || !authenticated || !recordingAvailable || busy() || processing || discovery.status !== 'available' || discovery.permission !== 'authorized' || !profile().configured) return;
   if(!promptCandidate) {
     const candidate=discovery.candidates.find(c=>c.selectable && !offeredCalls.has(c.id));
     if(!candidate) return;
@@ -172,7 +175,7 @@ function renderCallAssistant() {
   const p=profile(), candidate=promptCandidate;
   text('call-permission-heading',`Take notes for ${candidate.name}?`);
   text('call-permission-copy',`${candidate.kind === 'browser' ? 'Capture audio from all tabs in '+candidate.name : 'Capture audio from '+candidate.name}, plus ${$('meeting-microphone').value === 'default' || !$('meeting-microphone').value ? 'your system default microphone' : 'your selected microphone'}.`);
-  text('call-permission-provider',`${p.cloud ? 'Audio will be sent to ' : 'Audio will be transcribed locally with '}${p.provider} · ${p.model}. ${summaryProvider.configured ? `After the call, transcript text and speaker labels will be sent to ${summaryProvider.provider} · ${summaryProvider.model} at ${summaryProvider.endpoint} for notes and a title.` : 'Automatic notes are unavailable until a summary provider is configured. The transcript will still be saved.'}`);
+  text('call-permission-provider',`${$('meeting-duration').value==='10800' ? '3-hour limit · $8 shared audio cap. ' : $('meeting-duration').value==='3600' ? '1-hour limit · $3 shared audio cap. ' : '5-minute development limit · $'+Number(p.duration_profiles?.['300']?.budget_usd || p.budget_usd || .25).toFixed(2)+' shared audio cap. '}${p.cloud ? 'Audio will be sent to ' : 'Audio will be transcribed locally with '}${p.provider} · ${p.model}. ${summaryProvider.configured ? `After the call, transcript text and speaker labels will be sent to ${summaryProvider.provider} · ${summaryProvider.model} at ${summaryProvider.endpoint} for notes and a title.` : 'Automatic notes are unavailable until a summary provider is configured. The transcript will still be saved.'}`);
   text('accept-call',summaryProvider.configured ? 'Record & take notes' : 'Record conversation');
   $('accept-call').disabled=recordPending;
   if(!$('call-permission').open) { $('call-permission').showModal(); $('decline-call').focus(); }
@@ -182,13 +185,13 @@ function renderDiscovery() {
   const processing = [...sessions.values()].some(s => s.source === 'meeting' && s.status === 'processing');
   const active = sessions.get(activeId);
   const locked = busy();
-  if(active?.capture?.engine && modelProfiles[active.capture.engine]) $('meeting-model').value=active.capture.engine;
+  $('meeting-model').value='deepgram';
   transcription=profile();
   $('meeting-model').disabled=!authenticated || locked || processing || !Object.keys(modelProfiles).length;
   modelLanguages('meeting-language',transcription);
   text('model-help',modelHelp(transcription));
-  text('transcript-feature',transcription.streaming === false ? 'After recording' : 'Live transcript');
-  text('transcript-feature-help',transcription.streaming === false ? 'Local words and speakers after Stop' : 'Words arrive while you speak');
+  text('transcript-feature','Live transcript');
+  text('transcript-feature-help','Words arrive while you speak');
   const reason = !authenticated ? 'Reconnect to set up recording.' :
     !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
     activeId ? 'Stop the active session before starting another.' :
@@ -198,12 +201,11 @@ function renderDiscovery() {
     discovery.permission !== 'authorized' ? 'Enable microphone access before recording.' :
     !$('title').value.trim() ? 'Add a meeting title.' :
     !chosenSource ? 'Choose an audio source and microphone, then press Confirm source.' :
-    !$('record-consent').checked ? 'Confirm participant permission above to enable Record.' :
-    transcription.cloud && !$('cloud-consent').checked ? `Confirm sending this meeting audio to ${providerName()} before Record.` :
+    !agreement.accepted ? 'Accept the first-use agreement to enable Record.' :
     chosenSource?.scope === 'microphone' ? 'Ready. Press Record microphone to capture your selected mic.' :
     'Ready. Start your call, then press Record meeting.';
   $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
-    !$('record-consent').checked || !transcription.configured || (transcription.cloud && !$('cloud-consent').checked) || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
+    !agreement.accepted || !transcription.configured || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
   text('record-help',reason);
   text('record-meeting',recordPending ? 'Preparing…' : chosenSource?.scope === 'microphone' ? 'Record microphone ↗' : 'Record meeting ↗');
   $('recording-bar').hidden = authenticated && !activeId && !processing && !recordPending;
@@ -231,17 +233,16 @@ function renderDiscovery() {
   $('meeting-microphone').disabled = !authenticated || locked;
   if(active?.capture?.language) $('meeting-language').value=active.capture.language;
   $('meeting-language').disabled = !authenticated || locked;
-  text('meeting-language-help',transcription.provider === 'local-moss' ? 'Local Auto supports English and Chinese. Other languages require the Cloud model.' : $('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
+  $('meeting-duration').disabled=!authenticated || locked;
+  const duration=$('meeting-duration').value || '300';
+  const cap=profile().duration_profiles?.[duration]?.budget_usd || (duration==='10800' ? 8 : duration==='3600' ? 3 : profile().budget_usd || .15);
+  text('duration-budget',`Shared estimated audio cap $${Number(cap).toFixed(2)} across both tracks, resumes and manual reruns. Summary requests have a separate limit of 128 per saved meeting.`);
+  text('meeting-language-help',$('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
   $('title').disabled = locked;
-  $('record-consent').disabled = !authenticated || locked;
-  $('cloud-consent-row').hidden = !transcription.cloud;
-  $('cloud-consent').disabled = !authenticated || locked;
-  text('cloud-consent-copy',chosenSource?.scope === 'microphone' ? `Send only this microphone recording to ${providerName()} for live cloud transcription.` : `Send this meeting’s microphone and selected app audio to ${providerName()} for cloud transcription.`);
-  text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${providerName()} for this transcription/resume request.`);
   text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
-  text('scope-warning', chosenSource?.scope === 'microphone' ? `Only ${chosenSource.microphone_name || 'the selected microphone'} will be captured. No app/system audio or Screen Recording permission is needed. Cloud processes speech live; Local MOSS transcribes after Stop.` : chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
+  text('scope-warning', chosenSource?.scope === 'microphone' ? `Only ${chosenSource.microphone_name || 'the selected microphone'} will be captured. No app/system audio or Screen Recording permission is needed. Cloud processes speech live.` : chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
     'Confirm a source to see exactly what will be captured.');
   const statuses = {
     available:'Watching app audio activity. Suggestions may also be media playback or microphone tests.',
@@ -283,7 +284,7 @@ function renderHistory() {
       const button=document.createElement('button'); button.type='button';
       const title=document.createElement('span'), meta=document.createElement('small');
       button.append(title,meta);
-      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; render(); };
+      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false;  render(); };
       node={button,title,meta}; historyNodes.set(session.id,node);
     }
     if (node.title.textContent !== session.title) node.title.textContent=session.title;
@@ -309,6 +310,13 @@ function speakerLabel(row, turns) {
   return covered >= .8*(row.end_ms-row.start_ms) ? `Meeting audio · ${overlaps[0].label}` : 'Meeting audio · speaker unknown';
 }
 function renderTranscript(session, rows, emptyMessage) {
+  if(transcriptPageSession!==selectedId) { transcriptPageSession=selectedId; transcriptPageStart=null; }
+  const total=rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-500));
+  $('transcript-pagination').hidden=total<=500;
+  $('transcript-previous').disabled=start===0;
+  $('transcript-next').disabled=start+500>=total;
+  text('transcript-window',total>500 ? `Showing ${start+1}–${Math.min(total,start+500)} of ${total} entries. Export includes the full transcript.` : '');
+  rows=rows.slice(start,start+500);
   const signature=JSON.stringify([selectedId,emptyMessage,rows,speakerTurns.get(selectedId)]);
   if (signature === transcriptView) return;
   transcriptView=signature;
@@ -357,12 +365,13 @@ function renderSummary(session) {
   const rows=segments.get(selectedId)||[], saved=savedSummaries.get(selectedId);
   const valid=session?.source === 'meeting' && rows.length && ['completed','failed','interrupted'].includes(session.status);
   $('summary-section').hidden=!valid;
-  if(summarySession !== selectedId) { summarySession=selectedId; $('summary-consent').checked=false; text('summary-status',''); }
-  const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY in .env, then restart the app.';
+  if(summarySession !== selectedId) { summarySession=selectedId;  text('summary-status',''); }
+  const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Set OPENAI_API_KEY in .env for OpenAI gpt-5.4-mini, or configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY for another provider. Restart after changing settings.';
   text('summary-provider',destination);
+  const budget=summaryBudgets.get(selectedId);
+  text('summary-request-usage',budget ? `Summary requests ${budget.requests}/${budget.max_requests} · ${(budget.input_bytes/1000000).toFixed(2)} MB of ${(budget.max_input_bytes/1000000).toFixed(0)} MB request limit.` : 'Each request allows up to 4,000 output tokens; provider charges apply.');
   const blocked=!authenticated || !valid || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
-  $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || (summaryProvider.cloud && !$('summary-consent').checked);
-  $('summary-consent-row').hidden=!summaryProvider.configured || !summaryProvider.cloud;
+  $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || !agreement.accepted;
   $('download-markdown').disabled=blocked || exportPending;
   if(summaryActiveId === selectedId) text('summary-status','Generating summary. Previous notes remain available.');
   $('summary-content').replaceChildren();
@@ -375,24 +384,34 @@ function renderSummary(session) {
       const p=document.createElement('p'); p.textContent=item.text || `${item.task} · Owner: ${item.owner || 'not stated'} · Due: ${item.due || 'not stated'}`; $('summary-content').append(p);
       for(const id of item.segment_ids) { const source=rows.find(r=>r.id === id); if(!source) continue;
         const button=document.createElement('button'); button.type='button'; button.className='summary-citation'; button.textContent=`Source ${formatDuration(source.start_ms)} · ${source.speaker_label || 'Speaker unknown'}`;
-        button.onclick=()=>{ const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
+        button.onclick=()=>{ const all=segments.get(selectedId)||[]; const index=all.findIndex(r=>r.id===id); transcriptPageStart=Math.floor(Math.max(0,index)/500)*500; render(); const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
       }
     }
     if(!items.length) { const p=document.createElement('p'); p.textContent='None stated.'; $('summary-content').append(p); }
   }
 }
 function render() {
+  const dialog=$('app-agreement');
+  text('agreement-status',agreement.accepted ? 'App agreement accepted. Each call still waits for Record.' : 'Accept the app agreement before recording or processing.');
+  $('revoke-agreement').disabled=!authenticated || !agreement.accepted;
+  text('agreement-providers',`Transcription: ${profile().provider || 'not configured'} · ${profile().model || ''}. Notes: ${summaryProvider.endpoint || 'not configured'}.`);
+  if(authenticated && !agreement.accepted && !dialog.open) { closeCallPrompt(); dialog.showModal(); $('agree-app').focus(); }
+  if(agreement.accepted && dialog.open) { if(dialog.close) dialog.close(); else dialog.open=false; }
   renderDiscovery();
   renderHistory();
   const session = sessions.get(selectedId);
   text('new-session',activeId ? 'View active session' : 'Recording preferences');
   renderSummary(session);
+  $('rolling-section').hidden=!rollingDrafts.has(selectedId);
+  text('rolling-copy',rollingDrafts.get(selectedId)?.summary?.overview?.text || '');
+  text('rolling-provider',rollingDrafts.has(selectedId) ? `Draft: ${rollingDrafts.get(selectedId).provider} · ${rollingDrafts.get(selectedId).model}` : '');
+  renderAudio(session);
   const currentRevision=(segments.get(selectedId)||[])[0]?.revision || session?.transcript_revision;
   text('revision-status',session?.source === 'meeting' && currentRevision ? `Saved transcript · revision ${currentRevision}${session.status === 'processing' ? ' · retained while processing' : ''}` : '');
   $('session-heading').textContent = session ? session.title : 'The conversation';
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));
-  $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !replayEnabled || !$('fixture').value;
+  $('start').disabled = !agreement.accepted || Boolean(activeId) || !authenticated || !replayAvailable || !replayEnabled || !$('fixture').value;
   $('partial').textContent = partialText(partials.get(selectedId));
   if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.source === 'meeting' ? 'Meeting recording active' : sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
@@ -400,8 +419,8 @@ function render() {
   const languageLock = languageLocks.get(selectedId);
   if (session && session.id !== savedModelSession && Object.keys(modelProfiles).length) {
     savedModelSession=session.id;
-    $('saved-model').value=(session.transcript_provider || session.capture?.provider) === 'local-moss' ? 'moss-q6-k' : 'deepgram';
-    $('saved-cloud-consent').checked=false;
+    $('saved-model').value='deepgram';
+
   }
   const savedProfile=profile(true);
   $('saved-model').disabled=!authenticated || busy() || [...sessions.values()].some(s=>s.status === 'processing') || !Object.keys(modelProfiles).length;
@@ -414,11 +433,10 @@ function render() {
   text('meeting-notes',notes.get(selectedId) || '');
   $('notes-section').hidden = !notes.get(selectedId);
   $('reprocess-controls').hidden = session?.source !== 'meeting';
-  $('saved-cloud-consent-row').hidden = !savedProfile.cloud;
-  text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${savedProfile.provider === 'deepgram' ? 'Deepgram' : providerName()} for this transcription/resume request.`);
-  text('reprocess-help',savedProfile.provider === 'local-moss' ? 'Local MOSS runs after recording, with English / Chinese and speaker labels. No upload. The previous transcript stays available until both tracks succeed.' : 'Cloud transcription uploads saved audio only with the consent above. Your saved transcript stays available until the replacement completes.');
+  text('reprocess-help',`A manual rerun uploads this saved audio under your app agreement. Your saved transcript stays available until the replacement completes. ${summaryProvider.configured ? 'Then notes are regenerated once using '+summaryProvider.provider+' · '+summaryProvider.model+' at '+summaryProvider.endpoint+'.' : 'Configure a summary provider to regenerate notes too.'}`);
   $('reprocess-meeting').hidden = session?.source !== 'meeting';
-  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || (savedProfile.cloud && !$('saved-cloud-consent').checked) ||
+  text('reprocess-meeting',summaryProvider.configured ? 'Rerun transcription & notes' : 'Transcribe again');
+  $('reprocess-meeting').disabled = Boolean(summaryActiveId) || !audioStates.get(selectedId)?.available || audioPending || !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || !agreement.accepted ||
     [...sessions.values()].some(s=>s.source === 'meeting' && s.status === 'processing');
   $('reprocess-language').disabled = !authenticated || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
   text('session-progress', session?.source === 'meeting' ? session.status === 'processing' ?
@@ -427,30 +445,31 @@ function render() {
     session.status === 'stopping' ? 'Stopping capture and finishing the encrypted audio…' :
     session.status === 'recording' ? `Recording encrypted audio. ${providerName()} ${transcription.streaming ? 'streams text and anonymous speaker labels' : 'sends text after short batches'}; Stop remains available.` :
     session.status === 'failed' ? 'Recording or transcription failed. Check the message above; saved audio remains encrypted.' : '' : '');
-  const idle = authenticated && !activeId && !recordPending && ![...sessions.values()].some(s=>s.status === 'processing');
+  const idle = authenticated && !busy() && ![...sessions.values()].some(s=>s.status === 'processing');
   $('saved-tools').hidden = session?.source !== 'meeting';
-  $('recover-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status);
-  $('resume-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status) ||
+  $('recover-meeting').disabled = !audioStates.get(selectedId)?.available || audioPending || !idle || !['failed','interrupted'].includes(session?.status);
+  $('resume-meeting').disabled = !audioStates.get(selectedId)?.available || audioPending || !idle || !['failed','interrupted'].includes(session?.status) ||
     (Boolean((segments.get(selectedId)||[]).length) && !session?.has_checkpoints) ||
-    !savedProfile.configured || (savedProfile.cloud && !$('saved-cloud-consent').checked) ||
+    !savedProfile.configured || !agreement.accepted ||
     (Boolean((segments.get(selectedId)||[]).length) && Boolean(session?.transcript_provider || session?.capture?.provider) &&
       (session.transcript_provider || session.capture.provider) !== savedProfile.provider);
-  text('resume-meeting',savedProfile.provider === 'local-moss' ? 'Resume local transcription · rerun saved audio' : 'Resume transcription');
+  text('resume-meeting','Resume cloud transcription');
   $('delete-meeting').disabled = !idle || !$('delete-consent').checked;
   $('apply-retention').disabled = !idle || !$('retention-consent').checked;
   const usage=cloudUsage.get(selectedId);
   text('cloud-usage',usage ? `${usage.providers?.join(', ') || providerName()} upload reservations: ${usage.requests} · reserved estimate $${Number(usage.estimated_usd).toFixed(4)}. Actual billing depends on your provider account.` : '');
   const progress=liveProgress.get(selectedId);
-  text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'local_batch' ? 'Local MOSS · processing saved audio' : progress.mode === 'catching_up' ? 'Catching up' : progress.mode === 'streaming' ? 'Streaming' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
+  text('live-progress',progress ? `${progress.mode === 'catching_up' ? 'Catching up' : 'Cloud streaming'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
   if (session?.recovery) text('session-progress','Recovered / interrupted audio. Only authenticated complete frames were retained; missing tail duration is unknown. Capture was not restarted.');
   if (session?.status === 'failed' && session.failure) text('session-progress',`${session.failure.message} [${session.failure.code}]`);
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   const emptyMessage = !replayAvailable ? 'Storage is unavailable. Reconnect or restart the local server.' :
     session?.status === 'processing' ? 'Audio capture stopped. Transcribing the remaining audio batches…' :
-    session?.source === 'meeting' && liveStates.has(session.status) ? session.capture?.provider === 'local-moss' ? 'Recording encrypted audio locally. MOSS will transcribe and label speakers after Stop.' : 'Recording audio. Waiting for early speech and the first stable words…' :
+    session?.source === 'meeting' && liveStates.has(session.status) ? 'Recording audio. Waiting for early speech and the first stable words…' :
     session?.status === 'failed' ? 'This session failed. Check the message above.' :
     liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No speech has been transcribed in this session.';
   renderSpeakers(session,rows);
+  renderPeople();
   renderTranscript(session,rows,rows.length ? '' : emptyMessage);
 
 }
@@ -465,7 +484,40 @@ function connect() {
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
+    if(data.type==='people_changed') {
+      people=data.people; personPending=false;
+      for(const session of data.sessions || []) sessions.set(session.id,session);
+      for(const [sid,rows] of Object.entries(data.segments || {})) { segments.set(sid,rows); rollingDrafts.delete(sid); }
+      for(const [sid,value] of Object.entries(data.notes || {})) notes.set(sid,value);
+      for(const [sid,value] of Object.entries(data.grounded_summaries || {})) { if(value) savedSummaries.set(sid,value); else savedSummaries.delete(sid); }
+      $('forget-person-confirm').checked=false; render(); return;
+    }
+    if(data.type==='rolling_notes') { rollingDrafts.set(data.session_id,{summary:data.summary,provider:data.provider,model:data.model}); summaryBudgets.set(data.session_id,data.budget); render(); return; }
+    if(data.type==='rolling_notes_error') { text('summary-status',data.message); return; }
+    if (data.type === 'audio_state') {
+      audioStates.set(data.session_id,data.audio); render(); return;
+    }
+    if (data.type === 'audio_cleanup_error') { notice(data.message); return; }
+    if (data.type === 'audio_playback') {
+      audioPending=false;
+      if(data.session_id === selectedId) {
+        clearPlayback(); audioSession=selectedId;
+        const bytes=Uint8Array.from(atob(data.wav_base64),c=>c.charCodeAt(0));
+        audioURL=URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+        $('audio-player').src=audioURL; $('audio-player').hidden=false;
+        text('audio-playback-status','Ready to play. No cloud request was made.');
+      }
+      render(); return;
+    }
+    if (data.type === 'agreement') {
+      agreement=data.agreement; render(); return;
+    }
     if (data.type === 'snapshot') {
+      agreement=data.agreement || {accepted:false,version:null};
+      audioStates=new Map(Object.entries(data.audio_states || {})); audioPending=false;
+      people=data.people || []; personPending=false;
+      summaryBudgets=new Map(Object.entries(data.summary_budgets || {}));
+      rollingDrafts=new Map(Object.entries(data.rolling_notes || {}).filter(([,v])=>v));
       speakerPending=false; summaryPending=false; exportPending=false;
       summaryProvider=data.summary_provider || {configured:false};
       summaryActiveId=data.summary_active_id || null; savedSummaries=new Map(Object.entries(data.grounded_summaries || {}));
@@ -511,9 +563,10 @@ function connect() {
     } else if (data.type === 'auto_call_status') {
       autoCallState=data; renderDiscovery();
     } else if (data.type === 'summary_started') {
-      summaryPending=false; summaryActiveId=data.session_id; $('summary-consent').checked=false; render();
+      summaryPending=false; summaryActiveId=data.session_id;  render();
     } else if (data.type === 'summary_ready' || data.type === 'summary_error') {
       summaryPending=false; summaryActiveId=null;
+      if(data.budget) summaryBudgets.set(data.session_id,data.budget);
       if(data.summary) savedSummaries.set(data.session_id,data.summary);
       if(data.session) sessions.set(data.session.id,data.session);
       if(data.session_id === selectedId) text('summary-status',data.message || 'Summary saved. Review its sources.'); render();
@@ -535,8 +588,9 @@ function connect() {
       state.mode=Object.values(state.streams).some(p=>p.mode === 'deferred') ? 'deferred' : state.lag_ms > 12000 ? 'catching_up' : 'live';
       liveProgress.set(data.session_id,state); render();
     } else if (['transcription_error','speaker_warning','recovery_complete'].includes(data.type)) {
-      recordPending=false; notice(data.message); render();
+      audioPending=false; recordPending=false; notice(data.message); render();
     } else if (data.type === 'session_deleted') {
+      rollingDrafts.delete(data.session_id); audioStates.delete(data.session_id); summaryBudgets.delete(data.session_id);
       savedSummaries.delete(data.session_id); sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
       speakerTurns.delete(data.session_id); languageLocks.delete(data.session_id); liveProgress.delete(data.session_id);
       recordPending=false; if (selectedId === data.session_id) selectedId=null;
@@ -546,17 +600,19 @@ function connect() {
     } else if (data.type === 'language_locked') {
       languageLocks.set(data.session_id,data); render();
     } else if (data.type === 'speakers_corrected') {
+      rollingDrafts.delete(data.session_id);
       speakerPending=false; segments.set(data.session_id,data.segments); notes.set(data.session_id,data.notes);
       savedSummaries.set(data.session_id,data.summary || null);
       text('speaker-edit-status','Speaker corrections saved.'); render();
     } else if (data.type === 'transcript_replaced') {
+      rollingDrafts.delete(data.session_id); transcriptPageStart=null;
       segments.set(data.session_id,data.segments); if(savedSummaries.get(data.session_id)) savedSummaries.get(data.session_id).stale=true; text('transcript-update','Transcript replaced with the completed pass.'); render();
     } else if (data.type === 'notes') {
       notes.set(data.session_id,data.notes); render();
     } else if (data.type === 'recording_error') {
-      recordPending=false; notice(data.message); render();
+      audioPending=false; recordPending=false; notice(data.message); render();
     } else if (data.type === 'session') {
-      if (data.session.source === 'meeting') { recordPending=false; $('record-consent').checked=false; $('cloud-consent').checked=false; }
+      if (data.session.source === 'meeting') { recordPending=false; }
       sessions.set(data.session.id,data.session);
       if (['completed','failed','interrupted'].includes(data.session.status)) liveProgress.delete(data.session.id);
       if (liveStates.has(data.session.status)) { const newActive=activeId !== data.session.id; activeId=data.session.id; if (newActive || !selectedId) selectedId=activeId; }
@@ -578,9 +634,10 @@ function connect() {
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
+      audioPending=false; personPending=false;
       speakerPending=false; summaryPending=false; exportPending=false;
       if (data.context === 'meeting') {
-        recordPending=false; notice(data.message);
+        audioPending=false; recordPending=false; notice(data.message);
         if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
         render();
       } else { stopPending=false; notice(data.message); render(); }
@@ -589,7 +646,7 @@ function connect() {
   };
   socket.onclose = event => {
     if (socket !== connection) return;
-    connecting=false; authenticated=false; stopPending=false; recordPending=false; partials.clear();
+    connecting=false; authenticated=false; personPending=false; audioPending=false; stopPending=false; recordPending=false; partials.clear();
     clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
@@ -599,9 +656,9 @@ function connect() {
   renderDiscovery();
 }
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
-$('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:$('consent').checked}); };
+$('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:agreement.accepted}); };
 $('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
-$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('cloud-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
+$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false;  $('title').value='Meeting conversation';   $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { if (busy()) return; clearSource(); renderDiscovery(); };
@@ -609,13 +666,12 @@ $('meeting-microphone').onchange = () => { if (busy()) return; microphoneNeedsCh
 renderDiscovery();
 connect();
 
-$('record-consent').onchange = renderDiscovery;
 $('record-meeting').onclick = () => {
   if ($('record-meeting').disabled || !chosenSource) return;
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    model:selectedModel(),consent_confirmed:$('record-consent').checked,cloud_consent:transcription.cloud && $('cloud-consent').checked,language:$('meeting-language').value || 'auto'});
+    model:selectedModel(),duration_s:Number($('meeting-duration').value || 300),consent_confirmed:agreement.accepted,cloud_consent:transcription.cloud && agreement.accepted,language:$('meeting-language').value || 'auto'});
   renderDiscovery();
 };
 
@@ -625,8 +681,8 @@ setInterval(() => { if (activeId) renderDiscovery(); },1000);
 
 $('reprocess-meeting').onclick = () => {
   if ($('reprocess-meeting').disabled) return;
-  recordPending=send({action:'reprocess',session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && $('saved-cloud-consent').checked});
-  $('saved-cloud-consent').checked=false;
+  recordPending=send({action:'reprocess',session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && agreement.accepted});
+
   render();
 };
 
@@ -636,7 +692,7 @@ $('reconnect').onclick = () => connect();
 function savedAction(action) {
   const button=$(action === 'recover' ? 'recover-meeting' : 'resume-meeting');
   if (button.disabled) return;
-  recordPending=send({action,session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && $('saved-cloud-consent').checked}); $('saved-cloud-consent').checked=false; render();
+  recordPending=send({action,session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && agreement.accepted});  render();
 }
 $('recover-meeting').onclick=()=>savedAction('recover');
 $('resume-meeting').onclick=()=>savedAction('resume');
@@ -653,13 +709,11 @@ $('apply-retention').onclick=()=>{
   recordPending=send({action:'retention',days,confirmed:$('retention-consent').checked}); render();
 };
 
-$('cloud-consent').onchange=renderDiscovery;
-$('saved-cloud-consent').onchange=render;
 
 $('meeting-language').onchange=renderDiscovery;
 $('reprocess-language').onchange=render;
-$('meeting-model').onchange=()=>{ $('cloud-consent').checked=false; render(); };
-$('saved-model').onchange=()=>{ $('saved-cloud-consent').checked=false; render(); };
+$('meeting-model').onchange=()=>{  render(); };
+$('saved-model').onchange=()=>{  render(); };
 
 $('edit-speaker').onchange=renderMergeTargets;
 $('speaker-name').oninput=correctionButtons;
@@ -676,12 +730,11 @@ function correctSpeaker(action) {
 $('rename-speaker').onclick=()=>correctSpeaker('rename_speaker');
 $('merge-speaker').onclick=()=>correctSpeaker('merge_speaker');
 
-$('summary-consent').onchange=render;
 $('generate-summary').onclick=()=>{
   if($('generate-summary').disabled) return;
   summaryPending=send({action:'summarize',session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision,
-    provider:summaryProvider.provider,model:summaryProvider.model,text_consent:$('summary-consent').checked});
-  $('summary-consent').checked=false; render();
+    provider:summaryProvider.provider,model:summaryProvider.model,text_consent:agreement.accepted});
+   render();
 };
 $('download-markdown').onclick=()=>{
   if($('download-markdown').disabled) return;
@@ -692,7 +745,7 @@ $('accept-call').onclick=()=>{
   if(!promptCandidate || $('accept-call').disabled) return;
   const candidate=promptCandidate; offeredCalls.add(candidate.id);
   recordPending=send({action:'accept_call',candidate_id:candidate.id,app_id:candidate.app_id,
-    microphone_id:$('meeting-microphone').value || 'default',model:selectedModel(),language:$('meeting-language').value || 'auto',
+    microphone_id:$('meeting-microphone').value || 'default',model:selectedModel(),duration_s:Number($('meeting-duration').value || 300),language:$('meeting-language').value || 'auto',
     consent_confirmed:true,automatic_summary:Boolean(summaryProvider.configured),
     ...(summaryProvider.configured ? {summary_provider:summaryProvider.provider,summary_model:summaryProvider.model,summary_endpoint:summaryProvider.endpoint} : {})});
   closeCallPrompt(); render();
@@ -704,3 +757,66 @@ function declineCall() {
 $('decline-call').onclick=declineCall;
 $('call-permission').oncancel=event=>{event.preventDefault();declineCall();};
 $('keep-recording').onclick=()=>{if(!$('keep-recording').disabled && activeId) send({action:'keep_recording',session_id:activeId});};
+
+$('agree-app').onclick=()=>{if(agreement.version) send({action:'accept_agreement',version:agreement.version});};
+$('app-agreement').oncancel=event=>event.preventDefault();
+$('revoke-agreement').onclick=()=>send({action:'revoke_agreement'});
+
+function clearPlayback() {
+  const player=$('audio-player');
+  if(player.pause) player.pause();
+  player.src=''; player.hidden=true;
+  if(player.load) player.load();
+  if(audioURL) URL.revokeObjectURL(audioURL);
+  audioURL=null; text('audio-playback-status','');
+}
+function renderAudio(session) {
+  const saved=session?.source === 'meeting', state=audioStates.get(selectedId);
+  $('saved-audio').hidden=!saved;
+  if(audioSession !== selectedId || !state?.available) { clearPlayback(); audioSession=selectedId; }
+  const idle=authenticated && !busy() && ![...sessions.values()].some(s=>s.status === 'processing');
+  text('audio-retention-status',!state?.available ? state?.expired_at ? 'Audio expired. Your transcript and notes are preserved.' : 'Audio is unavailable. Saved text and notes remain readable.' : state.archived ? 'Archived · excluded from automatic audio expiry.' : `Audio expires ${new Date(state.expires_at).toLocaleString()}. Archive to keep it.`);
+  text('archive-audio',state?.archived ? 'Unarchive audio' : 'Archive audio');
+  $('archive-audio').disabled=!idle || !state?.available;
+  $('load-audio').disabled=!idle || !state?.available;
+  $('playback-track').disabled=!idle || !state?.available;
+  for(const option of $('playback-track').options || []) option.disabled=!state?.tracks?.includes(option.value);
+  if(state?.tracks?.length && !state.tracks.includes($('playback-track').value)) $('playback-track').value=state.tracks[0];
+}
+$('load-audio').onclick=()=>{
+  if($('load-audio').disabled) return;
+  audioPending=send({action:'play_audio',session_id:selectedId,stream:$('playback-track').value || 'mic',start_ms:Math.round(Number($('playback-minute').value || 0)*60000)});
+  text('audio-playback-status','Authenticating and loading saved audio…'); render();
+};
+$('archive-audio').onclick=()=>{
+  if(!$('archive-audio').disabled) send({action:'archive_audio',session_id:selectedId,archived:!audioStates.get(selectedId)?.archived});
+};
+$('playback-track').onchange=()=>clearPlayback();
+
+$('meeting-duration').onchange=renderDiscovery;
+$('transcript-previous').onclick=()=>{const total=(segments.get(selectedId)||[]).length;transcriptPageStart=Math.max(0,(transcriptPageStart===null ? Math.max(0,total-500) : transcriptPageStart)-500);render();};
+$('transcript-next').onclick=()=>{const total=(segments.get(selectedId)||[]).length;const next=(transcriptPageStart || 0)+500;transcriptPageStart=next+500>=total ? null : next;render();};
+function renderPeople() {
+  const previous=$('person-select').value;
+  $('person-select').replaceChildren();
+  const empty=document.createElement('option');empty.value='';empty.textContent='Choose a person';$('person-select').append(empty);
+  for(const person of people) {const option=document.createElement('option');option.value=person.id;option.textContent=person.canonical_name;$('person-select').append(option);}
+  $('person-select').value=people.some(p=>p.id===previous) ? previous : '';
+  const person=people.find(p=>p.id===$('person-select').value), idle=authenticated && !busy() && !personPending && !summaryActiveId && ![...sessions.values()].some(s=>s.status==='processing');
+  $('person-learning').checked=Boolean(person?.learn_enabled);$('person-learning').disabled=!idle || !person;
+  $('create-person').disabled=!idle || !$('person-name').value.trim();
+  $('link-person').disabled=!idle || !person || !$('edit-speaker').value;
+  $('unlink-person').disabled=!idle || !$('edit-speaker').value;
+  $('forget-person').disabled=!idle || !person || !$('forget-person-confirm').checked;
+}
+$('person-select').onchange=()=>{ $('forget-person-confirm').checked=false;renderPeople(); };
+$('person-name').oninput=renderPeople;
+$('forget-person-confirm').onchange=renderPeople;
+$('create-person').onclick=()=>{if(!$('create-person').disabled) personCommand({action:'create_person',name:$('person-name').value.trim()});};
+$('person-learning').onchange=()=>personCommand({action:'set_person_learning',person_id:$('person-select').value,enabled:$('person-learning').checked});
+function linkPerson(person_id) {personCommand({action:'link_person',person_id,session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision,speaker_id:$('edit-speaker').value});}
+$('link-person').onclick=()=>{if(!$('link-person').disabled) linkPerson($('person-select').value);};
+$('unlink-person').onclick=()=>{if(!$('unlink-person').disabled) linkPerson(null);};
+$('forget-person').onclick=()=>{if(!$('forget-person').disabled) personCommand({action:'forget_person',person_id:$('person-select').value,confirmed:true});};
+
+function personCommand(command) { personPending=send(command); renderPeople(); }

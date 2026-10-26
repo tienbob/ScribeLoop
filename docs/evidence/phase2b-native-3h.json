@@ -1,0 +1,25 @@
+{
+  "mode": "generated signals; no devices opened",
+  "audio_saved": false,
+  "duration_s": 10800,
+  "streams": {
+    "loopback": {
+      "samples": 172800000,
+      "first_ms": 100,
+      "end_ms": 10800099.6875,
+      "rms": 0.07071150943288353,
+      "frequency_hz": 440.0228122425702
+    },
+    "mic": {
+      "samples": 172800000,
+      "first_ms": 250,
+      "end_ms": 10800250.125,
+      "rms": 0.07071012227708531,
+      "frequency_hz": 439.9949309339754
+    }
+  },
+  "start_offset_ms": 150,
+  "offset_change_ms": 0.4375,
+  "wall_s": 19.886887041997397,
+  "physical_alignment_validated": false
+}

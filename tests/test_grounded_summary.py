@@ -107,7 +107,9 @@ def test_api_requires_separate_consent_restores_and_exports(saved):
             assert 'private-test-key' not in json.dumps(snapshot)
             ws.send_json(command)
             assert ws.receive_json()['type'] == 'error' and not calls
-            ws.send_json({**command,'text_consent':True})
+            ws.send_json({'action':'accept_agreement','version':snapshot['agreement']['version']})
+            assert ws.receive_json()['agreement']['accepted']
+            ws.send_json(command)
             events = [ws.receive_json(),ws.receive_json()]
             assert [e['type'] for e in events] == ['summary_started','summary_ready']
             assert len(calls) == 1
@@ -130,6 +132,7 @@ def test_failed_provider_preserves_summary_and_redacts_error(saved):
     provider = config(fail)
     app,token = create_app(storage='public-demo',database=path,fixtures={},backend_factory=lambda:None,summary_provider=provider)
     with TestClient(app) as client, client.websocket_connect('ws://127.0.0.1/ws',headers={'origin':'http://127.0.0.1'}) as ws:
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
         ws.send_text(token);ws.receive_json()
         ws.send_json({'action':'summarize','session_id':sid,'revision':1,'provider':provider.provider,
                       'model':provider.model,'text_consent':True})

@@ -11,9 +11,33 @@ class SessionStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
+    AGREEMENT_VERSION = '2026-10-26-v3'
+
+    def agreement(self):
+        row = self.conn.execute('SELECT accepted_at,revoked_at FROM app_agreement WHERE version=?',
+                                (self.AGREEMENT_VERSION,)).fetchone()
+        return {'version':self.AGREEMENT_VERSION, 'accepted':bool(row and row['revoked_at'] is None),
+                'accepted_at':row['accepted_at'] if row else None,
+                'revoked_at':row['revoked_at'] if row else None}
+
+    def accept_agreement(self, version):
+        if version != self.AGREEMENT_VERSION:
+            raise ValueError('Agreement version changed')
+        with self.conn:
+            self.conn.execute('INSERT INTO app_agreement(version,accepted_at,revoked_at) VALUES (?,?,NULL) '
+                'ON CONFLICT(version) DO UPDATE SET accepted_at=excluded.accepted_at,revoked_at=NULL',
+                (version,self._now()))
+        return self.agreement()
+
+    def revoke_agreement(self):
+        with self.conn:
+            self.conn.execute('UPDATE app_agreement SET revoked_at=? WHERE version=?',
+                              (self._now(),self.AGREEMENT_VERSION))
+        return self.agreement()
+
     def recover(self):
         with self.conn:
-            self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=? "
+            self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=COALESCE(ended_at,?) "
                               "WHERE status IN ('loading','replaying','preparing','recording','stopping','processing')", (self._now(),))
             self.conn.execute('UPDATE session_streams SET ended_at=(' 
                 'SELECT ended_at FROM sessions WHERE id=session_streams.session_id) '
@@ -112,7 +136,7 @@ class SessionStore:
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'provider','model','engine','cloud_consent','cloud_budget_usd','language')}
+                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language')}
             session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
@@ -165,6 +189,14 @@ class SessionStore:
             row['display_speaker_id'] = target
             if target:
                 row['speaker_label'] = edits.get(target,{}).get('label') or self._speaker_label(target)
+        people={r['speaker_id']:dict(r) for r in self.conn.execute(
+            'SELECT p.speaker_id,p.person_id,s.canonical_name FROM person_links p JOIN speakers s ON s.id=p.person_id '
+            'WHERE p.session_id=? AND p.revision=?',(session_id,rows[0]['revision']))}
+        for row in rows:
+            person=people.get(row['display_speaker_id'])
+            if person:
+                row['speaker_label']=person['canonical_name']
+                row['person_id']=person['person_id']
         return rows
 
     def correct_speaker(self, session_id, revision, speaker_id, *, label=None, merge_target=None):
@@ -192,6 +224,7 @@ class SessionStore:
                 speaker_id.rsplit(':',1)[0] != merge_target.rsplit(':',1)[0]):
             raise ValueError('Merge requires distinct speakers from the same source and generation')
         with self.conn:
+            self.conn.execute('DELETE FROM person_links WHERE session_id=? AND revision=? AND speaker_id=?',(session_id,revision,speaker_id))
             self.conn.execute('INSERT INTO revision_speaker_edits '
                 '(session_id,revision,speaker_id,label,merge_target) VALUES (?,?,?,?,?) '
                 'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET '
@@ -259,7 +292,7 @@ class SessionStore:
 
     def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model):
         from ..llm.grounded import validate_summary
-        rows,current_hash,_ = self.summary_input(session_id,revision)
+        rows,current_hash,_ = self.summary_input(session_id,revision,build_messages=False)
         if current_hash != input_hash:
             raise ValueError('Transcript changed during summary generation')
         summary = validate_summary(value,rows)
@@ -374,7 +407,7 @@ class SessionStore:
         """Transcript rows and their replay boundary become durable together."""
         from ..pipeline.replay import ReplayChunk
         rows = [ReplayChunk.model_validate(chunk).model_dump() for chunk in chunks]
-        if stream not in {'mic','loopback'} or not 0 <= end_ms <= 305000:
+        if stream not in {'mic','loopback'} or not 0 <= end_ms <= 10_805_000:
             raise ValueError('Invalid confirmed checkpoint')
         self.conn.execute('SAVEPOINT confirmed_window')
         try:
@@ -424,11 +457,18 @@ class SessionStore:
 
     def finish_delete(self, session_id):
         """Delete dependent data in FK order; callers have already retired audio keys."""
+        has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
+        if has_vectors:
+            from .vectors import load_vec_extension
+            load_vec_extension(self.conn)
         with self.conn:
+            if has_vectors:
+                self.conn.execute('DELETE FROM embeddings_chunks_vec WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
-            for table in ('grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            self.conn.execute('DELETE FROM exemplar_provenance WHERE session_speaker_id IN (SELECT id FROM session_speakers WHERE session_id=?)',(session_id,))
+            for table in ('summary_usage','person_link_history','person_links','summary_jobs','session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'
@@ -436,6 +476,38 @@ class SessionStore:
             self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))
         from .db import purge_checkpoint
         purge_checkpoint(self.conn)
+
+    def audio_policy(self, session_id):
+        session = self.get(session_id)
+        if not session or session['source'] != 'meeting':
+            raise ValueError('Select a saved meeting')
+        row = self.conn.execute('SELECT archived,expired_at FROM session_audio_policy WHERE session_id=?',
+                                (session_id,)).fetchone()
+        archived = bool(row and row['archived'])
+        return {'archived':archived, 'expired_at':row['expired_at'] if row else None,
+                'expires_at':None if archived else (session['ended_at'] or session['started_at'])+30*86400000}
+
+    def archive_audio(self, session_id, archived):
+        policy = self.audio_policy(session_id)
+        if not isinstance(archived,bool) or policy['expired_at'] is not None:
+            raise ValueError('Expired audio cannot be archived')
+        with self.conn:
+            self.conn.execute('INSERT INTO session_audio_policy(session_id,archived) VALUES (?,?) '
+                'ON CONFLICT(session_id) DO UPDATE SET archived=excluded.archived', (session_id,int(archived)))
+        return self.audio_policy(session_id)
+
+    def mark_audio_expired(self, session_id):
+        with self.conn:
+            self.conn.execute('INSERT INTO session_audio_policy(session_id,expired_at) VALUES (?,?) '
+                'ON CONFLICT(session_id) DO UPDATE SET expired_at=excluded.expired_at', (session_id,self._now()))
+            self.conn.execute('UPDATE session_streams SET audio_path=NULL WHERE session_id=?',(session_id,))
+
+    def audio_retention_candidates(self):
+        return [row[0] for row in self.conn.execute(
+            "SELECT s.id FROM sessions s LEFT JOIN session_audio_policy p ON p.session_id=s.id "
+            "WHERE s.source='meeting' AND s.status IN ('completed','failed','interrupted') "
+            "AND COALESCE(p.archived,0)=0 AND p.expired_at IS NULL "
+            "AND COALESCE(s.ended_at,s.started_at)<=?", (self._now()-30*86400000,))]
 
     def retention_candidates(self, days=30):
         if not isinstance(days,int) or days < 1:

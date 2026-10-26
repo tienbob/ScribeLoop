@@ -1,6 +1,6 @@
 # Documentation index
 
-Start with [Phase 2a closeout](PHASE_2A_CLOSEOUT.md), [Phase 2 progress](PHASE_2_IMPLEMENTATION_PLAN.md) for current work,
+Start with [Phase 2b implementation and acceptance](PHASE_2B_CLOSEOUT.md), [Phase 2a closeout](PHASE_2A_CLOSEOUT.md), [Phase 2 progress](PHASE_2_IMPLEMENTATION_PLAN.md) for current work,
 [summary setup and export](MEETING_SUMMARIES.md) for text-provider configuration,
 and [Phase 1 closeout](PHASE_1_CLOSEOUT.md) for launch commands and remaining
 capture/release acceptance gates.
@@ -9,10 +9,13 @@ capture/release acceptance gates.
 
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
 - [Phase 2 progress and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
+- [Phase 2b implementation and acceptance](PHASE_2B_CLOSEOUT.md)
+- [People, voice learning and calibration](PEOPLE_AND_CALIBRATION.md)
+- [Phase 2b: long meetings, speakers and summaries](PHASE_2B_IMPLEMENTATION_PLAN.md)
 - [Grounded summaries and Markdown export](MEETING_SUMMARIES.md)
 - [Automatic call notebook UX](AUTO_CALL_UX.md)
 - [Deepgram streaming and speaker labels](DEEPGRAM_STREAMING.md)
-- [Local MOSS Q6_K setup and model selection](LOCAL_MOSS.md)
+- [Retained audio, archive, playback and manual reruns](RETAINED_AUDIO.md)
 - [Browser call test](BROWSER_CALL_TEST.md)
 - [Meeting capture requirements](MEETING_CAPTURE.md)
 - [Native meeting capture](NATIVE_MEETING_CAPTURE.md)
@@ -27,6 +30,7 @@ defaults, proposed work and recorded prices do not override the current closeout
 
 - [Cloud provider investigation](CLOUD_TRANSCRIPTION.md)
 - [Initial ASR investigation](ASR_INVESTIGATION.md)
+- [Historical local MOSS setup and experiments](LOCAL_MOSS.md)
 - [MOSS evaluation](MOSS_EVALUATION.md)
 - [Diarization review](DIARIZATION_REVIEW.md)
 - [Codec evaluation](CODEC_EVALUATION.md)

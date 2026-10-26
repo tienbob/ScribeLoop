@@ -1,7 +1,8 @@
 # MOSS-Transcribe-Diarize local evaluation — 2026-10-21
 
-> Historical Python/PyTorch evaluation. The app's newer selectable GGUF profile
-> is [Local MOSS Q6_K](LOCAL_MOSS.md); float16 defaults below apply to the old harness.
+> Historical Python/PyTorch evaluation. The app now uses cloud streaming only;
+> the [Local MOSS Q6_K experiment](LOCAL_MOSS.md) is historical.
+> Float16 defaults below apply to the old harness.
 
 ## Progress and current defaults
 

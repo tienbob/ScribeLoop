@@ -276,6 +276,12 @@ struct MeetingCapture {
             return
         }
         if args == ["--self-test"] { selfTest(); return }
+        if args.count == 3 && args[0] == "--self-test" && args[1] == "--seconds" {
+            guard let seconds = Int(args[2]), seconds >= 30 && seconds <= 10800 else {
+                fail("Generated duration must be 30 to 10800 seconds")
+            }
+            selfTest(seconds: seconds); return
+        }
         guard args.contains("--consent-confirmed") else { fail("Explicit capture consent is required") }
         var microphone: String?
         var bundles: [String] = []
@@ -385,8 +391,8 @@ struct MeetingCapture {
         } catch { fail("Meeting capture failed; verify permissions, app, and microphone") }
     }
 
-    static func selfTest() {
-        // Five minutes of accelerated generated PCM, no device/capture/permission use.
+    static func selfTest(seconds: Int = 300) {
+        // Bounded accelerated generated PCM, no device/capture/permission use.
         let writer = PacketWriter(nonblocking: false)
         let base = hostNS(CMClockGetTime(CMClockGetHostTimeClock())) + 100_000_000
         let formats = [AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000,
@@ -395,8 +401,8 @@ struct MeetingCapture {
                                      channels: 1, interleaved: false)!]
         let converters = formats.map { Resampler($0) }
         var positions: [Int] = [0, 0]
-        // Ten full-second input buffers plus 290 s of irregular small chunks.
-        for packet in 0..<2910 {
+        // Ten full-second input buffers plus irregular small chunks for the remainder.
+        for packet in 0..<(10 + (seconds - 10) * 10) {
             for track in 0..<2 {
                 let format = formats[track]
                 let count = Int(format.sampleRate) / (packet < 10 ? 1 : 10)

@@ -1,5 +1,17 @@
 # ScribeLoop — Architecture Plan
 
+> **Current implementation (2026-10-26):** cloud-only Deepgram live ASR/diarization,
+> encrypted per-stream capture and 30-day audio retention/archive, Record / Not now
+> after a versioned first-use agreement, five-minute/one-hour/three-hour presets,
+> bounded readers/playback, durable cited section/final notes, and manual named
+> person links. OpenAI `gpt-5.4-mini` is the default summary API; explicit SUMMARY_*
+> overrides remain supported. Stop never triggers a full ASR pass. Local ML stacks
+> in older research tables below are historical alternatives, not app routes.
+> Voice recognition remains gated on a configured cloud embedding backend and
+> consented calibration; no guessed thresholds or automatic naming are enabled.
+> [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md) is authoritative for shipped
+> behavior; packaging, real-call/physical validation and OS parity remain open.
+
 > System-audio → Speaker-separated transcript → LLM summary → (Phase 3) Tool-using agent.
 > Target: Linux + macOS. Local-first, privacy-preserving.
 
@@ -22,7 +34,7 @@ System audio ──► Capture ──► VAD ──► ASR (streaming) ──►
                      │                     Event bus ──► final summary ──► Storage ──► UI
                      │                                                      │
                      │         summaries + user commands ──► Agent layer (MCP tools)
-                     └──── session recorder: encrypted per-stream SLPA (offline pass at Stop; retention §3.1)
+                     └──── session recorder: encrypted per-stream SLPA (no ASR rerun at Stop; retention §3.1)
 ```
 
 ### Meeting discovery and capture — core requirement (2026-10-22)
@@ -32,26 +44,26 @@ local audio, starting with **Microsoft Teams and Slack huddles**, then Zoom and
 browser meetings such as Google Meet and Teams web. This is **Phase 1 scope**, not
 Phase 4 polish. These are required targets, not currently verified integrations. The first metadata-only
 macOS observer, candidate state machine, shared-clock contract, and authenticated
-source-selection UI are implemented, alongside an opt-in encrypted five-minute
-[recording test](docs/BROWSER_CALL_TEST.md); real-call validation remains pending. See
+source-selection UI are implemented, with encrypted cloud-streaming
+[recording support](docs/BROWSER_CALL_TEST.md); real-call validation remains pending. See
 [discovery implementation](docs/MEETING_DETECTION.md).
 See [the detection and capture specification](docs/MEETING_CAPTURE.md).
 
 Detection observes app/process and audio-activity metadata; an open app alone is
-not a meeting. A detected candidate prompts the user to select/confirm the source
-and recording consent. Detection never silently starts recording (§6). Prefer
+not a meeting. A detected candidate presents the source and Record / Not now choice under
+the accepted first-use app agreement. Detection never silently starts recording (§6). Prefer
 per-app capture; whole-system capture requires an explicit scope selection.
 
 Output capture contains remote participants but usually omits the user's own
 microphone. **Separate microphone and meeting-output streams are now required in
 Phase 1** for a complete conversation, with a common timestamp reference and
 separate encrypted storage. Native mic/output source primitives and a shared-clock
-transport are implemented with generated-signal checks; physical alignment and
-encrypted recorder integration remain open (docs/NATIVE_MEETING_CAPTURE.md).
+transport and encrypted recording are implemented with generated-signal checks;
+physical alignment and real-call acceptance remain open (docs/NATIVE_MEETING_CAPTURE.md).
 A microphone can contain multiple people; label it
 "Microphone" unless attribution is validated. Phase 2c retains advanced echo
-cancellation and attribution work. None of this capture integration is delivered
-yet; audio input remains public-fixture replay only, alongside source-selection UI.
+cancellation and attribution work. The current app captures native audio and streams it to Deepgram. Default local
+fixture inference is disabled; deterministic injected replay remains a test harness.
 
 ---
 
@@ -258,9 +270,14 @@ CREATE TABLE events (
 ### Flow 3 — Speaker management
 
 - Registry is global, not per-session, and **learning is opt-in per person** (§6): no embeddings are persisted for unmapped "Unknown-N" speakers.
-- Profiles keep **multiple exemplars** (up to ~10) taken **only from offline-reconciled segments** with ≥ ~30 s of speech and a purity check — a user-renamed online cluster may be impure, so a manual rename relabels the session and *flags a candidate* exemplar rather than adding one automatically.
-- Matching scores against all exemplars (max cosine), using the **same embedding model as offline diarization** (WeSpeaker space) so online and offline comparisons share one space.
-- Thresholds are **calibrated per embedding model and audio condition** (clean mic vs VoIP/codec-compressed audio differ); 0.75 / 0.60 are starting defaults, re-measured in Phase 2 on real meeting recordings.
+- Profiles support up to ten explicitly reviewed pure exemplars with at least 30 s
+  of speech, retained source audio and model/version provenance. Linking/renaming
+  alone never enrolls a voice. No cloud embedding backend is configured yet.
+- Calibrated suggestions compare exemplars only within one explicitly configured
+  cloud embedding model/version. ASR diarization IDs are not cross-meeting identities.
+- Thresholds must be calibrated on consented independent held-out people and
+  representative audio conditions. There are no shipped numeric defaults. Sparse
+  or poor evidence disables suggestions; automatic naming remains off.
 - Per-person controls: pause/resume learning; "forget this person" (delete semantics in §3.1).
 
 ### Flow 4 — Retrieval ("what did they say about X?")

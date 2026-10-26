@@ -1,3 +1,6 @@
+> Phase 2b supersedes the repeated text/audio upload consent controls with one
+> first-use agreement. See [current audio lifecycle](RETAINED_AUDIO.md).
+
 # Phase 2a — finalization development closeout
 
 Updated 2026-10-26. **Development complete for the agreed six-item finalization scope.** Local

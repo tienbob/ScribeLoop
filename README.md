@@ -19,15 +19,28 @@ scribeloop/
 
 ## Cloud development setup
 
-Deepgram Nova-3 streaming with anonymous speaker labels is the default meeting backend. Install core/security dependencies
-without local ML packages, configure `DEEPGRAM_API_KEY` in the ignored `.env`, and
-restart the server. New and saved audio each require explicit cloud consent.
-The model selector also offers **Local · MOSS Q6_K — after recording**: English/
-Chinese transcription and anonymous speakers without cloud upload. See
-[local setup and limitations](docs/LOCAL_MOSS.md). Deepgram remains the live default.
-Choose **Microphone only** under Recording source for live mic transcription with
-Deepgram, or after-Stop mic transcription with Local MOSS. No app audio or Screen
-Recording permission is needed for that scope.
+Deepgram Nova-3 streaming with anonymous speaker labels is the only app ASR path.
+Install core/security dependencies without local ML packages, configure
+`DEEPGRAM_API_KEY` in the ignored `.env`, and restart the server. Accept the app
+agreement once, then choose **Record / Not now** for each detected call. No repeated
+upload checkboxes are needed. Stop finalizes the current stream and never starts
+a full transcription rerun. **Microphone only** captures no app audio and does not
+require Screen Recording permission.
+
+Encrypted audio is kept for **30 days**, then removed while the app is running,
+idle and the agreement is accepted. **Archive audio** exempts it from expiry;
+unarchiving an old recording makes it eligible again. Transcripts and notes remain
+after audio expiry. While audio exists, use **Load playback** to listen locally or
+**Rerun transcription & notes** to explicitly upload it for a replacement transcript
+and a bounded notes workflow. No provider fallback or automatic paid retry is used.
+See [retained audio and manual reruns](docs/RETAINED_AUDIO.md).
+
+Recording preferences offer 5-minute, 1-hour and 3-hour presets with shared audio
+cost caps. Long calls use bounded encrypted readers, playback windows and durable
+section notes. Summaries default to OpenAI `gpt-5.4-mini`: set `OPENAI_API_KEY` in
+`.env`; explicit `SUMMARY_*` overrides remain supported. Named people can be linked
+across meetings manually; voice learning requires a configured cloud extractor and
+consented calibration. See [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md).
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.
@@ -104,7 +117,7 @@ Full-meeting MOSS runs are deferred during development.
 
 ## Phase 1: macOS development closed
 
-Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; explicit cloud consent permits sending audio to Deepgram. Use Auto (default) for supported multilingual conversations, or choose a fixed language such as Tiếng Việt. No local speech models load in the default path.
+Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; the first-use agreement authorizes cloud processing; each call still waits for Record. Use Auto (default) for supported multilingual conversations, or choose a fixed language such as Tiếng Việt. No local speech models load in the default path.
 
 M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
 
