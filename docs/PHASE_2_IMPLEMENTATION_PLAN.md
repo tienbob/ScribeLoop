@@ -116,3 +116,48 @@ on session deletion. No biometric identity learning or cloud request is involved
 
 Next: grounded structured summaries and explicit Markdown export. External summary
 provider/model and consent must be decided before any outbound transcript request.
+
+## Third increment — grounded summaries and Markdown export
+
+Build a bounded structured summary contract that requires source segment IDs for
+all factual items, including overview, decisions and actions. Prompt separation
+keeps transcript text untrusted; validate citation membership and show AI output
+as a draft requiring review (citation validation cannot prove semantic accuracy).
+Bind each saved summary to revision + corrected-transcript fingerprint, provider
+and model. Stale output must never replace a newer transcript's result. Preserve
+previous summaries on provider/schema/storage failure; edits mark old summaries
+outdated. Summary requests are explicit, bounded and asynchronous, with no retry,
+provider fallback or automatic post-recording call. The user selected an
+OpenAI-compatible endpoint configured with SUMMARY_BASE_URL, SUMMARY_MODEL,
+SUMMARY_API_KEY and optional SUMMARY_PROVIDER in .env (environment overrides).
+Remote endpoints require HTTPS and separate consent; loopback HTTP is allowed.
+No provider/model is preselected and no request is made during setup.
+
+Export is an explicit browser download of plaintext Markdown: selected corrected
+transcript, timestamps, stable citation anchors, revision/model provenance and the
+matching current summary if available. Escape user/model Markdown and HTML. No
+backend arbitrary path writing or silent overwrite. Reconnect restores summaries
+and freshness; session deletion removes them. Cover citations, injection-shaped
+text, staleness, failure, consent and export offline before any live provider test.
+
+### Third increment completed 2026-10-26
+
+- Added strict cited-summary sections and schema v5 persistence, bound to revision
+  and corrected-transcript fingerprint. Unknown citations and stale results fail;
+  previous drafts survive errors. Speaker edits and transcript updates mark notes
+  outdated; session deletion removes saved drafts.
+- Configurable OpenAI-compatible summary transport reads only SUMMARY_* settings
+  from .env/environment. No default model/provider or automatic request. Remote
+  requests require separate text consent, bounded input/output/time and one attempt.
+- Meeting notes show configured destination, saved provider/model, source buttons,
+  request state and outdated drafts. Explicit plaintext Markdown download exports
+  corrected transcript and matching notes with citation anchors and unique names.
+- Verification: **358 Python tests passed**, ten frontend regression groups, Ruff,
+  63-module import smoke and diff checks passed. Brave verified mocked generation,
+  source controls and a browser save dialog (cancelled); desktop screenshot inspection passed. Preview
+  stopped. No real provider request, key use, audio capture or private upload.
+
+See [summary configuration and limits](MEETING_SUMMARIES.md). Real provider/model
+compatibility and summary quality, narrow-layout visual QA and remote CI remain
+open acceptance work. Later Phase 2 retrieval/search and native packaging remain
+outside these increments.

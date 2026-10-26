@@ -246,6 +246,40 @@ class SessionStore:
             'ORDER BY created_at DESC,rowid DESC LIMIT 1', (session_id,)).fetchone()
         return row['content_md'] if row else ''
 
+    def summary_input(self, session_id, revision, *, build_messages=True):
+        from ..llm.grounded import summary_messages, transcript_hash
+        session = self.get(session_id)
+        if (not session or session['source'] != 'meeting' or
+                session['status'] not in {'completed','failed','interrupted'} or
+                type(revision) is not int or revision != session['transcript_revision']):
+            raise ValueError('Select the current saved transcript')
+        rows = self.segments(session_id)
+        return rows,transcript_hash(rows),summary_messages(rows) if build_messages else None
+
+    def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model):
+        from ..llm.grounded import validate_summary
+        rows,current_hash,_ = self.summary_input(session_id,revision)
+        if current_hash != input_hash:
+            raise ValueError('Transcript changed during summary generation')
+        summary = validate_summary(value,rows)
+        with self.conn:
+            self.conn.execute('INSERT INTO grounded_summaries '
+                '(id,session_id,revision,input_hash,provider,model,summary_json,created_at) '
+                'VALUES (?,?,?,?,?,?,?,?)',
+                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now()))
+        return self.grounded_summary(session_id)
+
+    def grounded_summary(self, session_id):
+        from ..llm.grounded import transcript_hash
+        row = self.conn.execute('SELECT * FROM grounded_summaries WHERE session_id=? '
+            'ORDER BY created_at DESC,rowid DESC LIMIT 1',(session_id,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result['summary'] = json.loads(result.pop('summary_json'))
+        result['stale'] = result['input_hash'] != transcript_hash(self.segments(session_id))
+        return result
+
     def revise_transcript(self, session_id, chunks, *, provider=None, model=None):
         from ..pipeline.replay import ReplayChunk
         if not chunks:
@@ -386,7 +420,7 @@ class SessionStore:
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
-            for table in ('revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            for table in ('grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'

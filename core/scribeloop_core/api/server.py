@@ -13,6 +13,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 import soundfile as sf
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -111,6 +112,16 @@ class RetentionRequest(BaseModel):
     confirmed: bool
 
 
+class SummaryRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['summarize','export_markdown']
+    session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    revision: int = Field(ge=1)
+    provider: str | None = Field(default=None,max_length=80)
+    model: str | None = Field(default=None,max_length=100)
+    text_consent: bool = False
+
+
 class DismissCandidate(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['dismiss_candidate']
@@ -119,12 +130,14 @@ class DismissCandidate(BaseModel):
 
 def create_app(*, database=None, fixtures=None, backend_factory=None,
                storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
-               require_launch_key=True) -> tuple[FastAPI, str]:
+               require_launch_key=True, summary_provider=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
         raise ValueError('Disk storage requires an explicit storage mode and database path')
     token = new_token() if require_launch_key else ''
+    # No provider request or health probe occurs during startup.
+    summary_task = None
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
     for name, path in fixtures.items():
@@ -152,6 +165,23 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 queue.put_nowait({'type': 'reconnect_required'})
             else:
                 queue.put_nowait(event)
+
+    async def generate_summary(session_id, revision, fingerprint, messages):
+        nonlocal summary_task
+        try:
+            async with asyncio.timeout(70):
+                value = await summary_provider.generate(messages)
+            saved = app.state.store.save_grounded_summary(session_id,revision,fingerprint,value,
+                provider=summary_provider.provider,model=summary_provider.model)
+            await publish({'type':'summary_ready','session_id':session_id,'summary':saved})
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - provider boundary preserves prior data and redacts failures
+            # Never expose provider bodies, transcript snippets, keys or raw exceptions.
+            await publish({'type':'summary_error','session_id':session_id,
+                'message':'Summary failed or transcript changed. Previous notes are preserved; no retry was made.'})
+        finally:
+            summary_task = None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -184,6 +214,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 yield
             finally:
                 try:
+                    if summary_task is not None:
+                        summary_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await summary_task
                     await app.state.discovery.close()
                 finally:
                     if app.state.recording is not None:
@@ -258,6 +292,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = app.state.store
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
+                'summary_active_id':getattr(summary_task,'session_id',None),
+                'grounded_summaries':{s['id']:store.grounded_summary(s['id']) for s in history},
                 'sessions': history, 'active_id': app.state.runner.active_id or
                     (app.state.recording.active_id if app.state.recording else None),
                 'recording_available': app.state.recording is not None,
@@ -283,6 +320,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         return
 
             async def receive_commands():
+                nonlocal summary_task
                 while True:
                     command = None
                     try:
@@ -316,6 +354,32 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             from ..capture.devices import request_microphone_access
                             await asyncio.to_thread(request_microphone_access)
                             await app.state.discovery.refresh()
+                        elif command.get('action') in {'summarize','export_markdown'}:
+                            request = SummaryRequest.model_validate(command)
+                            rows,fingerprint,messages = store.summary_input(request.session_id,request.revision,
+                                build_messages=request.action == 'summarize')
+                            if request.action == 'export_markdown':
+                                from ..llm.grounded import export_markdown
+                                await queue.put({'type':'markdown_export','session_id':request.session_id,
+                                    'filename':f'scribeloop-{request.session_id}-r{request.revision}-{uuid4().hex[:8]}.md',
+                                    'content':export_markdown(store.get(request.session_id),rows,
+                                        store.revisions(request.session_id),store.grounded_summary(request.session_id))})
+                            else:
+                                if (not summary_provider or not summary_provider.public()['configured'] or
+                                        summary_task is not None or request.provider != summary_provider.provider or
+                                        request.model != summary_provider.model or
+                                        (summary_provider.public()['cloud'] and not request.text_consent)):
+                                    raise ValueError('Summary provider, consent or active request invalid')
+                                with store.conn:
+                                    store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                                        'VALUES (?,?,?,?,?)',(request.session_id,store._now(),'info','summary_request',
+                                        json.dumps({'revision':request.revision,'input_hash':fingerprint,
+                                            'provider':request.provider,'model':request.model,
+                                            'text_consent':request.text_consent})))
+                                summary_task = asyncio.create_task(generate_summary(request.session_id,
+                                    request.revision,fingerprint,messages))
+                                summary_task.session_id = request.session_id
+                                await publish({'type':'summary_started','session_id':request.session_id})
                         elif command.get('action') in {'rename_speaker','merge_speaker'}:
                             request = SpeakerCorrection.model_validate(command)
                             recorder = app.state.recording
@@ -331,7 +395,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 label=request.label,merge_target=request.merge_target)
                             await publish({'type':'speakers_corrected','session_id':request.session_id,
                                 'segments':store.segments(request.session_id),
-                                'notes':store.notes(request.session_id)})
+                                'notes':store.notes(request.session_id),
+                                'summary':store.grounded_summary(request.session_id)})
                         elif command.get('action') == 'reprocess':
                             request = ReprocessRecording.model_validate(command)
                             if not app.state.recording or app.state.runner.active_id:
@@ -413,10 +478,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
-                            'message': ('Speaker correction rejected. Reopen the saved transcript; choose a valid name or a speaker from the same track and generation.'
+                            'message': ('Summary/export rejected. Select the current saved transcript, check configuration and text-upload consent, and wait for any summary request to finish.'
+                            if action in {'summarize','export_markdown'} else
+                            'Speaker correction rejected. Reopen the saved transcript; choose a valid name or a speaker from the same track and generation.'
                             if action in {'rename_speaker','merge_speaker'} else
                             'Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
                             if action in {'recover','resume','delete','retention'} else
@@ -469,8 +536,10 @@ def main():
         else:
             args.database = Path('data/phase1/public-replays.sqlite3')
     args.database.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    from ..llm.summary_provider import SummaryProvider
     from ..meetings.service import manual_discovery, native_discovery
     app, token = create_app(database=args.database, storage=args.storage,
+                            summary_provider=SummaryProvider(),
                             require_launch_key=args.require_launch_key,
                             discovery_factory=manual_discovery if args.no_discovery else native_discovery,
                             fixtures={'development-sample': args.public_fixture} if args.public_fixture else {})

@@ -32,3 +32,5 @@ dialog{border:1px solid var(--line);background:var(--paper);color:var(--ink);bor
 @media(max-width:650px){#reprocess-meeting{grid-column:1;grid-row:auto}}
 
 .speaker-editor{margin-top:16px;padding:12px 0;border-top:1px solid var(--line)}.speaker-edit-grid{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin:10px 0}.speaker-edit-grid label{display:grid;gap:6px;flex:1 1 170px;font-size:11px;color:var(--muted)}.speaker-edit-grid input,.speaker-edit-grid select{min-width:0;width:100%;box-sizing:border-box}.speaker-edit-grid button{flex:0 0 auto}.speaker-editor[hidden]{display:none}
+
+.summary-section{border-top:2px solid var(--green);padding-top:20px;margin:24px 0}.summary-section h3{font:normal 22px var(--serif);margin:0}.summary-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}#summary-content h4{font:normal 20px var(--serif);margin:24px 0 10px}#summary-content p{line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.summary-citation{font-size:11px;padding:4px 8px;margin:0 5px 5px 0;color:var(--green)}

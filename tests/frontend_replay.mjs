@@ -17,6 +17,7 @@ class Element {
   cloneNode() { return new Element(); }
   showModal() { this.open=true; }
   focus() {}
+  click() { this.clicked=true; }
   set innerHTML(value) { throw new Error('Transcript must not use innerHTML'); }
 }
 const elements=new Map();
@@ -367,10 +368,11 @@ assert.match(get('session-progress').textContent,/Native audio timestamps jumped
 const demoElements=new Map();
 const demoGet=id=>{if(!demoElements.has(id))demoElements.set(id,new Element());return demoElements.get(id);};
 demoGet('transcript').firstElementChild=new Element();
-const demoSockets=[];
+const demoSockets=[], demoDownloads=[], demoCreated=[];
 class DemoSocket extends Socket { constructor(){super();demoSockets.push(this);} }
 vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf8'),{
- document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
+ document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:tag=>{const e=new Element(); e.tag=tag; demoCreated.push(e); return e;},createTextNode:text=>({textContent:text})},
+ URL:{createObjectURL(blob){demoDownloads.push(blob);return 'blob:demo';},revokeObjectURL(){}},Blob,
  WebSocket:DemoSocket,location:{hash:'',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
  history:{replaceState(){}},setTimeout,setInterval:()=>null,URLSearchParams,
 });
@@ -412,3 +414,29 @@ assert.equal(demoGet('speaker-editor').hidden,false,'Rejected edits can be retri
 demoEvent({type:'session',session:{id:sid,source:'meeting',status:'processing',title:'Corrections',started_at:1}});
 assert.equal(demoGet('speaker-editor').hidden,true,'Processing locks speaker corrections');
 console.log('Revision-scoped speaker correction, merge boundaries and safe names passed');
+
+const sumItem={text:'<script>Review plan</script>',segment_ids:[correctedRows[0].id]};
+const summaryDraft={overview:sumItem,key_points:[sumItem],decisions:[],action_items:[],open_questions:[],uncertainties:[]};
+const savedDraft={summary:summaryDraft,stale:false,provider:'Configured provider',model:'chosen-model'};
+demoEvent({type:'snapshot',fixtures:[],sessions:[{id:sid,source:'meeting',status:'completed',title:'Notes',started_at:1}],
+ active_id:null,replay_available:true,storage:'public-demo',segments:{[sid]:correctedRows},
+ grounded_summaries:{[sid]:savedDraft},summary_provider:{configured:true,cloud:true,provider:'Configured provider',model:'chosen-model',endpoint:'https://summary.example/v1'}});
+assert.equal(demoGet('generate-summary').disabled,true,'Cloud summary needs separate transcript consent');
+assert.match(demoGet('summary-provider').textContent,/chosen-model.*https:\/\/summary.example/);
+assert.equal(demoGet('summary-content').children[1].textContent,'<script>Review plan</script>','Model output stays inert text');
+assert.match(demoGet('summary-content').children[2].textContent,/Source/);
+demoGet('summary-consent').checked=true;demoGet('summary-consent').onchange();
+assert.equal(demoGet('generate-summary').disabled,false);
+demoGet('generate-summary').onclick();
+let requested=JSON.parse(ds.sent.at(-1));assert.equal(requested.action,'summarize');assert.equal(requested.text_consent,true);
+assert.equal(requested.model,'chosen-model');assert.equal(demoGet('summary-consent').checked,false);
+demoEvent({type:'summary_started',session_id:sid});
+assert.equal(demoGet('generate-summary').disabled,true);
+demoEvent({type:'summary_error',session_id:sid,message:'Provider failed'});
+assert.equal(demoGet('summary-content').children[1].textContent,'<script>Review plan</script>','Provider failure preserves saved notes');
+demoGet('download-markdown').onclick();assert.equal(JSON.parse(ds.sent.at(-1)).action,'export_markdown');
+demoEvent({type:'markdown_export',session_id:sid,content:'# Safe export',filename:'unique.md'});
+assert.equal(demoDownloads.length,1);assert.equal(demoCreated.find(e=>e.download === 'unique.md').clicked,true);
+demoEvent({type:'transcript_replaced',session_id:sid,segments:correctedRows});
+assert.match(demoGet('summary-status').textContent,/outdated/);assert.equal(demoGet('summary-content').children.length,0);
+console.log('Grounded summary consent, source references, stale drafts and plaintext download passed');

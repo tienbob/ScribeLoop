@@ -7,6 +7,7 @@ const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
 let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
 let modelProfiles = {};
+let summaryProvider={configured:false}, savedSummaries=new Map(), summaryActiveId=null, summaryPending=false, exportPending=false, summarySession=null;
 let savedModelSession = null;
 let notes = new Map(), languageLocks = new Map(), speakerTurns = new Map(), liveProgress = new Map();
 const partials = new Map();
@@ -323,11 +324,40 @@ function partialText(value) {
   if (typeof value === 'string') return value;
   return Object.entries(value).filter(([,v])=>v).map(([stream,v])=>`${stream === 'mic' ? 'Microphone' : 'Meeting audio'} (provisional): ${v}`).join('\n');
 }
+function renderSummary(session) {
+  const rows=segments.get(selectedId)||[], saved=savedSummaries.get(selectedId);
+  const valid=session?.source === 'meeting' && rows.length && ['completed','failed','interrupted'].includes(session.status);
+  $('summary-section').hidden=!valid;
+  if(summarySession !== selectedId) { summarySession=selectedId; $('summary-consent').checked=false; text('summary-status',''); }
+  const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY in .env, then restart the app.';
+  text('summary-provider',destination);
+  const blocked=!authenticated || !valid || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
+  $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || (summaryProvider.cloud && !$('summary-consent').checked);
+  $('summary-consent-row').hidden=!summaryProvider.configured || !summaryProvider.cloud;
+  $('download-markdown').disabled=blocked || exportPending;
+  if(summaryActiveId === selectedId) text('summary-status','Generating summary. Previous notes remain available.');
+  $('summary-content').replaceChildren();
+  text('summary-source',saved ? `Saved draft: ${saved.provider} · ${saved.model} · transcript revision ${saved.revision ?? rows[0]?.revision}` : '');
+  if(!saved) return;
+  if(saved.stale) { text('summary-status','Saved summary is outdated. Generate again for this transcript; export will omit it.'); return; }
+  for(const [title,items] of [['Overview',[saved.summary.overview]],['Key points',saved.summary.key_points],['Decisions',saved.summary.decisions],['Action items',saved.summary.action_items],['Open questions',saved.summary.open_questions],['Uncertainties',saved.summary.uncertainties]]) {
+    const heading=document.createElement('h4'); heading.textContent=title; $('summary-content').append(heading);
+    for(const item of items) {
+      const p=document.createElement('p'); p.textContent=item.text || `${item.task} · Owner: ${item.owner || 'not stated'} · Due: ${item.due || 'not stated'}`; $('summary-content').append(p);
+      for(const id of item.segment_ids) { const source=rows.find(r=>r.id === id); if(!source) continue;
+        const button=document.createElement('button'); button.type='button'; button.className='summary-citation'; button.textContent=`Source ${formatDuration(source.start_ms)} · ${source.speaker_label || 'Speaker unknown'}`;
+        button.onclick=()=>{ const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
+      }
+    }
+    if(!items.length) { const p=document.createElement('p'); p.textContent='None stated.'; $('summary-content').append(p); }
+  }
+}
 function render() {
   renderDiscovery();
   renderHistory();
   const session = sessions.get(selectedId);
   text('new-session',activeId ? 'View active session' : '＋ New meeting');
+  renderSummary(session);
   $('session-heading').textContent = session ? session.title : 'The conversation';
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));
@@ -405,7 +435,9 @@ function connect() {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
-      speakerPending=false;
+      speakerPending=false; summaryPending=false; exportPending=false;
+      summaryProvider=data.summary_provider || {configured:false};
+      summaryActiveId=data.summary_active_id || null; savedSummaries=new Map(Object.entries(data.grounded_summaries || {}));
       connecting=false; notice('');
       authenticated = true; recordingAvailable = data.recording_available === true; recordPending=false;
       notes = new Map(Object.entries(data.notes || {}));
@@ -444,6 +476,17 @@ function connect() {
       pendingSource=null; chosenSource=data.source;
       $('source-status').textContent=`Selected: ${data.source.name} + ${data.source.microphone_name || 'system default microphone'}. No recording started.`;
       renderDiscovery();
+    } else if (data.type === 'summary_started') {
+      summaryPending=false; summaryActiveId=data.session_id; $('summary-consent').checked=false; render();
+    } else if (data.type === 'summary_ready' || data.type === 'summary_error') {
+      summaryPending=false; summaryActiveId=null;
+      if(data.summary) savedSummaries.set(data.session_id,data.summary);
+      if(data.session_id === selectedId) text('summary-status',data.message || 'Summary saved. Review its sources.'); render();
+    } else if (data.type === 'markdown_export') {
+      exportPending=false;
+      const url=URL.createObjectURL(new Blob([data.content],{type:'text/markdown;charset=utf-8'}));
+      const link=document.createElement('a'); link.href=url; link.download=data.filename; link.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000); text('summary-status','Plaintext Markdown download prepared.'); render();
     } else if (data.type === 'cloud_usage') {
       cloudUsage.set(data.session_id,data); render();
     } else if (data.type === 'speaker_turns') {
@@ -459,7 +502,7 @@ function connect() {
     } else if (['transcription_error','speaker_warning','recovery_complete'].includes(data.type)) {
       recordPending=false; notice(data.message); render();
     } else if (data.type === 'session_deleted') {
-      sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
+      savedSummaries.delete(data.session_id); sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
       speakerTurns.delete(data.session_id); languageLocks.delete(data.session_id); liveProgress.delete(data.session_id);
       recordPending=false; if (selectedId === data.session_id) selectedId=null;
       $('delete-consent').checked=false; render();
@@ -469,9 +512,10 @@ function connect() {
       languageLocks.set(data.session_id,data); render();
     } else if (data.type === 'speakers_corrected') {
       speakerPending=false; segments.set(data.session_id,data.segments); notes.set(data.session_id,data.notes);
+      savedSummaries.set(data.session_id,data.summary || null);
       text('speaker-edit-status','Speaker corrections saved.'); render();
     } else if (data.type === 'transcript_replaced') {
-      segments.set(data.session_id,data.segments); text('transcript-update','Transcript replaced with the completed pass.'); render();
+      segments.set(data.session_id,data.segments); if(savedSummaries.get(data.session_id)) savedSummaries.get(data.session_id).stale=true; text('transcript-update','Transcript replaced with the completed pass.'); render();
     } else if (data.type === 'notes') {
       notes.set(data.session_id,data.notes); render();
     } else if (data.type === 'recording_error') {
@@ -484,6 +528,7 @@ function connect() {
       else { if (activeId === data.session.id) { activeId=null; stopPending=false; } partials.delete(data.session.id); }
       render();
     } else if (data.type === 'segment') {
+      if(savedSummaries.get(data.session_id)) savedSummaries.get(data.session_id).stale=true;
       const rows=segments.get(data.session_id)||[];
       if (!rows.some(r => r.id === data.segment.id)) rows.push(data.segment);
       segments.set(data.session_id,rows);
@@ -498,7 +543,7 @@ function connect() {
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
-      speakerPending=false;
+      speakerPending=false; summaryPending=false; exportPending=false;
       if (data.context === 'meeting') {
         recordPending=false; notice(data.message);
         if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
@@ -595,3 +640,15 @@ function correctSpeaker(action) {
 }
 $('rename-speaker').onclick=()=>correctSpeaker('rename_speaker');
 $('merge-speaker').onclick=()=>correctSpeaker('merge_speaker');
+
+$('summary-consent').onchange=render;
+$('generate-summary').onclick=()=>{
+  if($('generate-summary').disabled) return;
+  summaryPending=send({action:'summarize',session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision,
+    provider:summaryProvider.provider,model:summaryProvider.model,text_consent:$('summary-consent').checked});
+  $('summary-consent').checked=false; render();
+};
+$('download-markdown').onclick=()=>{
+  if($('download-markdown').disabled) return;
+  exportPending=send({action:'export_markdown',session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision}); render();
+};
