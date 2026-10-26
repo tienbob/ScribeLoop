@@ -2,9 +2,40 @@ import SwiftUI
 import AppKit
 import ServiceManagement
 
+/// User-opened interactive windows must own keyboard input, even when the
+/// menu-bar app was previously inactive. Never install on automatic call panels.
+struct InteractiveWindowActivation: NSViewRepresentable {
+    final class Anchor: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window else { return }
+                NSApp.setActivationPolicy(.regular)
+                NSApp.activate(ignoringOtherApps:true)
+                window.makeKeyAndOrderFront(nil)
+                if window.canBecomeMain { window.makeMain() }
+            }
+        }
+    }
+    func makeNSView(context:Context) -> Anchor { Anchor() }
+    func updateNSView(_ view:Anchor,context:Context) {}
+}
+
 @MainActor final class DesktopDelegate: NSObject, NSApplicationDelegate {
     weak var core: DesktopClient?
     private var callPanel: NSPanel?
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps:true)
+    }
+    func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows:Bool) -> Bool {
+        sender.activate(ignoringOtherApps:true)
+        if let window = sender.windows.first(where:{ $0.identifier?.rawValue == "notebook" || $0.title == "ScribeLoop" }) {
+            (window.attachedSheet ?? window).makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
     func showCall(_ candidate: Record) {
         guard let core else { return }
         callPanel?.close()
@@ -83,7 +114,7 @@ struct Notebook: View {
                     Label(core.monitorLabel,
                           systemImage:core.connected ? "circle.fill" : "exclamationmark.circle").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button { showPreferences = true } label: { Image(systemName:"gearshape") }.help("Preferences")
+                    Button { NSApp.activate(ignoringOtherApps:true); showPreferences = true } label: { Image(systemName:"gearshape") }.help("Preferences")
                 }
             }.padding(20).background(Color(nsColor:.controlBackgroundColor))
             .navigationSplitViewColumnWidth(min:260,ideal:290,max:380)
@@ -135,6 +166,7 @@ struct Notebook: View {
         }.navigationSplitViewStyle(.balanced).frame(minWidth:980,minHeight:680)
         .foregroundStyle(.primary)
         .tint(.accentColor)
+        .background(InteractiveWindowActivation())
         .onChange(of:core.selectedID) { _, value in if let value { core.select(value) } }
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate) }
         .sheet(isPresented:$showPreferences) { Preferences(core:core).frame(width:650,height:720) }

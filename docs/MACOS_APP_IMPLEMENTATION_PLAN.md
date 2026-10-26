@@ -473,3 +473,63 @@ the next mutation, rather than treating an already-true state as acknowledgment.
 Updated agreement/settings/naming/pause steps to await their own accepted request
 receipts. The rebuilt native smoke passes with playback controls, person naming,
 seeking, reconnect, pause and shutdown verified; final bundle audit passes.
+
+### Explicit real-provider UI trial — 2026-10-26
+
+User authorized real API calls and requested the already-built production app,
+including microphone use. Use its normal UI and saved settings. No alternate API
+test app or injected recording source is used; the unused harness was discarded.
+The controlled speech source is the existing public AMI clip played through
+QuickTime into the microphone. Keep recordings local/encrypted and avoid copying
+private room audio/transcript into reports. Validate saved playback, naming and one
+explicit OpenAI summary on the same recording.
+
+### Real built-app UI findings and repair — 2026-10-26
+
+User redirected testing to the already-built production app and explicitly allowed
+microphone use. Requested mic access in its UI, recorded about 33 seconds while
+playing the existing public AMI clip through QuickTime, and stopped via UI. The
+real Deepgram result contains five segments and two anonymous speakers. Playback,
+seeking to 18 seconds and 1.5× speed work on this actual encrypted recording.
+Confirmed transcript text was observed after Stop in this run; live latency is not
+accepted from it. The preexisting empty recording was not deleted.
+
+Naming Person 2 failed twice in the real app. An isolated streaming-path reproduction
+shows commit_window creates segments without transcript_revisions metadata, causing
+person_links' foreign-key insert to fail. Preview seeding used append, which creates
+that metadata, hiding the defect. Fix commit_window to create provenance within the
+same transaction and add schema 11's additive/idempotent missing-revision repair so
+existing saved streams can be named without rerunning/uploading audio. Cover naming
+and derived summaries using actual streaming commits and SQLCipher. User has now
+saved their summary key in Preferences; test one summary on the same saved recording
+after repair. No alternate public-API test bundle is used; discard its unused harness.
+
+### Model ID editing affordance — 2026-10-26
+
+User reported the model field was not editable. In the running production UI,
+click/type changed its value; restored the original without saving. The grouped
+Form's borderless right-aligned field looks read-only and has a small hit area.
+Replace it with a labelled full-width rounded textbox, explicit keyboard focus,
+no autocorrection and automatic model-field focus after provider selection. Keep
+provider/key/current model unchanged during validation. Rebuild the same app and
+verify typing and persistence through its UI. The real OpenAI summary attempt failed
+with only a generic error and was not retried; do not mark summary acceptance done.
+
+### Keyboard routed to background app — 2026-10-26
+
+User clarified that the apparent focused field sends physical typing to the app
+behind ScribeLoop. This is a window-activation defect, not merely an input border.
+Keep the clearer Model ID textbox, explicitly establish regular-app activation on
+launch/reopen, and make user-opened notebook/preferences/people windows key when
+they attach. Do not activate automatic call-review panels or steal focus on backend
+updates. Verify actual active/key-window state and native keyboard editing after
+rebuild; AX-directed text insertion alone is insufficient evidence of focus.
+
+
+Keyboard-focus acceptance: rebuilt the same production app with regular activation
+policy and key-window activation on user-opened notebook/preferences/people views,
+plus the outlined Model ID field. The user tested physical typing and confirmed
+“Works now”. No provider/key change or API request was made for this focus check.
+The real-UI test report is [MACOS_REAL_UI_TEST.md](MACOS_REAL_UI_TEST.md); it preserves
+remaining summary-failure/live-latency findings instead of treating synthetic tests
+as end-to-end acceptance.

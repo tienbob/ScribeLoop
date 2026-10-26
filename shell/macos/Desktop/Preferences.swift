@@ -6,6 +6,7 @@ struct Preferences: View {
     @ObservedObject var core: DesktopClient
     @Environment(\.dismiss) private var dismiss
     @State private var summaryKey = ""
+    @FocusState private var modelFocused: Bool
     @State private var endpoint = "https://api.openai.com/v1"
     @State private var model = "gpt-5.4-mini"
     @State private var provider = "OpenAI"
@@ -29,7 +30,18 @@ struct Preferences: View {
                         Text("Custom · OpenAI compatible").tag("Custom")
                     }
                     if provider == "Custom" { TextField("API base URL",text:$endpoint) }
-                    TextField("Model ID",text:$model,prompt:Text(localSummary ? "Name of your installed model" : "Model ID from your provider"))
+                    VStack(alignment:.leading,spacing:8) {
+                        Text("Model ID").font(.callout).foregroundStyle(.secondary).onTapGesture { modelFocused = true }
+                        TextField("Model ID",text:$model,prompt:Text(localSummary ? "Type your installed model name" : "Type the model ID from your provider"))
+                            .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                            .focused($modelFocused).autocorrectionDisabled(true)
+                            .simultaneousGesture(TapGesture().onEnded {
+                                NSApp.setActivationPolicy(.regular)
+                                NSApp.activate(ignoringOtherApps:true)
+                                modelFocused = true
+                            })
+                            .accessibilityLabel("Model ID").frame(maxWidth:.infinity)
+                    }.padding(.vertical,4)
                     SecureField(localSummary ? "API key (optional)" : "New summary API key",text:$summaryKey).textContentType(.password)
                     Text(localSummary ? "Uses your running local server and installed model. An API key is optional unless you enabled server authentication. Transcription still uses Deepgram." : "Transcript text is sent to this provider for notes. Leave the key blank to keep it only when the destination stays the same; changing providers clears the old key.").font(.caption).foregroundStyle(.secondary)
                     Toggle("Remove saved summary key",isOn:$clearSummary)
@@ -65,7 +77,7 @@ struct Preferences: View {
                     HStack { Button("Reconnect") { core.reconnect() }.disabled(!core.running); Button("Restart core") { core.stop { core.start() } }.disabled(core.busy) }
                 }
             }.formStyle(.grouped)
-        }.onAppear {
+        }.background(InteractiveWindowActivation()).onAppear {
             endpoint = text(core.settings["summary_endpoint"]); model = text(core.settings["summary_model"]); provider = text(core.settings["summary_provider"])
             if endpoint.isEmpty { endpoint = "https://api.openai.com/v1" }; if model.isEmpty { model = "gpt-5.4-mini" }; if provider.isEmpty { provider = "OpenAI" }
             if presets[provider]?.trimmingCharacters(in:CharacterSet(charactersIn:"/")) != endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) { provider = "Custom" }
@@ -78,6 +90,7 @@ struct Preferences: View {
         if let preset = presets[selected] { endpoint = preset }
         summaryKey = ""; clearSummary = false
         model = selected == "OpenAI" ? "gpt-5.4-mini" : ""
+        modelFocused = true
     }
     private func save() {
         var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"language":language,"duration_s":duration]
@@ -250,7 +263,7 @@ struct PeopleView: View {
                 if let offset = core.nextPeopleOffset { Button("More people") { core.send(["action":"people_page","offset":offset]) } }
                 Spacer(); Text("Manual names · no voice learning").font(.caption).foregroundStyle(.secondary)
             }
-        }.padding(28)
+        }.padding(28).background(InteractiveWindowActivation())
         .onAppear { speaker = initialSpeaker ?? core.speakerRoster.first?.id ?? ""; core.send(["action":"people_page"]) }
         .onChange(of:speaker) { _, _ in name = ""; existing = ""; saved = false }
         .onChange(of:core.requests[pending ?? ""]) { _, status in
