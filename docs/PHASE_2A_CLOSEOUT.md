@@ -55,3 +55,9 @@ checks Python tests, Ruff, frontend regressions and application imports; macOS a
 builds the native meeting helper and verifies generated signals. The latest commit
 checks remain visible on [the review PR](https://github.com/tienbob/ScribeLoop/pull/4).
 No CI evidence here represents a physical recording or a live provider evaluation.
+
+The documentation-head run 18 caught a timing-sensitive pre-existing live-ASR test:
+confirmed rows could arrive after the first partial but before its polling waiter
+resumed. The assertion now samples storage at first-partial delivery, retaining
+confirmed-before-Stop coverage. All 15 live-ASR regressions pass locally; final-head
+CI results are tracked on the same PR. No app behavior or timeout was relaxed.

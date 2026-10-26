@@ -246,3 +246,9 @@ and wheel-content verification passed. Both required Linux/macOS CI jobs passed 
 Items 4 and 6, and the agreed finalization development scope, are complete. See
 [Phase 2a closeout](PHASE_2A_CLOSEOUT.md) for remaining real-world acceptance and
 broader roadmap work.
+
+Final-head CI follow-up: run 18 exposed an existing timing-sensitive live-ASR test
+on macOS. Observing a partial event does not imply no confirmed events arrived by
+the time the test coroutine resumes. Repair the regression to assert non-persistence
+at the partial publish boundary, retain the later confirmed-before-Stop assertion,
+and validate the final head again. Do not dismiss the failure by rerunning unchanged.

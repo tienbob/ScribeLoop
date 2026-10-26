@@ -177,7 +177,12 @@ async def test_confirmed_text_appears_before_stop_and_capture_does_not_wait_for_
     source = Source()
     worker = Worker()
     events = []
+    first_partial_rows = []
     async def publish(event):
+        if event['type'] == 'partial' and event['segment']['text'] and not first_partial_rows:
+            # Observe persistence at delivery, before the runner can consume the
+            # next queued confirmed window. A polling waiter can resume later.
+            first_partial_rows.append(store.segments(event['session_id']))
         events.append(event)
     def live(*args,**kwargs):
         return transcribe_live(*args,**kwargs,worker_factory=lambda:worker,vad=all_speech,poll_s=.01)
@@ -185,8 +190,8 @@ async def test_confirmed_text_appears_before_stop_and_capture_does_not_wait_for_
                              live_transcriber=live,diarizer=False)
     session = runner.start(None,{'language':'en'},'Live recording',consent_confirmed=True)
     sid = session['id']
-    await wait_for(lambda:any(e['type']=='partial' and e['segment']['text'] for e in events))
-    assert not store.segments(sid), 'Partials must never be persisted'
+    await wait_for(lambda:bool(first_partial_rows))
+    assert not first_partial_rows[0], 'The first partial must not be persisted'
     release.set()
     await wait_for(lambda:bool(store.segments(sid)))
     assert store.get(sid)['status'] == 'recording'
