@@ -7,6 +7,8 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [macOS desktop app — proposed implementation plan](MACOS_APP_IMPLEMENTATION_PLAN.md)
+
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
 - [Phase 2 progress and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
 - [Phase 2b implementation and acceptance](PHASE_2B_CLOSEOUT.md)

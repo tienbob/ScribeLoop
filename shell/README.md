@@ -1,10 +1,14 @@
-# Desktop shell — deferred for local v0
+# Desktop app shell
 
-Phase 0 local-development decision (2026-10-22): start with the existing Python
-FastAPI core and a browser UI. Tauri scaffolding is deferred; no Rust/TS shell
-or distribution artifact is implemented here. The default Groq backend avoids bundled local speech models; optional local ML experiments remain large. Installer measurements are still deferred.
+The current working UI is the Python/FastAPI browser development client. No native
+desktop shell or installer is implemented in this directory yet. The app core uses
+cloud-only Deepgram streaming and OpenAI summaries; it does not run local ML models.
 
-The browser UI must retain loopback-only binding, first-message token auth,
-strict CSP, and consent state. Native capture remains a separate Swift helper.
-Signing and notarized responsible-app permission attribution remain required
-before distribution. See [Phase 0 closeout](../docs/PHASE_0_CLOSEOUT.md).
+The proposed next step is a native SwiftUI macOS app with an app-managed bundled
+Python core and the existing Swift capture/observer helpers. See the
+[macOS app implementation plan](../docs/MACOS_APP_IMPLEMENTATION_PLAN.md).
+
+Start with a minimal packaged `.app`/permission/lifecycle spike, then native UI
+parity. Release authentication is mandatory and invisible to users; the keyless
+web demo is not the desktop security model. Signing/notarization remains a later
+release gate under the user's existing local-development deferral.
