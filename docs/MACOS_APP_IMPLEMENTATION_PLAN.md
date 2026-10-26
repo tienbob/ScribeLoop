@@ -466,3 +466,10 @@ track changes and cleanup. Actual native UI inspection verified Person 3 naming,
 seeking to 1:30 and playing from there, pause and speed options. Synthetic test data
 only; no capture or provider calls. Build and dependency/signature audit are repeated
 for the final app artifact.
+
+Final smoke-run correction: the synthetic preview now begins with its test agreement
+accepted. The runner must still await the accept-agreement receipt before sending
+the next mutation, rather than treating an already-true state as acknowledgment.
+Updated agreement/settings/naming/pause steps to await their own accepted request
+receipts. The rebuilt native smoke passes with playback controls, person naming,
+seeking, reconnect, pause and shutdown verified; final bundle audit passes.

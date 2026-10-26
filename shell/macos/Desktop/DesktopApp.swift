@@ -296,13 +296,13 @@ struct CitedNotes: View {
         let sid = core.selectedID
         core.loadPage(0)
         guard await wait({core.offset == 0 && core.rows.count == 100}) else { await fail("paging"); return }
-        core.send(["action":"accept_agreement","version":text(core.agreement["version"])])
-        guard await wait({core.accepted}) else { await fail("agreement"); return }
-        core.send(["action":"save_settings","settings":["language":"vi"]])
-        guard await wait({text(core.settings["language"]) == "vi"}) else { await fail("settings"); return }
+        guard let agreementID = core.send(["action":"accept_agreement","version":text(core.agreement["version"])]),
+            await wait({core.accepted && core.requests[agreementID] == "accepted"}) else { await fail("agreement"); return }
+        guard let settingsID = core.send(["action":"save_settings","settings":["language":"vi"]]),
+            await wait({text(core.settings["language"]) == "vi" && core.requests[settingsID] == "accepted"}) else { await fail("settings"); return }
         guard core.speakerRoster.count == 3, let first = core.speakerRoster.first, let sid else { await fail("roster"); return }
-        core.send(["action":"name_speaker","session_id":sid,"revision":core.revision,"speaker_id":first.id,"name":"Alice"])
-        guard await wait({core.speakerRoster.first?.text("name") == "Alice"}) else { await fail("name person"); return }
+        guard let nameID = core.send(["action":"name_speaker","session_id":sid,"revision":core.revision,"speaker_id":first.id,"name":"Alice"]),
+            await wait({core.speakerRoster.first?.text("name") == "Alice" && core.requests[nameID] == "accepted"}) else { await fail("name person"); return }
         core.playback.open(sid)
         guard await wait({core.playback.duration == 140}) else { await fail("audio duration"); return }
         core.playback.seek(90,autoplay:false)
@@ -311,8 +311,8 @@ struct CitedNotes: View {
         core.stopAudio()
         core.reconnect()
         guard await wait({core.connected && core.selectedID == sid && core.rows.count > 0}) else { await fail("reconnect"); return }
-        core.send(["action":"set_detection","enabled":false])
-        guard await wait({!core.detection}) else { await fail("pause"); return }
+        guard let pauseID = core.send(["action":"set_detection","enabled":false]),
+            await wait({!core.detection && core.requests[pauseID] == "accepted"}) else { await fail("pause"); return }
         core.stop()
         guard await wait({!core.running && core.state == "Stopped"}) else { await fail("shutdown"); return }
         guard await PlaybackSmoke.run() else { await fail("native playback controls"); return }
