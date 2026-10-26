@@ -46,6 +46,42 @@ class SpeakerRegistry:
                     (sid,revision,speaker,person))
             self.store._write_transcript_notes(sid)
 
+    def name_speaker(self,sid,revision,speaker,*,name=None,person_id=None):
+        """Create/reuse a person and link in one transaction; stale reads create nothing."""
+        if (name is None)==(person_id is None):
+            raise ValueError('Provide a name or existing person')
+        session=self.store.get(sid)
+        if (not session or session['status'] not in {'completed','failed','interrupted'} or
+                speaker not in {r['id'] for r in self.store.speaker_roster(sid,revision)}):
+            raise ValueError('Choose a speaker in the current saved transcript')
+        # create/link normally commit their own transactions; an explicit outer
+        # savepoint keeps both mutations and derived notes atomic here.
+        self.conn.execute('SAVEPOINT name_speaker')
+        try:
+            if name is not None:
+                if not isinstance(name,str):
+                    raise TypeError('Invalid person name')
+                clean=name.strip()
+                if not 1<=len(clean)<=80 or any(unicodedata.category(c).startswith('C') for c in clean):
+                    raise ValueError('Invalid person name')
+                clean.encode('utf-8')
+                person_id=uuid4().hex
+                self.conn.execute('INSERT INTO speakers(id,canonical_name,learn_enabled,created_at) VALUES (?,?,0,?)',
+                                  (person_id,clean,self.store._now()))
+            elif not self.conn.execute('SELECT 1 FROM speakers WHERE id=?',(person_id,)).fetchone():
+                raise ValueError('Unknown person')
+            self.conn.execute('INSERT OR IGNORE INTO person_link_history VALUES (?,?,?,?)',(sid,revision,speaker,person_id))
+            self.conn.execute('INSERT INTO person_links(session_id,revision,speaker_id,person_id) VALUES (?,?,?,?) '
+                'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET person_id=excluded.person_id',
+                (sid,revision,speaker,person_id))
+            self.store._write_transcript_notes(sid)
+            self.conn.execute('RELEASE name_speaker')
+        except BaseException:
+            self.conn.execute('ROLLBACK TO name_speaker')
+            self.conn.execute('RELEASE name_speaker')
+            raise
+        return person_id
+
     def learning(self,person,enabled):
         if type(enabled) is not bool or not self.conn.execute('SELECT 1 FROM speakers WHERE id=?',(person,)).fetchone():
             raise ValueError('Unknown person or preference')

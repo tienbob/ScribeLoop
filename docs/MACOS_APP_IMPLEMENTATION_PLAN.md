@@ -429,3 +429,40 @@ inspection confirms Preferences starts with summary settings and contains no
 Deepgram credential editor. Tests prove user patches are rejected, legacy Keychain
 keys/runtime environment cannot override the operator key, and summary edits leave
 transcription configuration unchanged. No provider request was made.
+
+### Playback and speaker naming UX — 2026-10-26
+
+Replace minute-step playback with a full-duration timeline, play/pause, scrub to
+any position, skip controls and playback speed. Decode authenticated windows on
+demand and advance through the whole recording without loading it all into RAM.
+Authenticate/index encrypted tracks before random access; invalidate on file change,
+recheck keys for each read, and correlate responses so late seeks/track/session
+changes cannot play stale audio. Keep decryption local, cancellation safe and memory
+bounded. Provide conversation mix plus individual tracks.
+
+Replace standalone Add person with a meeting-wide numbered speaker roster (including
+speakers outside the current transcript page), sample utterance and one-step
+select-Person-1/name/save. Support linking existing people. The same numbered labels
+appear in the transcript and picker, scoped to the current transcript revision.
+Creating and linking a person must be atomic; stale revisions produce no orphan
+person. Names remain manual labels and do not enable voice learning. Validate with
+synthetic audio/speakers, native playback/controller tests and screenshots.
+
+Playback/naming evidence: implemented conversation/individual-track player with
+whole-duration scrubbing, play/pause, 15-second skips and 0.5×–2× speed. At most two
+60-second windows are retained in the UI. Sparse track checkpoints are created only
+after footer authentication; changed tracks are reindexed and requested records are
+reauthenticated. This supersedes the prior five-minute playback-window UI.
+
+The Name people button opens a visible single-step form: select the transcript's
+Person number, type a name or choose an existing person, Save. Stable meeting-wide
+numbering includes speakers on other pages. Naming/linking and derived notes are
+atomic and revision-checked. Screenshot inspection caught and fixed a clipped form;
+the complete picker/name/save controls now fit without scrolling.
+
+426 Python tests pass. Native preview smoke verifies speaker naming, full duration,
+seek, continuous generated-silence playback, pause/resume, speed, stale-seek rejection,
+track changes and cleanup. Actual native UI inspection verified Person 3 naming,
+seeking to 1:30 and playing from there, pause and speed options. Synthetic test data
+only; no capture or provider calls. Build and dependency/signature audit are repeated
+for the final app artifact.

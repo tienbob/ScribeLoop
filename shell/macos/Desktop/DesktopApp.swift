@@ -35,7 +35,7 @@ struct ScribeLoopApp: App {
     @Environment(\.openWindow) private var openWindow
     var body: some Scene {
         Window("ScribeLoop",id:"notebook") {
-            Notebook(core:core).onAppear { delegate.core = core; core.onCandidate = { [weak delegate] row in delegate?.showCall(row) }; if !core.running { core.start() } }
+            Notebook(core:core).onAppear { delegate.core = core; core.onCandidate = { [weak controller = delegate] row in controller?.showCall(row) }; if !core.running { core.start() } }
         }.defaultSize(width:1160,height:780)
         MenuBarExtra {
             Text(core.activeID == nil ? (core.summaryID == nil ? core.monitorLabel : "Preparing notes") : "Recording · microphone and selected source")
@@ -112,6 +112,7 @@ struct Notebook: View {
                     VStack(alignment:.leading,spacing:12) {
                         Text(selected.text("title")).font(.system(size:30,weight:.medium,design:.serif)).textSelection(.enabled)
                         HStack { Text(selected.text("status").capitalized); Text("·"); Text("\(core.total) transcript segments"); Spacer()
+                            Button("Name people",systemImage:"person.crop.circle.badge.plus") { core.send(["action":"people_page"]); showPeople = true }.disabled(!core.connected || core.busy || core.revision == 0)
                             Menu("Meeting") { meetingActions(selected) }.disabled(!core.connected)
                         }.font(.callout).foregroundStyle(.secondary)
                         Picker("Meeting view",selection:$tab) { Text("Notes").tag("Notes"); Text("Transcript").tag("Transcript"); Text("Audio").tag("Audio") }.pickerStyle(.segmented).frame(maxWidth:360)
@@ -137,7 +138,7 @@ struct Notebook: View {
         .onChange(of:core.selectedID) { _, value in if let value { core.select(value) } }
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate) }
         .sheet(isPresented:$showPreferences) { Preferences(core:core).frame(width:650,height:720) }
-        .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:600,height:540) }
+        .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
         .alert("Delete this meeting permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
             Button("Cancel",role:.cancel) { confirmed = nil }
             Button("Delete meeting",role:.destructive) { if let id = confirmed { core.send(["action":"delete","session_id":id,"confirmed":true]); confirmed = nil } }
@@ -299,13 +300,23 @@ struct CitedNotes: View {
         guard await wait({core.accepted}) else { await fail("agreement"); return }
         core.send(["action":"save_settings","settings":["language":"vi"]])
         guard await wait({text(core.settings["language"]) == "vi"}) else { await fail("settings"); return }
+        guard core.speakerRoster.count == 3, let first = core.speakerRoster.first, let sid else { await fail("roster"); return }
+        core.send(["action":"name_speaker","session_id":sid,"revision":core.revision,"speaker_id":first.id,"name":"Alice"])
+        guard await wait({core.speakerRoster.first?.text("name") == "Alice"}) else { await fail("name person"); return }
+        core.playback.open(sid)
+        guard await wait({core.playback.duration == 140}) else { await fail("audio duration"); return }
+        core.playback.seek(90,autoplay:false)
+        guard await wait({!core.playback.loading && core.playback.position == 90}) else { await fail("audio seek"); return }
+        core.playback.rate = 1.5
+        core.stopAudio()
         core.reconnect()
         guard await wait({core.connected && core.selectedID == sid && core.rows.count > 0}) else { await fail("reconnect"); return }
         core.send(["action":"set_detection","enabled":false])
         guard await wait({!core.detection}) else { await fail("pause"); return }
         core.stop()
         guard await wait({!core.running && core.state == "Stopped"}) else { await fail("shutdown"); return }
-        print("{\"ok\":true,\"protocol\":2,\"encrypted_fixture\":true,\"paged_rows\":230,\"agreement\":true,\"settings\":true,\"reconnect\":true,\"pause\":true,\"shutdown\":true}")
+        guard await PlaybackSmoke.run() else { await fail("native playback controls"); return }
+        print("{\"ok\":true,\"playback_controls\":true,\"protocol\":2,\"encrypted_fixture\":true,\"paged_rows\":230,\"speaker_naming\":true,\"audio_seek\":true,\"agreement\":true,\"settings\":true,\"reconnect\":true,\"pause\":true,\"shutdown\":true}")
         exit(0)
     }
 }

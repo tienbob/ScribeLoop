@@ -1,6 +1,7 @@
 """Bounded desktop reads and dispatch receipts over the existing core commands."""
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections import OrderedDict
@@ -96,10 +97,14 @@ class DesktopContract:
         if offset == -1:
             offset = max(0, ((count-1)//100)*100)
         rows = store.segments(sid, revision=revision, limit=100, offset=offset) if revision else []
+        roster=store.speaker_roster(sid,revision) if revision else []
+        numbers={row['id']:row['person_number'] for row in roster}
+        for row in rows:
+            row['person_number']=numbers.get(row.get('display_speaker_id'))
         # Notes are bounded at their original provider limits; no full transcript.
         summary = store.grounded_summary(sid)
         return {'type':'meeting_page', 'session':session, 'revision':revision, 'offset':offset,
-            'total':count, 'segments':rows, 'notes':store.notes(sid)[:100000], 'summary':summary,
+            'total':count, 'segments':rows, 'speakers':roster, 'notes':store.notes(sid)[:100000], 'summary':summary,
             'audio':app.state.audio.status(sid) if app.state.audio and session['source']=='meeting' else {},
             'rolling':RollingNotes(store,summary_provider).latest(sid),
             'budget':RollingNotes(store,summary_provider).public(sid)}
@@ -112,6 +117,21 @@ class DesktopContract:
             return self.history(app.state.store,command.get('cursor'))
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
+        if action in {'audio_info','audio_window'}:
+            fields={'action','session_id'} if action=='audio_info' else {'action','session_id','stream','start_ms'}
+            sid=command.get('session_id')
+            if (set(command)!=fields or not isinstance(sid,str) or not ID.fullmatch(sid) or
+                    not app.state.audio or active_id or (app.state.recording and app.state.recording.task and
+                    not app.state.recording.task.done())):
+                raise ValueError('Saved audio is unavailable while recording or processing')
+            session=app.state.store.get(sid)
+            if not session or session['status'] not in {'completed','failed','interrupted'}:
+                raise ValueError('Select a saved meeting')
+            if action=='audio_info':
+                return {'type':'audio_info','session_id':sid,**await app.state.audio.describe(sid)}
+            data=await app.state.audio.seek(sid,command['stream'],command['start_ms'])
+            return {'type':'audio_window','session_id':sid,'stream':command['stream'],
+                    'start_ms':command['start_ms'],'wav_base64':base64.b64encode(data).decode('ascii')}
         if action == 'request_status' and set(command)=={'action','request_id'}:
             return self.receipts.get(command['request_id'],
                 {'type':'receipt','request_id':command['request_id'],'status':'unknown'})

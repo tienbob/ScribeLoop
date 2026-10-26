@@ -19,6 +19,8 @@ jobs:
           xcrun swiftc -parse-as-library -swift-version 5 -O \
             -module-cache-path "$RUNNER_TEMP/swift-cache" \
             shell/macos/Desktop/DesktopClient.swift \
+            shell/macos/Desktop/MeetingPlayback.swift \
+            shell/macos/Desktop/PlaybackSmoke.swift \
             shell/macos/Desktop/DesktopApp.swift \
             shell/macos/Desktop/Preferences.swift \
             -o "$RUNNER_TEMP/ScribeLoop"

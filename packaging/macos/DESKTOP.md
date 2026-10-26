@@ -137,3 +137,34 @@ A bundled credential can be extracted from a distributed desktop app. This locks
 normal app configuration; it is not a secrecy boundary. Shared service credentials
 should move behind an operator backend before public distribution. Do not commit or
 publish generated app artifacts containing this development key.
+
+### Audio player and naming transcript people
+
+The Audio tab has a full-recording timeline with elapsed/total time, play/pause,
+drag-to-seek, 15-second skips and 0.5×–2× speed. Conversation mixes available tracks;
+Microphone and Meeting audio can also be selected individually. The backend fully
+authenticates each encrypted track once to build sparse, memory-only seek checkpoints.
+Playback then reauthenticates requested records and checks file identity/change
+metadata, fetching at most a 60-second window at a time. The native player keeps
+only its current and next windows, prefetches near the boundary and advances through
+the full recording. Each request rechecks audio availability/keys. Stale responses
+from old seeks/tracks/meetings are ignored. Closing the Audio tab or disconnecting
+releases playback buffers; expired/deleted audio stops playback. No plaintext audio
+file or whole-recording PCM cache is created. The first open may show Loading while
+long tracks are indexed.
+
+Choose **Name people** beside the meeting title, or **Name this person** on a
+transcript row. Select Person 1 / Person 2 / Person 3, inspect the sample utterance,
+then type a name and Save. Alternatively select an existing saved person. The
+roster spans the complete current transcript, not only the visible page, and its
+numbers match transcript labels. Creation and linking form one transaction; a stale
+revision or failed notes update cannot leave an orphan person. Manual naming does
+not enable voice learning. Merged speakers retain their original target number.
+
+Validation: 426 Python tests pass, including complete-track authentication,
+random-access boundaries, mixed tracks, changed-file invalidation, revoked keys,
+meeting-wide numbering, merges and atomic naming rollback. Preview native smoke
+also checks full-duration metadata, 90-second seeking, person naming and generated
+silent playback through multiple windows, pause/resume, speed, superseded seeks,
+track changes and cleanup. Native UI inspection verified timeline seeking/play/pause,
+speed choices and selecting Person 3 → entering a name → saving to the transcript.

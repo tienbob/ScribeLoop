@@ -65,6 +65,8 @@ def main():
     run('xcrun', 'swiftc', '-parse-as-library', '-swift-version', '5', '-O',
         '-module-cache-path', BUILD / 'swift-cache',
         ROOT / 'shell/macos/Desktop/DesktopClient.swift',
+        ROOT / 'shell/macos/Desktop/MeetingPlayback.swift',
+        ROOT / 'shell/macos/Desktop/PlaybackSmoke.swift',
         ROOT / 'shell/macos/Desktop/DesktopApp.swift',
         ROOT / 'shell/macos/Desktop/Preferences.swift',
         '-o', contents / 'MacOS/ScribeLoop')

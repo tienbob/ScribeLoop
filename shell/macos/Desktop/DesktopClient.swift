@@ -12,6 +12,12 @@ struct Record: Identifiable {
     func text(_ key: String) -> String { raw[key] as? String ?? "" }
     func int(_ key: String) -> Int { (raw[key] as? NSNumber)?.intValue ?? 0 }
     func object(_ key: String) -> Object { raw[key] as? Object ?? [:] }
+    var personTitle: String {
+        let number = int("person_number")
+        guard number > 0 else { return "Speaker unknown" }
+        let label = text("name").isEmpty ? text("speaker_label") : text("name")
+        return label.isEmpty || label == "Speaker \(number)" || label == "Speaker unknown" ? "Person \(number)" : "Person \(number) · \(label)"
+    }
 }
 func objects(_ value: Any?) -> [Record] { (value as? [Object] ?? []).map { Record(raw: $0) } }
 func text(_ value: Any?) -> String { value as? String ?? "" }
@@ -54,6 +60,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     private var stopping = false
     private var pageRequest: String?
     private var completion: (() -> Void)?
+    let playback = MeetingPlayback()
     private var player: AVAudioPlayer?
     private var reconnectAttempts = 0
     private var lastSequence = 0
@@ -62,6 +69,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     var busy: Bool { activeID != nil || summaryID != nil }
     var accepted: Bool { agreement["accepted"] as? Bool == true }
     var selected: Record? { sessions.first { $0.id == selectedID } }
+    var speakerRoster: [Record] { objects(detail["speakers"]) }
     var rows: [Record] { objects(detail["segments"]) }
     var revision: Int { (detail["revision"] as? NSNumber)?.intValue ?? 0 }
     var offset: Int { (detail["offset"] as? NSNumber)?.intValue ?? 0 }
@@ -80,6 +88,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         self.database = database ?? UserDefaults.standard.string(forKey: "databasePath") ??
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ScribeLoop/meetings.sqlcipher").path
+        playback.request = { [weak self] command in self?.send(command) }
     }
     private func random(_ count: Int) throws -> String {
         var bytes = [UInt8](repeating: 0,count: count)
@@ -172,6 +181,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
                 }
             } catch {
                 guard let self, generation == self.connection, !self.stopping, !Task.isCancelled else { return }
+                self.playback.close()
                 self.state = "Disconnected"; self.message = "Connection interrupted. Pending actions will be checked, never replayed."
                 if self.reconnectAttempts < 3 && self.running {
                     self.reconnectAttempts += 1
@@ -185,7 +195,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     @discardableResult func send(_ command: Object) -> String? {
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page"]
+        if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window"]
         if !reads.contains(action) && action != "stop" && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
@@ -227,6 +238,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             let id = text(v["request_id"]), status = text(v["status"])
             requests[id] = status
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
+            if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
         case "history_page":
             let page = objects(v["sessions"])
@@ -247,7 +259,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "session":
             let row = v["session"] as? Object ?? [:]; upsert(row)
             let status = text(row["status"]), sid = text(row["id"])
-            if ["preparing","recording","transcribing"].contains(status) { activeID = sid; if selectedID != sid { select(sid) } }
+            if ["preparing","recording","transcribing"].contains(status) { stopAudio(); activeID = sid; if selectedID != sid { select(sid) } }
             else if activeID == sid { activeID = nil; partials = [:]; callEnding = false }
             reloadSoon()
         case "session_deleted":
@@ -260,11 +272,15 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "summary_started": summaryID = v["session_id"] as? String
         case "summary_ready", "summary_error": summaryID = nil; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
         case "markdown_export": saveExport(text(v["content"]))
+        case "audio_info", "audio_window": playback.receive(v)
         case "audio_playback":
             guard text(v["session_id"]) == selectedID,
                 let data = Data(base64Encoded:text(v["wav_base64"])), data.count <= 10_000_000 else { return }
             do { player = try AVAudioPlayer(data:data); player?.prepareToPlay(); player?.play(); playing = true }
             catch { message = "This audio window could not be played." }
+        case "audio_state":
+            if text(v["session_id"]) == selectedID, let audio = v["audio"] as? Object, audio["available"] as? Bool != true { stopAudio() }
+            reloadSoon()
         case "people": people = objects(v["people"]); nextPeopleOffset = v["next_offset"] as? Int
         case "auto_call_ending": callEnding = true
         case "error", "recording_error", "transcription_error", "rolling_notes_error", "audio_cleanup_error": message = text(v["message"]); reloadSoon()
@@ -322,7 +338,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         command["language"] = settings["language"] ?? "auto"; command["duration_s"] = settings["duration_s"] ?? 3600
         command["consent_confirmed"] = true; send(command)
     }
-    func stopAudio() { player?.stop(); player = nil; playing = false }
+    func stopAudio() { playback.close(); player?.stop(); player = nil; playing = false }
     func saveExport(_ content: String) {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "Meeting notes.md"
         panel.message = "This export is readable plaintext outside encrypted app storage."

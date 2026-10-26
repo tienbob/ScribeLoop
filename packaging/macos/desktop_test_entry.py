@@ -29,17 +29,20 @@ def fixture_app(request, helpers):
     settings = DesktopSettings(Vault())
     contract = DesktopContract(settings, helpers/'scribeloop-meeting')
     def recording(store, audio, _factory, publish):
+        store.accept_agreement(store.AGREEMENT_VERSION)  # Synthetic preview only; no capture or providers.
         sid = store.create_recording('Designing a quieter workspace',
             {'provider':'fixture','scope':'microphone','language':'en'})['id']
         audio.create_session(sid)
         store.set_audio_paths(sid,audio)
         with audio.writer(sid,'mic') as writer:
-            writer.write(AudioFrame(np.zeros(16000,dtype=np.float32),'mic',0,0))
+            for second in range(140):
+                writer.write(AudioFrame(np.zeros(16000,dtype=np.float32),'mic',second*1000,0))
         words = ['We will focus the next release on a simpler recording experience.',
                  'The team agreed to keep the transcript close to the notes.',
                  'Our next step is to test the desktop workflow together.']
         for i in range(230):
-            store.append(sid,{'text':words[i%3], 'start_ms':i*2000,'end_ms':i*2000+1500,'is_final':True},stream='mic')
+            store.append(sid,{'text':words[i%3], 'start_ms':i*2000,'end_ms':i*2000+1500,'is_final':True,
+                'speaker_key':f'deepgram:{"a"*32}:mic:{i%3}'},stream='mic')
         store.transition(sid,'completed')
         store.create_transcript_notes(sid)
         rows = store.segments(sid)

@@ -567,6 +567,17 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             desktop.receipt(dispatch_id,'dispatching')
+                            if action == 'name_speaker':
+                                if (recording_busy() or summary_task is not None or
+                                        set(command) not in ({'action','session_id','revision','speaker_id','name'},
+                                                            {'action','session_id','revision','speaker_id','person_id'})):
+                                    raise ValueError('Wait for saved transcript and select a speaker')
+                                from ..speakers.registry import SpeakerRegistry as Registry
+                                Registry(store).name_speaker(command['session_id'],command['revision'],command['speaker_id'],
+                                    name=command.get('name'),person_id=command.get('person_id'))
+                                await publish({'type':'invalidate','session_id':command['session_id']})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                             if action == 'save_settings':
                                 if recording_busy() or summary_task is not None or auto_tasks or set(command)!={'action','settings'}:
                                     raise ValueError('Wait for all processing before changing providers')
@@ -875,9 +886,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status'}:
+                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
-                                'message':('Settings were not saved. Wait for processing to finish, check the URL/model/key fields and Keychain access.'
+                                'message':('Could not play this audio. Check its availability or recover interrupted audio before trying again.'
+                                    if action in {'audio_info','audio_window'} else
+                                    'Name was not saved. Reopen the current transcript and choose a speaker; no partial person was created.'
+                                    if action=='name_speaker' else
+                                    'Settings were not saved. Wait for processing to finish, check the URL/model/key fields and Keychain access.'
                                     if action=='save_settings' else
                                     'Stop recording before changing detection. The previous detection state remains available in Preferences.'
                                     if action=='set_detection' else

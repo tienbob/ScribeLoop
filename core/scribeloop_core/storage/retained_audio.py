@@ -15,6 +15,8 @@ class RetainedAudio:
     def __init__(self,store,audio):
         self.store,self.audio = store,audio
         self.busy = False
+        from .playback import PlaybackIndex
+        self.playback_index = PlaybackIndex(audio)
 
     def status(self,sid):
         policy = self.store.audio_policy(sid)
@@ -89,4 +91,52 @@ class RetainedAudio:
             wav.setsampwidth(2)
             wav.setframerate(SAMPLE_RATE)
             wav.writeframes((np.clip(pcm,-1,1)*32767).astype('<i2').tobytes())
+        return output.getvalue()
+
+    async def describe(self,sid):
+        if self.busy:
+            raise ValueError('Audio reader unavailable')
+        self.require(sid)
+        tracks=self.status(sid)['tracks']
+        self.busy=True
+        try:
+            durations=await self._worker(self._durations,sid,tracks)
+            return {'duration_ms':max(durations.values(),default=0),'track_durations':durations,
+                    'tracks':tracks,'window_ms':60000}
+        finally:
+            self.busy=False
+
+    def _durations(self,sid,tracks):
+        return {stream:self.playback_index.index(sid,stream)['duration_ms'] for stream in tracks}
+
+    async def seek(self,sid,stream,start_ms):
+        if (self.busy or stream not in {'conversation','mic','loopback'} or
+                type(start_ms) is not int or not 0<=start_ms<10_805_000):
+            raise ValueError('Invalid playback request')
+        self.require(sid)
+        tracks=self.status(sid)['tracks']
+        if stream!='conversation' and stream not in tracks:
+            raise ValueError('Audio track unavailable')
+        selected=tracks if stream=='conversation' else [stream]
+        self.busy=True
+        try:
+            return await self._worker(self._seek,sid,selected,start_ms)
+        finally:
+            self.busy=False
+
+    def _seek(self,sid,tracks,start_ms):
+        windows=[self.playback_index.window(sid,track,start_ms,start_ms+min(60000,10_805_000-start_ms))
+                 for track in tracks]
+        count=max((len(pcm) for pcm in windows),default=0)
+        if not count:
+            raise ValueError('No audio at this position')
+        mixed=np.zeros(count,dtype=np.float32)
+        for pcm in windows:
+            mixed[:len(pcm)]+=pcm/len(windows)
+        output=io.BytesIO()
+        with wave.open(output,'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(SAMPLE_RATE)
+            wav.writeframes((np.clip(mixed,-1,1)*32767).astype('<i2').tobytes())
         return output.getvalue()

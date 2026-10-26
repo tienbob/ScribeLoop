@@ -88,38 +88,78 @@ struct Preferences: View {
 
 struct AudioView: View {
     @ObservedObject var core: DesktopClient
-    @State private var stream = "mic"
-    @State private var minute = 0
     @State private var rerun = false
     var audio: Object { core.detail["audio"] as? Object ?? [:] }
     var available: Bool { audio["available"] as? Bool == true }
     var body: some View {
-        Form {
-            Section("Encrypted original") {
-                Text(available ? "Audio is available locally." : "Audio is unavailable or expired. Transcript and notes are preserved.")
-                Text(audio["archived"] as? Bool == true ? "Archived · kept until you unarchive or delete it." : "Audio expires 30 days after recording unless archived.").font(.callout).foregroundStyle(.secondary)
-                Picker("Track",selection:$stream) { ForEach(audio["tracks"] as? [String] ?? ["mic"],id:\.self) { value in Text(value == "mic" ? "Microphone" : "Meeting audio").tag(value) } }
-                Stepper("Play from minute \(minute)",value:$minute,in:0...179)
-                HStack {
-                    Button(core.playing ? "Stop playback" : "Play 5-minute window") {
-                        if core.playing { core.stopAudio() }
-                        else if let id = core.selectedID { core.send(["action":"play_audio","session_id":id,"stream":stream,"start_ms":minute*60000]) }
-                    }.disabled(!available || core.busy)
+        ScrollView {
+            VStack(alignment:.leading,spacing:28) {
+                Text("Listen to the conversation").font(.system(size:27,design:.serif))
+                if available {
+                    PlaybackBar(playback:core.playback,disabled:core.activeID != nil)
+                    Text(audio["archived"] as? Bool == true ? "Archived · kept until you unarchive or delete it." : "Audio is encrypted on this Mac and expires after 30 days unless archived.").font(.callout).foregroundStyle(.secondary)
                     Button(audio["archived"] as? Bool == true ? "Unarchive audio" : "Archive audio") {
                         if let id = core.selectedID { core.send(["action":"archive_audio","session_id":id,"archived":audio["archived"] as? Bool != true]) }
-                    }.disabled(!available || core.busy)
-                }
-                Text("Playback is decoded in memory and stays on this Mac. Only one five-minute audio window is retained.").font(.caption)
-            }
-            Section("Manual rerun") {
-                Text("Transcribe again uploads the retained audio to Deepgram. The existing transcript stays available until the replacement finishes. Provider charges apply; the original recording preset's budget remains in force.")
+                    }.disabled(core.busy)
+                } else { Label("Audio is unavailable or expired. Transcript and notes are preserved.",systemImage:"waveform.slash").foregroundStyle(.secondary) }
+                Divider()
+                Text("Transcribe again").font(.headline)
+                Text("Upload the saved recording to replace its transcript. Your current transcript remains available until the new pass finishes. Provider charges apply.").foregroundStyle(.secondary)
                 Button("Transcribe again…") { rerun = true }.disabled(!available || core.busy || !core.accepted)
-            }
-        }.formStyle(.grouped).onAppear { stream = (audio["tracks"] as? [String])?.first ?? "mic" }
+            }.padding(28).frame(maxWidth:850,alignment:.leading)
+        }.task(id:available ? core.selectedID : nil) {
+            if available, let id = core.selectedID { core.playback.open(id) } else { core.stopAudio() }
+        }
         .onDisappear { core.stopAudio() }
         .confirmationDialog("Upload this saved audio and transcribe again?",isPresented:$rerun,titleVisibility:.visible) {
-            Button("Upload and transcribe") { if let id = core.selectedID { core.send(["action":"reprocess","session_id":id,"language":core.settings["language"] ?? "auto"]) } }
+            Button("Upload and transcribe") { core.stopAudio(); if let id = core.selectedID { core.send(["action":"reprocess","session_id":id,"language":core.settings["language"] ?? "auto"]) } }
         }
+    }
+}
+
+struct PlaybackBar: View {
+    @ObservedObject var playback: MeetingPlayback
+    var disabled: Bool
+    @State private var scrubbing = false
+    @State private var cursor = 0.0
+    var body: some View {
+        VStack(alignment:.leading,spacing:20) {
+            HStack {
+                Label("Saved recording",systemImage:"waveform").font(.headline)
+                Spacer()
+                if playback.loading { ProgressView().controlSize(.small); Text("Loading audio…").font(.caption).foregroundStyle(.secondary) }
+            }
+            Picker("Listen to",selection:Binding(get:{playback.track},set:{playback.chooseTrack($0)})) {
+                Text("Conversation").tag("conversation")
+                ForEach(playback.tracks,id:\.self) { track in Text(track == "mic" ? "Microphone" : "Meeting audio").tag(track) }
+            }.pickerStyle(.segmented).labelsHidden().disabled(disabled)
+            VStack(spacing:8) {
+                Slider(value:$cursor,in:0...max(0.001,playback.duration),onEditingChanged:{ editing in
+                    scrubbing = editing
+                    if !editing { playback.seek(cursor) }
+                }).disabled(disabled || playback.duration <= 0)
+                    .accessibilityLabel("Recording position")
+                    .accessibilityValue("\(stamp(cursor)) of \(stamp(playback.duration))")
+                HStack { Text(stamp(scrubbing ? cursor : playback.position)); Spacer(); Text(stamp(playback.duration)) }.font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            HStack(spacing:22) {
+                Button { playback.seek(playback.position-15) } label: { Image(systemName:"gobackward.15").font(.title2) }.help("Back 15 seconds")
+                Button { playback.toggle() } label: { Image(systemName:playback.active ? "pause.circle.fill" : "play.circle.fill").font(.system(size:46)) }
+                    .buttonStyle(.plain).accessibilityLabel(playback.active ? "Pause recording playback" : "Play recording")
+                Button { playback.seek(playback.position+15) } label: { Image(systemName:"goforward.15").font(.title2) }.help("Forward 15 seconds")
+                Spacer()
+                Picker("Speed",selection:$playback.rate) {
+                    ForEach([Float(0.5),0.75,1,1.25,1.5,2],id:\.self) { value in Text(String(format:"%g×",value)).tag(value) }
+                }.frame(width:150)
+            }.disabled(disabled || playback.duration <= 0)
+            if let failure = playback.failure { Label(failure,systemImage:"exclamationmark.triangle").foregroundStyle(.orange).font(.callout) }
+            Text("Drag the timeline to any moment. Playback continues through the whole recording; audio stays on this Mac.").font(.caption).foregroundStyle(.secondary)
+        }.padding(24).background(Color(nsColor:.controlBackgroundColor)).clipShape(RoundedRectangle(cornerRadius:16))
+        .onChange(of:playback.position) { _, value in if !scrubbing { cursor = value } }
+    }
+    private func stamp(_ seconds: Double) -> String {
+        let s = max(0,Int(seconds))
+        return s >= 3600 ? String(format:"%d:%02d:%02d",s/3600,s/60%60,s%60) : String(format:"%d:%02d",s/60,s%60)
     }
 }
 
@@ -128,13 +168,14 @@ struct TranscriptRow: View {
     let row: Record
     @State private var name = ""
     @State private var rename = false
+    @State private var naming = false
     var body: some View {
         HStack(alignment:.top,spacing:20) {
             Text(String(format:"%d:%02d",row.int("start_ms")/60000,row.int("start_ms")/1000%60)).font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width:50,alignment:.leading)
             VStack(alignment:.leading,spacing:8) {
                 HStack {
                     Text(row.text("stream") == "mic" ? "MICROPHONE" : "MEETING AUDIO").font(.caption2).tracking(1).foregroundStyle(.secondary)
-                    Text(row.text("speaker_label").isEmpty ? "Speaker unknown" : row.text("speaker_label")).font(.caption).bold()
+                    Text(row.personTitle).font(.caption).bold()
                     if !row.text("display_speaker_id").isEmpty {
                         Menu {
                             Button("Rename speaker…") { name = row.text("speaker_label"); rename = true }
@@ -143,18 +184,15 @@ struct TranscriptRow: View {
                                     Button(target.text("speaker_label")) { correction("merge_speaker",extra:["merge_target":target.text("display_speaker_id")]) }
                                 }
                             }
-                            Menu("Link to person") {
-                                ForEach(core.people) { person in Button(person.text("canonical_name")) {
-                                    core.send(["action":"link_person","session_id":core.selectedID ?? "","revision":core.revision,"speaker_id":row.text("display_speaker_id"),"person_id":person.id])
-                                } }
-                            }
-                            Button("Load people") { core.send(["action":"people_page"]) }
+                            Button("Name this person…") { core.send(["action":"people_page"]); naming = true }
+
                         } label: { Image(systemName:"pencil") }.disabled(core.busy)
                     }
                 }
                 Text(verbatim:row.text("text")).textSelection(.enabled).lineSpacing(5)
             }
-        }.alert("Name this speaker",isPresented:$rename) {
+        }.sheet(isPresented:$naming) { PeopleView(core:core,initialSpeaker:row.text("display_speaker_id")).frame(width:650,height:650) }
+        .alert("Name this speaker",isPresented:$rename) {
             TextField("Display name",text:$name)
             Button("Cancel",role:.cancel) {}
             Button("Save") { correction("rename_speaker",extra:["label":name]) }
@@ -171,23 +209,63 @@ struct TranscriptRow: View {
 
 struct PeopleView: View {
     @ObservedObject var core: DesktopClient
+    var initialSpeaker: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var speaker = ""
+    @State private var existing = ""
     @State private var forget: Record?
+    @State private var pending: String?
+    @State private var saved = false
+    var selected: Record? { core.speakerRoster.first { $0.id == speaker } }
     var body: some View {
-        VStack(alignment:.leading,spacing:20) {
-            HStack { Text("People").font(.title); Spacer(); Button("Done") { dismiss() } }
-            Text("Link names to saved transcript speakers. Voice recognition remains unavailable until its separate calibration is validated.").font(.callout).foregroundStyle(.secondary)
-            HStack { TextField("Person's name",text:$name); Button("Add person") { core.send(["action":"create_person","name":name]); name = "" }.disabled(name.trimmingCharacters(in:.whitespaces).isEmpty || core.busy) }
-            List(core.people) { person in HStack { Text(person.text("canonical_name")); Spacer(); Button("Forget…",role:.destructive) { forget = person }.disabled(core.busy) } }
+        VStack(alignment:.leading,spacing:22) {
+            HStack { Text("Who's speaking?").font(.system(size:29,design:.serif)); Spacer(); Button("Done") { dismiss() } }
+            Text("Choose the person number shown in the transcript, then give them a name.").foregroundStyle(.secondary)
+            if core.speakerRoster.isEmpty { Label("No numbered speakers in this transcript yet.",systemImage:"person.crop.circle.badge.questionmark").foregroundStyle(.secondary) }
+            else {
+                VStack(alignment:.leading,spacing:16) {
+                    Picker("Transcript person",selection:$speaker) {
+                        ForEach(core.speakerRoster) { row in Text(row.personTitle).tag(row.id) }
+                    }
+                    if let row = selected {
+                        Text("\(row.text("stream") == "mic" ? "Microphone" : "Meeting audio") · “\(row.text("sample"))”").font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    Picker("Use",selection:$existing) {
+                        Text("New name").tag("")
+                        ForEach(core.people) { row in Text(row.text("canonical_name")).tag(row.id) }
+                    }
+                    if existing.isEmpty { TextField("Person's name",text:$name,prompt:Text("Type their name, e.g. Alice Nguyen")).textFieldStyle(.roundedBorder) }
+                    Button("Save person name") { save() }.buttonStyle(.borderedProminent)
+                        .disabled(core.busy || pending != nil || speaker.isEmpty || (existing.isEmpty && name.trimmingCharacters(in:.whitespaces).isEmpty))
+                    if saved { Label("Name saved to this transcript.",systemImage:"checkmark.circle.fill").foregroundStyle(.green) }
+                }.padding(20).background(Color(nsColor:.controlBackgroundColor)).clipShape(RoundedRectangle(cornerRadius:12))
+            }
+            Text("Saved people").font(.headline)
+            if core.people.isEmpty { Text("No saved people yet. Add a name above to link it directly to this transcript.").font(.callout).foregroundStyle(.secondary) }
+            else { List(core.people) { person in HStack { Text(person.text("canonical_name")); Spacer(); Button("Forget…",role:.destructive) { forget = person }.disabled(core.busy || pending != nil) } }.frame(minHeight:80,maxHeight:160) }
+            Spacer(minLength:0)
             HStack {
-                Button("First page") { core.send(["action":"people_page"]) }
+                if !core.people.isEmpty { Button("First page") { core.send(["action":"people_page"]) } }
                 if let offset = core.nextPeopleOffset { Button("More people") { core.send(["action":"people_page","offset":offset]) } }
+                Spacer(); Text("Manual names · no voice learning").font(.caption).foregroundStyle(.secondary)
             }
         }.padding(28)
+        .onAppear { speaker = initialSpeaker ?? core.speakerRoster.first?.id ?? ""; core.send(["action":"people_page"]) }
+        .onChange(of:speaker) { _, _ in name = ""; existing = ""; saved = false }
+        .onChange(of:core.requests[pending ?? ""]) { _, status in
+            if status == "accepted" { pending = nil; name = ""; saved = true }
+            else if status == "rejected" || status == "unknown" { pending = nil; saved = false }
+        }
         .alert("Forget this person?",isPresented:Binding(get:{forget != nil},set:{if !$0 { forget = nil }})) {
             Button("Cancel",role:.cancel) { forget = nil }
             Button("Forget",role:.destructive) { if let forget { core.send(["action":"forget_person","person_id":forget.id,"confirmed":true]) }; forget = nil }
         } message: { Text("Removes this person's links and learned data, and invalidates affected notes.") }
+    }
+    private func save() {
+        guard let id = core.selectedID else { return }
+        var command: Object = ["action":"name_speaker","session_id":id,"revision":core.revision,"speaker_id":speaker]
+        if existing.isEmpty { command["name"] = name } else { command["person_id"] = existing }
+        pending = core.send(command); saved = false
     }
 }

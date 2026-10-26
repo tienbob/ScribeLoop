@@ -202,6 +202,35 @@ class SessionStore:
                 row['person_id']=person['person_id']
         return rows
 
+    def speaker_roster(self,session_id,revision):
+        session=self.get(session_id)
+        if not session or type(revision) is not int or revision!=session['transcript_revision']:
+            raise ValueError('Select the current transcript revision')
+        query = """WITH identities AS (
+            SELECT s.id,s.stream,s.local_label,ROW_NUMBER() OVER (ORDER BY s.rowid) AS number
+            FROM session_speakers s WHERE s.session_id=?
+        ), utterances AS (
+            SELECT COALESCE(e.merge_target,g.local_speaker_id) AS identity,g.text,g.start_ms,g.rowid AS position
+            FROM segments g LEFT JOIN revision_speaker_edits e ON e.session_id=g.session_id
+            AND e.revision=g.revision AND e.speaker_id=g.local_speaker_id
+            WHERE g.session_id=? AND g.revision=? AND g.local_speaker_id IS NOT NULL
+        ) SELECT i.id,i.stream,i.number AS person_number,
+            COALESCE(p.canonical_name,e.label,i.local_label) AS name,l.person_id,
+            (SELECT text FROM utterances u WHERE u.identity=i.id ORDER BY start_ms,position LIMIT 1) AS sample,
+            (SELECT MIN(start_ms) FROM utterances u WHERE u.identity=i.id) AS start_ms
+        FROM identities i LEFT JOIN revision_speaker_edits e ON e.session_id=? AND e.revision=? AND e.speaker_id=i.id
+        LEFT JOIN person_links l ON l.session_id=? AND l.revision=? AND l.speaker_id=i.id
+        LEFT JOIN speakers p ON p.id=l.person_id
+        WHERE EXISTS (SELECT 1 FROM utterances u WHERE u.identity=i.id)
+        ORDER BY i.number LIMIT 2001"""
+        rows=[dict(row) for row in self.conn.execute(query,
+            (session_id,session_id,revision,session_id,revision,session_id,revision))]
+        if len(rows)>2000:
+            raise ValueError('Speaker roster exceeds bounds')
+        for row in rows:
+            row['sample']=(row['sample'] or '')[:180]
+        return rows
+
     def correct_speaker(self, session_id, revision, speaker_id, *, label=None, merge_target=None):
         """Manual presentation edits; original speaker identities remain untouched."""
         import unicodedata
