@@ -486,7 +486,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if request.action == 'export_markdown':
                                 from ..llm.grounded import export_markdown
                                 await queue.put({'type':'markdown_export','session_id':request.session_id,
-                                    'filename':f'scribeloop-{request.session_id}-r{request.revision}-{uuid4().hex[:8]}.md',
+                                    'filename':f'scribeloop-{request.session_id}-r{request.revision}-{uuid4().hex}.md',
                                     'content':export_markdown(store.get(request.session_id),rows,
                                         store.revisions(request.session_id),store.grounded_summary(request.session_id))})
                             else:

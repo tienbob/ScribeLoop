@@ -387,6 +387,8 @@ function render() {
   const session = sessions.get(selectedId);
   text('new-session',activeId ? 'View active session' : 'Recording preferences');
   renderSummary(session);
+  const currentRevision=(segments.get(selectedId)||[])[0]?.revision || session?.transcript_revision;
+  text('revision-status',session?.source === 'meeting' && currentRevision ? `Saved transcript · revision ${currentRevision}${session.status === 'processing' ? ' · retained while processing' : ''}` : '');
   $('session-heading').textContent = session ? session.title : 'The conversation';
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));

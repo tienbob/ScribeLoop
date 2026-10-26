@@ -472,3 +472,5 @@ demoEvent({type:'session',session:{...autoSession,status:'completed'}});
 demoEvent({type:'summary_ready',session_id:sid,session:{...autoSession,status:'completed',title:'Garden project launch'},summary:savedDraft});
 assert.equal(demoGet('session-heading').textContent,'Garden project launch');
 console.log('Detected-call permission, decline suppression, end countdown and topic titles passed');
+demoEvent({type:'segment',session_id:sid,segment:{id:'acceptance-segment',revision:3,stream:'loopback',start_ms:0,end_ms:1000,text:'finalization check'}});
+assert.match(demoGet('revision-status').textContent,/revision 3/,'Revision remains visible without a generated summary');

@@ -219,3 +219,26 @@ semantics, clear recording scope, explicit Stop and provider visibility.
 Remaining: controlled real-call idle/mute/end validation across Teams/Slack/browser,
 five-minute cap removal only after long-session design/validation, native desktop
 notifications/packaging and narrow-layout QA. These are not passed by fake events.
+
+## Items 4 and 6 — final export/acceptance pass
+
+Audit and finish export freshness, source attribution, session date/time metadata
+and inert content handling. Verify corrected names and citations in the artifact,
+reject stale/deleted/replaced export requests, and test unique filenames without
+provider requests or arbitrary output paths. Surface the current transcript revision
+in the notebook even when no summary exists. Add acceptance coverage for provider
+schema/size failures and storage rollback where missing. Run full offline Python,
+frontend, lint, import and package checks, then publish the branch for Linux/macOS
+CI. Close Phase 2a development only after those required checks pass. Windows stays
+deferred by prior user instruction. Real-device, live-summary quality and broader
+Phase 2b–2d work remain explicit acceptance/future scope, not implied completion.
+
+### Items 4 and 6 — local acceptance completed
+
+Export now independently checks the transcript fingerprint and includes meeting
+start/end UTC dates. Download names use a full random suffix; the API rejects
+output paths, stale revisions and deleted sessions. The notebook always shows
+the saved revision. Nine acceptance cases extend the existing suite. Local result:
+**369 Python tests passed**, eleven frontend groups, Ruff, 64-module import smoke
+and wheel-content verification passed. Remote Linux/macOS CI is the remaining
+required automated gate. See [Phase 2a closeout](PHASE_2A_CLOSEOUT.md).

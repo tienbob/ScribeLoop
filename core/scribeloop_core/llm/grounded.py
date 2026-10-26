@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import re
+from datetime import datetime, timezone
 
 from .schemas import GroundedSummary
 
@@ -91,7 +92,12 @@ def export_markdown(session, rows, revisions, saved_summary):
         (f"Transcript revision: {revision} · Provider: {escape_md(provenance.get('provider') or 'unknown')} "
         f"· Model: {escape_md(provenance.get('model') or 'unknown')}"),
         'Plaintext export. Speaker names are manual labels, not verified identities.']
-    if saved_summary and not saved_summary['stale']:
+    for label,key in [('Started','started_at'),('Ended','ended_at')]:
+        if session.get(key) is not None:
+            parts.append(f"{label} (UTC): {datetime.fromtimestamp(session[key]/1000,timezone.utc).isoformat()}")
+    matching = (saved_summary and not saved_summary['stale'] and
+        saved_summary.get('revision') == revision and saved_summary.get('input_hash') == transcript_hash(rows))
+    if matching:
         parts += [f"Summary provider: {escape_md(saved_summary['provider'])} · Model: {escape_md(saved_summary['model'])}",
                   summary_markdown(saved_summary['summary'])]
     elif saved_summary:

@@ -1,6 +1,6 @@
 # Documentation index
 
-Start with [Phase 2 progress](PHASE_2_IMPLEMENTATION_PLAN.md) for current work,
+Start with [Phase 2a closeout](PHASE_2A_CLOSEOUT.md), [Phase 2 progress](PHASE_2_IMPLEMENTATION_PLAN.md) for current work,
 [summary setup and export](MEETING_SUMMARIES.md) for text-provider configuration,
 and [Phase 1 closeout](PHASE_1_CLOSEOUT.md) for launch commands and remaining
 capture/release acceptance gates.
