@@ -3,19 +3,20 @@
 Phase 1 macOS development is closed; [release/quality gates](PHASE_1_CLOSEOUT.md)
 remain explicit. This plan starts with Phase 2a finalization from the architecture.
 Phase 2a finalization development is complete on `feature/phase-2-transcript-revisions`.
-See the [closeout and acceptance boundaries](PHASE_2A_CLOSEOUT.md).
+See [Phase 2a closeout](PHASE_2A_CLOSEOUT.md) and the newer
+[Phase 2b implementation and acceptance boundaries](PHASE_2B_CLOSEOUT.md).
 
 ## Preserved decisions
 
-- One selected transcription backend per operation. Deepgram is live; local MOSS
-  Q6_K is after Stop. No automatic cloud fallback, paid retry or extra final ASR pass.
+- Cloud-only Deepgram streaming in the app. No automatic fallback, paid retry
+  or extra final ASR pass. Historical MOSS experiments are outside app routing.
 - Source-scoped anonymous speakers are required. Model IDs are not real names or
   persistent identities across independent generations.
-- Encrypted capture/storage, explicit recording/upload consent and independent
-  Stop remain invariants. Plaintext export is an explicit user action.
-- Local live MOSS remains experimental. Five-second windows are computationally
-  feasible, but IDs reset and boundary/silence handling needs work. Two-second
-  updates with 10–15 seconds of context have not been benchmarked or shipped.
+- Encrypted capture/storage, versioned first-use agreement, per-call Record /
+  Not now and independent Stop remain invariants. Plaintext export is an explicit user action.
+- One-/three-hour profiles use bounded readers and section notes; the default
+  development preset remains five minutes. Cross-meeting person links are manual;
+  biometric suggestions need configured cloud embeddings and calibration evidence.
 - Native packaging/signing, real app/device validation and Linux parity remain
   separate open work; the browser is still the development host.
 

@@ -41,7 +41,8 @@ and native macOS permissions are separate first-use requirements.
    repeated upload checkboxes. Revoke the agreement in recording preferences to
    stop capture/processing and block new requests; saved meetings remain available.
 
-The five-minute development cap remains visible. Without summary configuration,
+The selected recording limit remains visible; five minutes is the development
+preset, with one-/three-hour choices available. Without summary configuration,
 the prompt offers Record conversation and explains that notes are unavailable.
 Native background notifications, accurate provider-specific call-state integration,
 long-call support and physical acceptance remain open. Do not advertise seamless

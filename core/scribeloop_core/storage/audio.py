@@ -248,6 +248,33 @@ class SessionAudioStore:
     def frames(self, session_id, stream):
         return read_audio(self.path(session_id, stream), session_id, stream, self._key(session_id))
 
+    def cursor(self, session_id, stream, *, original=False):
+        from .audio_cursor import AudioCursor
+        path=self.original_path(session_id,stream) if original else self.path(session_id,stream)
+        return AudioCursor(path,session_id,stream,self._key(session_id))
+
+    def scan(self, session_id, stream, *, original=False):
+        with self.cursor(session_id,stream,original=original) as cursor:
+            while True:
+                _,report=cursor.read(max_frames=64)
+                if report['caught_up']:
+                    return report
+
+    def window(self, session_id, stream, start_ms, end_ms):
+        from ..pipeline.cloud_meeting import pcm_window
+        if not 0<=start_ms<end_ms<=10_805_000 or end_ms-start_ms>305000:
+            raise ValueError('Invalid bounded audio window')
+        frames=[]
+        with self.cursor(session_id,stream) as cursor:
+            while True:
+                batch,report=cursor.read(max_frames=8)
+                frames.extend(f for f in batch if f.t_ms+f.pcm.size*1000/SAMPLE_RATE>start_ms and f.t_ms<end_ms)
+                if report['caught_up']:
+                    if not report['complete']:
+                        raise AudioIntegrityError('Incomplete playback audio')
+                    break
+        return pcm_window(frames,start_ms,min(end_ms,int(report['end_ms'])))
+
     def forget_session_key(self, session_id):
         """Irreversible crypto-shred; invoke only from an authorized deletion flow.
 
@@ -287,21 +314,22 @@ class SessionAudioStore:
         streams = tuple(streams)
         if streams not in {('mic',),('mic','loopback')}:
             raise ValueError('Invalid recovery stream selection')
-        snapshots = {stream:self.prefix(session_id, stream, original=True) for stream in ('mic','loopback')}
-        if any(not snapshots[stream][0] for stream in streams):
+        snapshots = {stream:self.scan(session_id, stream, original=True) for stream in ('mic','loopback')}
+        if any(not snapshots[stream]['samples'] for stream in streams):
             raise AudioIntegrityError('No authenticated audio in a selected stream')
-        if streams == ('mic',) and snapshots['loopback'][0]:
+        if streams == ('mic',) and snapshots['loopback']['samples']:
             raise AudioIntegrityError('Unexpected output audio in a microphone-only recording')
         staged = []
         try:
-            for stream, (frames, report) in snapshots.items():
+            for stream, report in snapshots.items():
                 if report['complete']:
                     continue
                 target = self.original_path(session_id, stream).with_name(stream + '.recovered.slpa')
                 temporary = target.with_name('.' + stream + '-' + uuid4().hex + '.slpa')
                 staged.append((temporary, target))
                 with EncryptedAudioWriter(temporary, session_id, stream, self._key(session_id)) as writer:
-                    for frame in frames:
+                    prefix_report={}
+                    for frame in read_audio(self.original_path(session_id,stream),session_id,stream,self._key(session_id),_prefix=prefix_report):
                         writer.write(frame)
             for temporary, target in staged:
                 os.replace(temporary, target)
@@ -313,7 +341,7 @@ class SessionAudioStore:
         finally:
             for temporary, _ in staged:
                 temporary.unlink(missing_ok=True)
-        return {stream:report for stream, (_, report) in snapshots.items()}
+        return snapshots
 
     def delete_session(self, session_id):
         """Retryable key-first removal, only after readers/writers are stopped."""

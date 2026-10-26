@@ -11,7 +11,7 @@ class SessionStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    AGREEMENT_VERSION = '2026-10-26-v2'
+    AGREEMENT_VERSION = '2026-10-26-v3'
 
     def agreement(self):
         row = self.conn.execute('SELECT accepted_at,revoked_at FROM app_agreement WHERE version=?',
@@ -136,7 +136,7 @@ class SessionStore:
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'provider','model','engine','cloud_consent','cloud_budget_usd','language')}
+                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language')}
             session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
@@ -189,6 +189,14 @@ class SessionStore:
             row['display_speaker_id'] = target
             if target:
                 row['speaker_label'] = edits.get(target,{}).get('label') or self._speaker_label(target)
+        people={r['speaker_id']:dict(r) for r in self.conn.execute(
+            'SELECT p.speaker_id,p.person_id,s.canonical_name FROM person_links p JOIN speakers s ON s.id=p.person_id '
+            'WHERE p.session_id=? AND p.revision=?',(session_id,rows[0]['revision']))}
+        for row in rows:
+            person=people.get(row['display_speaker_id'])
+            if person:
+                row['speaker_label']=person['canonical_name']
+                row['person_id']=person['person_id']
         return rows
 
     def correct_speaker(self, session_id, revision, speaker_id, *, label=None, merge_target=None):
@@ -216,6 +224,7 @@ class SessionStore:
                 speaker_id.rsplit(':',1)[0] != merge_target.rsplit(':',1)[0]):
             raise ValueError('Merge requires distinct speakers from the same source and generation')
         with self.conn:
+            self.conn.execute('DELETE FROM person_links WHERE session_id=? AND revision=? AND speaker_id=?',(session_id,revision,speaker_id))
             self.conn.execute('INSERT INTO revision_speaker_edits '
                 '(session_id,revision,speaker_id,label,merge_target) VALUES (?,?,?,?,?) '
                 'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET '
@@ -283,7 +292,7 @@ class SessionStore:
 
     def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model):
         from ..llm.grounded import validate_summary
-        rows,current_hash,_ = self.summary_input(session_id,revision)
+        rows,current_hash,_ = self.summary_input(session_id,revision,build_messages=False)
         if current_hash != input_hash:
             raise ValueError('Transcript changed during summary generation')
         summary = validate_summary(value,rows)
@@ -398,7 +407,7 @@ class SessionStore:
         """Transcript rows and their replay boundary become durable together."""
         from ..pipeline.replay import ReplayChunk
         rows = [ReplayChunk.model_validate(chunk).model_dump() for chunk in chunks]
-        if stream not in {'mic','loopback'} or not 0 <= end_ms <= 305000:
+        if stream not in {'mic','loopback'} or not 0 <= end_ms <= 10_805_000:
             raise ValueError('Invalid confirmed checkpoint')
         self.conn.execute('SAVEPOINT confirmed_window')
         try:
@@ -448,11 +457,18 @@ class SessionStore:
 
     def finish_delete(self, session_id):
         """Delete dependent data in FK order; callers have already retired audio keys."""
+        has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
+        if has_vectors:
+            from .vectors import load_vec_extension
+            load_vec_extension(self.conn)
         with self.conn:
+            if has_vectors:
+                self.conn.execute('DELETE FROM embeddings_chunks_vec WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
-            for table in ('session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            self.conn.execute('DELETE FROM exemplar_provenance WHERE session_speaker_id IN (SELECT id FROM session_speakers WHERE session_id=?)',(session_id,))
+            for table in ('person_link_history','person_links','summary_jobs','session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'

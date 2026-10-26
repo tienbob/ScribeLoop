@@ -7,6 +7,7 @@ const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
 let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
 let modelProfiles = {};
+let people=[], personPending=false, summaryBudgets=new Map(), rollingDrafts=new Map(), transcriptPageStart=null, transcriptPageSession=null;
 let audioStates=new Map(), audioPending=false, audioURL=null, audioSession=null;
 let agreement={accepted:false,version:null};
 let promptCandidate=null, offeredCalls=new Set(), autoCallState=null;
@@ -174,7 +175,7 @@ function renderCallAssistant() {
   const p=profile(), candidate=promptCandidate;
   text('call-permission-heading',`Take notes for ${candidate.name}?`);
   text('call-permission-copy',`${candidate.kind === 'browser' ? 'Capture audio from all tabs in '+candidate.name : 'Capture audio from '+candidate.name}, plus ${$('meeting-microphone').value === 'default' || !$('meeting-microphone').value ? 'your system default microphone' : 'your selected microphone'}.`);
-  text('call-permission-provider',`${p.cloud ? 'Audio will be sent to ' : 'Audio will be transcribed locally with '}${p.provider} · ${p.model}. ${summaryProvider.configured ? `After the call, transcript text and speaker labels will be sent to ${summaryProvider.provider} · ${summaryProvider.model} at ${summaryProvider.endpoint} for notes and a title.` : 'Automatic notes are unavailable until a summary provider is configured. The transcript will still be saved.'}`);
+  text('call-permission-provider',`${$('meeting-duration').value==='10800' ? '3-hour limit · $8 shared audio cap. ' : $('meeting-duration').value==='3600' ? '1-hour limit · $3 shared audio cap. ' : '5-minute development limit · $'+Number(p.duration_profiles?.['300']?.budget_usd || p.budget_usd || .25).toFixed(2)+' shared audio cap. '}${p.cloud ? 'Audio will be sent to ' : 'Audio will be transcribed locally with '}${p.provider} · ${p.model}. ${summaryProvider.configured ? `After the call, transcript text and speaker labels will be sent to ${summaryProvider.provider} · ${summaryProvider.model} at ${summaryProvider.endpoint} for notes and a title.` : 'Automatic notes are unavailable until a summary provider is configured. The transcript will still be saved.'}`);
   text('accept-call',summaryProvider.configured ? 'Record & take notes' : 'Record conversation');
   $('accept-call').disabled=recordPending;
   if(!$('call-permission').open) { $('call-permission').showModal(); $('decline-call').focus(); }
@@ -232,6 +233,10 @@ function renderDiscovery() {
   $('meeting-microphone').disabled = !authenticated || locked;
   if(active?.capture?.language) $('meeting-language').value=active.capture.language;
   $('meeting-language').disabled = !authenticated || locked;
+  $('meeting-duration').disabled=!authenticated || locked;
+  const duration=$('meeting-duration').value || '300';
+  const cap=profile().duration_profiles?.[duration]?.budget_usd || (duration==='10800' ? 8 : duration==='3600' ? 3 : profile().budget_usd || .15);
+  text('duration-budget',`Shared estimated audio cap $${Number(cap).toFixed(2)} across both tracks, resumes and manual reruns. Summary requests have a separate limit of 128 per saved meeting.`);
   text('meeting-language-help',$('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
   $('title').disabled = locked;
   text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
@@ -305,6 +310,13 @@ function speakerLabel(row, turns) {
   return covered >= .8*(row.end_ms-row.start_ms) ? `Meeting audio · ${overlaps[0].label}` : 'Meeting audio · speaker unknown';
 }
 function renderTranscript(session, rows, emptyMessage) {
+  if(transcriptPageSession!==selectedId) { transcriptPageSession=selectedId; transcriptPageStart=null; }
+  const total=rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-1));
+  $('transcript-pagination').hidden=total<=500;
+  $('transcript-previous').disabled=start===0;
+  $('transcript-next').disabled=start+500>=total;
+  text('transcript-window',total>500 ? `Showing ${start+1}–${Math.min(total,start+500)} of ${total} entries. Export includes the full transcript.` : '');
+  rows=rows.slice(start,start+500);
   const signature=JSON.stringify([selectedId,emptyMessage,rows,speakerTurns.get(selectedId)]);
   if (signature === transcriptView) return;
   transcriptView=signature;
@@ -354,8 +366,10 @@ function renderSummary(session) {
   const valid=session?.source === 'meeting' && rows.length && ['completed','failed','interrupted'].includes(session.status);
   $('summary-section').hidden=!valid;
   if(summarySession !== selectedId) { summarySession=selectedId;  text('summary-status',''); }
-  const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY in .env, then restart the app.';
+  const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Set OPENAI_API_KEY in .env for OpenAI gpt-5.4-mini, or configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY for another provider. Restart after changing settings.';
   text('summary-provider',destination);
+  const budget=summaryBudgets.get(selectedId);
+  text('summary-request-usage',budget ? `Summary requests ${budget.requests}/${budget.max_requests} · ${(budget.input_bytes/1000000).toFixed(2)} MB of ${(budget.max_input_bytes/1000000).toFixed(0)} MB request limit.` : 'Each request allows up to 4,000 output tokens; provider charges apply.');
   const blocked=!authenticated || !valid || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
   $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || !agreement.accepted;
   $('download-markdown').disabled=blocked || exportPending;
@@ -370,7 +384,7 @@ function renderSummary(session) {
       const p=document.createElement('p'); p.textContent=item.text || `${item.task} · Owner: ${item.owner || 'not stated'} · Due: ${item.due || 'not stated'}`; $('summary-content').append(p);
       for(const id of item.segment_ids) { const source=rows.find(r=>r.id === id); if(!source) continue;
         const button=document.createElement('button'); button.type='button'; button.className='summary-citation'; button.textContent=`Source ${formatDuration(source.start_ms)} · ${source.speaker_label || 'Speaker unknown'}`;
-        button.onclick=()=>{ const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
+        button.onclick=()=>{ const all=segments.get(selectedId)||[]; const index=all.findIndex(r=>r.id===id); transcriptPageStart=Math.floor(Math.max(0,index)/500)*500; render(); const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
       }
     }
     if(!items.length) { const p=document.createElement('p'); p.textContent='None stated.'; $('summary-content').append(p); }
@@ -388,6 +402,9 @@ function render() {
   const session = sessions.get(selectedId);
   text('new-session',activeId ? 'View active session' : 'Recording preferences');
   renderSummary(session);
+  $('rolling-section').hidden=!rollingDrafts.has(selectedId);
+  text('rolling-copy',rollingDrafts.get(selectedId)?.summary?.overview?.text || '');
+  text('rolling-provider',rollingDrafts.has(selectedId) ? `Draft: ${rollingDrafts.get(selectedId).provider} · ${rollingDrafts.get(selectedId).model}` : '');
   renderAudio(session);
   const currentRevision=(segments.get(selectedId)||[])[0]?.revision || session?.transcript_revision;
   text('revision-status',session?.source === 'meeting' && currentRevision ? `Saved transcript · revision ${currentRevision}${session.status === 'processing' ? ' · retained while processing' : ''}` : '');
@@ -452,6 +469,7 @@ function render() {
     session?.status === 'failed' ? 'This session failed. Check the message above.' :
     liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No speech has been transcribed in this session.';
   renderSpeakers(session,rows);
+  renderPeople();
   renderTranscript(session,rows,rows.length ? '' : emptyMessage);
 
 }
@@ -466,6 +484,16 @@ function connect() {
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
+    if(data.type==='people_changed') {
+      people=data.people; personPending=false;
+      for(const session of data.sessions || []) sessions.set(session.id,session);
+      for(const [sid,rows] of Object.entries(data.segments || {})) { segments.set(sid,rows); rollingDrafts.delete(sid); }
+      for(const [sid,value] of Object.entries(data.notes || {})) notes.set(sid,value);
+      for(const [sid,value] of Object.entries(data.grounded_summaries || {})) { if(value) savedSummaries.set(sid,value); else savedSummaries.delete(sid); }
+      $('forget-person-confirm').checked=false; render(); return;
+    }
+    if(data.type==='rolling_notes') { rollingDrafts.set(data.session_id,{summary:data.summary,provider:data.provider,model:data.model}); summaryBudgets.set(data.session_id,data.budget); render(); return; }
+    if(data.type==='rolling_notes_error') { text('summary-status',data.message); return; }
     if (data.type === 'audio_state') {
       audioStates.set(data.session_id,data.audio); render(); return;
     }
@@ -487,6 +515,9 @@ function connect() {
     if (data.type === 'snapshot') {
       agreement=data.agreement || {accepted:false,version:null};
       audioStates=new Map(Object.entries(data.audio_states || {})); audioPending=false;
+      people=data.people || []; personPending=false;
+      summaryBudgets=new Map(Object.entries(data.summary_budgets || {}));
+      rollingDrafts=new Map(Object.entries(data.rolling_notes || {}).filter(([,v])=>v));
       speakerPending=false; summaryPending=false; exportPending=false;
       summaryProvider=data.summary_provider || {configured:false};
       summaryActiveId=data.summary_active_id || null; savedSummaries=new Map(Object.entries(data.grounded_summaries || {}));
@@ -535,6 +566,7 @@ function connect() {
       summaryPending=false; summaryActiveId=data.session_id;  render();
     } else if (data.type === 'summary_ready' || data.type === 'summary_error') {
       summaryPending=false; summaryActiveId=null;
+      if(data.budget) summaryBudgets.set(data.session_id,data.budget);
       if(data.summary) savedSummaries.set(data.session_id,data.summary);
       if(data.session) sessions.set(data.session.id,data.session);
       if(data.session_id === selectedId) text('summary-status',data.message || 'Summary saved. Review its sources.'); render();
@@ -599,7 +631,7 @@ function connect() {
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
-      audioPending=false;
+      audioPending=false; personPending=false;
       speakerPending=false; summaryPending=false; exportPending=false;
       if (data.context === 'meeting') {
         audioPending=false; recordPending=false; notice(data.message);
@@ -611,7 +643,7 @@ function connect() {
   };
   socket.onclose = event => {
     if (socket !== connection) return;
-    connecting=false; authenticated=false; audioPending=false; stopPending=false; recordPending=false; partials.clear();
+    connecting=false; authenticated=false; personPending=false; audioPending=false; stopPending=false; recordPending=false; partials.clear();
     clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
@@ -636,7 +668,7 @@ $('record-meeting').onclick = () => {
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    model:selectedModel(),consent_confirmed:agreement.accepted,cloud_consent:transcription.cloud && agreement.accepted,language:$('meeting-language').value || 'auto'});
+    model:selectedModel(),duration_s:Number($('meeting-duration').value || 300),consent_confirmed:agreement.accepted,cloud_consent:transcription.cloud && agreement.accepted,language:$('meeting-language').value || 'auto'});
   renderDiscovery();
 };
 
@@ -710,7 +742,7 @@ $('accept-call').onclick=()=>{
   if(!promptCandidate || $('accept-call').disabled) return;
   const candidate=promptCandidate; offeredCalls.add(candidate.id);
   recordPending=send({action:'accept_call',candidate_id:candidate.id,app_id:candidate.app_id,
-    microphone_id:$('meeting-microphone').value || 'default',model:selectedModel(),language:$('meeting-language').value || 'auto',
+    microphone_id:$('meeting-microphone').value || 'default',model:selectedModel(),duration_s:Number($('meeting-duration').value || 300),language:$('meeting-language').value || 'auto',
     consent_confirmed:true,automatic_summary:Boolean(summaryProvider.configured),
     ...(summaryProvider.configured ? {summary_provider:summaryProvider.provider,summary_model:summaryProvider.model,summary_endpoint:summaryProvider.endpoint} : {})});
   closeCallPrompt(); render();
@@ -750,10 +782,38 @@ function renderAudio(session) {
 }
 $('load-audio').onclick=()=>{
   if($('load-audio').disabled) return;
-  audioPending=send({action:'play_audio',session_id:selectedId,stream:$('playback-track').value || 'mic'});
+  audioPending=send({action:'play_audio',session_id:selectedId,stream:$('playback-track').value || 'mic',start_ms:Math.round(Number($('playback-minute').value || 0)*60000)});
   text('audio-playback-status','Authenticating and loading saved audio…'); render();
 };
 $('archive-audio').onclick=()=>{
   if(!$('archive-audio').disabled) send({action:'archive_audio',session_id:selectedId,archived:!audioStates.get(selectedId)?.archived});
 };
 $('playback-track').onchange=()=>clearPlayback();
+
+$('meeting-duration').onchange=renderDiscovery;
+$('transcript-previous').onclick=()=>{const total=(segments.get(selectedId)||[]).length;transcriptPageStart=Math.max(0,(transcriptPageStart===null ? Math.max(0,total-500) : transcriptPageStart)-500);render();};
+$('transcript-next').onclick=()=>{const total=(segments.get(selectedId)||[]).length;const next=(transcriptPageStart || 0)+500;transcriptPageStart=next+500>=total ? null : next;render();};
+function renderPeople() {
+  const previous=$('person-select').value;
+  $('person-select').replaceChildren();
+  const empty=document.createElement('option');empty.value='';empty.textContent='Choose a person';$('person-select').append(empty);
+  for(const person of people) {const option=document.createElement('option');option.value=person.id;option.textContent=person.canonical_name;$('person-select').append(option);}
+  $('person-select').value=people.some(p=>p.id===previous) ? previous : '';
+  const person=people.find(p=>p.id===$('person-select').value), idle=authenticated && !busy() && !personPending && !summaryActiveId && ![...sessions.values()].some(s=>s.status==='processing');
+  $('person-learning').checked=Boolean(person?.learn_enabled);$('person-learning').disabled=!idle || !person;
+  $('create-person').disabled=!idle || !$('person-name').value.trim();
+  $('link-person').disabled=!idle || !person || !$('edit-speaker').value;
+  $('unlink-person').disabled=!idle || !$('edit-speaker').value;
+  $('forget-person').disabled=!idle || !person || !$('forget-person-confirm').checked;
+}
+$('person-select').onchange=()=>{ $('forget-person-confirm').checked=false;renderPeople(); };
+$('person-name').oninput=renderPeople;
+$('forget-person-confirm').onchange=renderPeople;
+$('create-person').onclick=()=>{if(!$('create-person').disabled) personCommand({action:'create_person',name:$('person-name').value.trim()});};
+$('person-learning').onchange=()=>personCommand({action:'set_person_learning',person_id:$('person-select').value,enabled:$('person-learning').checked});
+function linkPerson(person_id) {personCommand({action:'link_person',person_id,session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision,speaker_id:$('edit-speaker').value});}
+$('link-person').onclick=()=>{if(!$('link-person').disabled) linkPerson($('person-select').value);};
+$('unlink-person').onclick=()=>{if(!$('unlink-person').disabled) linkPerson(null);};
+$('forget-person').onclick=()=>{if(!$('forget-person').disabled) personCommand({action:'forget_person',person_id:$('person-select').value,confirmed:true});};
+
+function personCommand(command) { personPending=send(command); renderPeople(); }

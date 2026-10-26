@@ -1,8 +1,19 @@
 # Meeting summaries and Markdown export
 
-Summaries use an **OpenAI-compatible chat/completions endpoint**, independently of
-the audio transcription model. Configure these literal assignments in the ignored
-`.env` file at the project root, or set equivalent environment variables:
+Summaries default to **OpenAI · gpt-5.4-mini**, independently of ASR. Add to the
+ignored project-root `.env`, or set the equivalent environment variable:
+
+```dotenv
+OPENAI_API_KEY=your-local-key
+```
+
+The default endpoint is `https://api.openai.com/v1` and uses Responses, bounded
+output and `store:false`. Model/API details were checked against the official
+[model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
+and [text generation guide](https://developers.openai.com/api/docs/guides/text).
+No startup probe or paid validation request is made.
+
+To override the default, use explicit compatible settings:
 
 ```dotenv
 SUMMARY_BASE_URL=https://your-provider.example/v1
@@ -11,10 +22,10 @@ SUMMARY_API_KEY=your-local-key
 SUMMARY_PROVIDER=Your provider name
 ```
 
-Use your provider's actual API prefix, without `/chat/completions`; the app appends
-that path. `SUMMARY_PROVIDER` is an optional display name. Environment values take
-precedence. Restart the app after changing settings. See [safe template](../.env.example).
-Do not replace your existing ASR credentials when adding these assignments.
+Custom endpoints use Chat Completions. `SUMMARY_PROVIDER` is optional. Environment
+values take precedence; restart after changes. `OPENAI_API_KEY` is used only for the
+exact official OpenAI endpoint, never implicitly for another provider. See the
+[safe template](../.env.example). Do not replace existing ASR credentials.
 
 For a local server, use a loopback URL such as `http://127.0.0.1:8080/v1`. Its key
 may be empty. Remote URLs require HTTPS and a key. URLs with embedded credentials,
@@ -35,12 +46,12 @@ inactivity evidence. A countdown offers **Keep recording** to restart the grace
 period; **Stop** is always available. Unknown/stale activity keeps capture running.
 This is an activity heuristic, not an official Teams/Slack/browser call-state API.
 Media playback can trigger suggestions and mute/helper behavior can confuse end
-inference. Browser capture includes all tabs. The five-minute development cap
-still applies. Detection is macOS-only and requires the native observer; the UI
+inference. Browser capture includes all tabs. Five minutes is the development preset; recording preferences also offer one
+and three hours with displayed shared audio caps. Detection is macOS-only and requires the native observer; the UI
 remains a browser development host, without native background notification UX.
 
-After successful transcription completion, the backend makes at most one automatic
-summary attempt to the destination/model shown in the call prompt, while the
+After successful transcription completion, the backend starts one automatic final-notes workflow, reusing confirmed
+section notes with bounded section/reduction requests to the destination/model shown in the call prompt, while the
 first-use agreement remains accepted. The workflow can
 finish while the browser is disconnected, provided the backend is still running.
 A cited topic title replaces the automatically created app/time placeholder; the
@@ -55,12 +66,13 @@ Open a completed, failed or interrupted saved meeting with confirmed transcript
 text. The **Meeting notes** section shows the configured destination and model.
 After accepting the first-use app agreement, select **Generate summary**. Only selected transcript text, timestamps, segment IDs and
 speaker labels are sent, with the summary schema and instructions; no audio or
-other saved meetings are sent. Each click makes one request, without automatic
-retry/fallback. Choose a text model that can follow the JSON schema in the prompt.
-The generic request uses `messages`, `model`, `temperature` and `max_tokens`.
-Provider-specific reasoning parameters, tools and streaming are not enabled.
+other saved meetings are sent. Each click starts one bounded notes workflow, which may use multiple
+section/reduction requests without automatic retry/fallback. Choose a text model that can follow the JSON schema in the prompt.
+Compatible Chat Completions requests use `messages`, `model`, `temperature` and
+`max_tokens`. OpenAI Responses uses `input`, `model`, `max_output_tokens` and
+`store:false`, omitting legacy sampling fields. No tool execution is enabled.
 
-The request has a 100 KB transcript limit, 4,000 output-token limit, 200 KB HTTP
+Each request has a 100 KB input limit, 4,000 output-token limit, 200 KB HTTP
 response limit and a 70-second overall deadline. Unsupported model parameters,
 quota errors and invalid JSON/citations fail while preserving the previous draft.
 These bounds are not a provider billing guarantee; prices depend on your settings.
@@ -89,3 +101,19 @@ not delete an exported copy. Markdown/HTML metacharacters in content are escaped
 
 Local verification uses mocked endpoints and invented text. No live summary model
 quality, provider-specific compatibility or private meeting has been accepted yet.
+
+## Long conversations and durable section notes
+
+Confirmed long-call sections are summarized incrementally using 15-minute timeline
+buckets, split further by payload size. Closed sections require confirmed progress
+on every selected source. A durable fingerprint/revision/provider/model/endpoint
+cache reuses section notes during final hierarchical reduction, preserving original
+segment citations. Reconnect restores the latest matching section draft. No ASR
+rerun is involved. Editing names/text invalidates affected source fingerprints.
+
+The first-use agreement covers multiple text requests. Per saved meeting, limits
+are 128 requests and 8 MB total request text across actions/retries. Failed or
+ambiguous dispatches are not retried on restart or later automatic completion;
+**Generate summary** explicitly retries failed work and reuses successful sections.
+The UI exposes request usage and the configured destination/model. Real summary
+quality and latency still require real-meeting review.

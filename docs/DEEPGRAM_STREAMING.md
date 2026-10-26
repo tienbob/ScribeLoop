@@ -45,13 +45,15 @@ and output tracks each use a connection to the same provider.
 The existing ignored `.env` contains `DEEPGRAM_API_KEY`; it is read only by the
 backend. Neither snapshots, browser storage nor API error bodies disclose it.
 Restart the existing demo server before using updated code, then open its fresh
-launch URL. Record still requires source selection, participant permission and a
+launch URL. Record still requires source selection, participant permission and
 the first-use app agreement. Each detected call still offers Record / Not now;
 manual reruns are explicit actions covered by that agreement.
 
 A 10-second audio reservation is committed before each block can upload. The
-shared cap across both tracks and saved actions is 80 block reservations and an
-estimated $0.15 per saved meeting. Use a conservative $0.60/audio-hour rate including
+current production shared caps across both tracks and saved actions are
+$0.25 (five-minute development), $3 (one hour) and $8 (three hours), with
+at most 160/1,800/4,800 ten-second reservations respectively. Injected benchmark
+configurations may retain lower caps. Use a conservative $0.60/audio-hour rate including
 diarization; this is an app safety estimate, not actual account billing. Reserved
 but unsent time remains counted after failures. The cap is separate from provider
 credits and limits. Native development capture remains bounded to five minutes.

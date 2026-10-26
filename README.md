@@ -32,8 +32,15 @@ idle and the agreement is accepted. **Archive audio** exempts it from expiry;
 unarchiving an old recording makes it eligible again. Transcripts and notes remain
 after audio expiry. While audio exists, use **Load playback** to listen locally or
 **Rerun transcription & notes** to explicitly upload it for a replacement transcript
-and one summary request. No provider fallback or automatic paid retry is used.
+and a bounded notes workflow. No provider fallback or automatic paid retry is used.
 See [retained audio and manual reruns](docs/RETAINED_AUDIO.md).
+
+Recording preferences offer 5-minute, 1-hour and 3-hour presets with shared audio
+cost caps. Long calls use bounded encrypted readers, playback windows and durable
+section notes. Summaries default to OpenAI `gpt-5.4-mini`: set `OPENAI_API_KEY` in
+`.env`; explicit `SUMMARY_*` overrides remain supported. Named people can be linked
+across meetings manually; voice learning requires a configured cloud extractor and
+consented calibration. See [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md).
 See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.

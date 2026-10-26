@@ -204,9 +204,9 @@ async def test_playback_rejects_audio_beyond_preview_bound(retained):
     path=retained.audio.original_path(sid,'mic')
     path.unlink()
     writer=retained.audio.writer(sid,'mic')
-    writer.write(AudioFrame(np.ones(1600,dtype='float32'),'mic',306000,0))
+    writer.write(AudioFrame(np.ones(1600,dtype='float32'),'mic',10_806_000,0))
     writer.close()
-    with pytest.raises(ValueError,match='bounded'):
+    with pytest.raises(ValueError,match='timeline'):
         await retained.playback(sid,'mic')
 
 

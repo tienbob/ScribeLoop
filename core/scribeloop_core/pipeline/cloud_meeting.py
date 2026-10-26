@@ -67,7 +67,7 @@ class Budget:
 
 def pcm_window(frames,start,end):
     """Absolute recorder timeline with zero-filled gaps; no VAD/model imports."""
-    if not 0 <= start < end <= 305000:
+    if not 0 <= start < end <= 10_805_000 or end-start>305000:
         raise ValueError('Invalid recording window')
     pcm = np.zeros(round((end-start)*16),dtype=np.float32)
     for frame in frames:

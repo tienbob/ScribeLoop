@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import logging
 import queue
+import shutil
 import threading
 import time
 
@@ -89,6 +90,9 @@ class RecordingRunner:
         synced = dict(samples)
         try:
             # Keys and both writers must exist before even constructing a source.
+            reserve=self.max_s*16000*4*len(selected_streams)+50_000_000
+            if shutil.disk_usage(self.audio.root.parent).free<reserve:
+                raise OSError('Insufficient space for selected recording limit')
             self.audio.create_session(session_id)
             created_key = True
             for stream in samples:
@@ -136,9 +140,13 @@ class RecordingRunner:
                     continue
                 if frame.stream not in selected_streams:
                     raise ValueError('Audio arrived outside the selected capture scope')
+                if frame.t_ms+frame.pcm.size/16>(self.max_s+5)*1000:
+                    raise ValueError('Audio exceeds selected recording timeline')
                 writers[frame.stream].write(frame)
                 samples[frame.stream] += frame.pcm.size
                 if checkpoint and samples[frame.stream]-synced[frame.stream] >= 32000:
+                    if shutil.disk_usage(self.audio.root.parent).free<50_000_000:
+                        raise OSError('Recording disk reserve exhausted')
                     writers[frame.stream].checkpoint()
                     synced[frame.stream] = samples[frame.stream]
                     checkpoint(frame.stream,round(writers[frame.stream].last_end))

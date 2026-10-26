@@ -468,3 +468,29 @@ assert.equal(demoGet('reprocess-meeting').disabled,true);
 assert.equal(demoGet('load-audio').disabled,true);
 assert.match(demoGet('audio-retention-status').textContent,/transcript and notes are preserved/);
 console.log('Saved playback, archive and audio expiry controls passed');
+
+// Long-session bounds, page navigation, retained rolling notes and explicit people.
+const personId='e'.repeat(32);
+const longRows=Array.from({length:1200},(_,i)=>({...correctedRows[0],id:`long-${i}`,start_ms:i*1000,end_ms:i*1000+900,text:`Entry ${i}`}));
+demoEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v3'},fixtures:[],
+ sessions:[{id:sid,source:'meeting',status:'completed',title:'Long notes',started_at:1}],active_id:null,
+ recording_available:true,segments:{[sid]:longRows},transcription:{provider:'deepgram',configured:true,cloud:true},
+ people:[{id:personId,canonical_name:'Alex',learn_enabled:0}],rolling_notes:{[sid]:{summary:summaryDraft,provider:'OpenAI',model:'gpt-5.4-mini'}},
+ summary_budgets:{[sid]:{requests:12,max_requests:128,input_bytes:100000,max_input_bytes:8000000}}});
+assert.equal(demoGet('transcript').children.length,500);
+assert.match(demoGet('transcript-window').textContent,/701–1200 of 1200/);
+demoGet('transcript-previous').onclick();
+assert.match(demoGet('transcript-window').textContent,/201–700/);
+assert.equal(demoGet('rolling-section').hidden,false);
+assert.match(demoGet('rolling-provider').textContent,/OpenAI.*gpt-5.4-mini/);
+demoGet('person-select').value=personId;demoGet('person-select').onchange();
+assert.equal(demoGet('person-learning').checked,false);
+demoGet('link-person').onclick();
+assert.equal(JSON.parse(ds.sent.at(-1)).action,'link_person');
+assert.equal(JSON.parse(ds.sent.at(-1)).person_id,personId);
+demoEvent({type:'people_changed',people:[{id:personId,canonical_name:'Alex',learn_enabled:0}],sessions:[],segments:{},notes:{},grounded_summaries:{}});
+demoGet('forget-person-confirm').checked=true;demoGet('forget-person-confirm').onchange();
+demoGet('forget-person').onclick();
+assert.equal(JSON.parse(ds.sent.at(-1)).action,'forget_person');
+assert.equal(JSON.parse(ds.sent.at(-1)).confirmed,true);
+console.log('Long transcript pagination, rolling-note restore and explicit people controls passed');

@@ -45,14 +45,17 @@ silence. No plaintext file is written by the app and no provider is called. Leav
 the meeting or expiry clears the browser audio blob. Browser/OS memory and any
 user-created copies are outside key deletion.
 
-This preview player is bounded to 305 seconds for the current five-minute recording
-limit. It is not the long-meeting playback implementation. Oversized or tampered
-tracks are rejected before any playback bytes are returned.
+Playback windows are bounded to 305 seconds. Select a start minute to hear later
+parts of one-/three-hour recordings. The full encrypted track authenticates with
+bounded memory before releasing that window; tampering or timelines past the
+three-hour-plus-finalization bound are rejected. No whole long-recording WAV is
+materialized. Rendering the transcript is paged at 500 entries; export is complete.
 
 **Rerun transcription & notes** is an explicit cloud upload under the app agreement.
 It reuses retained audio without opening capture, authenticates both tracks before
 outbound ASR, and atomically replaces the transcript only after success. It then
-makes at most one request to the currently displayed configured summary endpoint.
+starts one bounded final-notes workflow at the currently displayed configured
+summary endpoint, reusing completed sections and reducing their notes.
 The old transcript/notes survive failure; successful replacement makes old notes
 stale until valid new notes arrive. Automatic topic titles refresh for records that
 were originally auto-titled; custom manual titles remain unchanged. Without summary
@@ -62,7 +65,8 @@ reading saved text/notes and exporting Markdown still works.
 
 ## Remaining work
 
-The five-minute development cap remains. Long meetings require incremental readers,
-bounded playback delivery and rolling summaries before that cap can be lifted.
-Speaker profiles/calibration/forget-person and physical real-call validation remain
-open Phase 2b/release work.
+The default development preset is five minutes; one-/three-hour presets now use
+incremental streaming/recovery and bounded playback windows. See the
+[Phase 2b acceptance boundaries](PHASE_2B_CLOSEOUT.md) and
+[people/calibration workflow](PEOPLE_AND_CALIBRATION.md). Real-device validation
+and automatic voice-recognition calibration/provider integration remain gated.
