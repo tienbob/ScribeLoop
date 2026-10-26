@@ -31,6 +31,7 @@ def summary_messages(rows):
         'explicitly stated; otherwise use null. Retain uncertainty and disagreements; do not '
         'turn proposals into decisions. Use empty arrays for unsupported sections. Do not infer '
         'dates from relative phrases. Summarize in the conversation language. Return JSON only.'
+        ' Provide title as a concise topic name under 80 characters with supporting segment_ids.'
     )
     return [{'role':'system','content':system},{'role':'user','content':payload}]
 
@@ -43,7 +44,7 @@ def validate_summary(value, rows):
     else:
         summary = GroundedSummary.model_validate(value)
     ids = {row['id'] for row in rows}
-    for item in [summary.overview,*summary.key_points,*summary.decisions,*summary.action_items,
+    for item in [*([summary.title] if summary.title else []),summary.overview,*summary.key_points,*summary.decisions,*summary.action_items,
                  *summary.open_questions,*summary.uncertainties]:
         if not set(item.segment_ids) <= ids:
             raise ValueError('Summary cites unknown segments')

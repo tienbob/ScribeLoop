@@ -10,6 +10,7 @@ capture/release acceptance gates.
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
 - [Phase 2 progress and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
 - [Grounded summaries and Markdown export](MEETING_SUMMARIES.md)
+- [Automatic call notebook UX](AUTO_CALL_UX.md)
 - [Deepgram streaming and speaker labels](DEEPGRAM_STREAMING.md)
 - [Local MOSS Q6_K setup and model selection](LOCAL_MOSS.md)
 - [Browser call test](BROWSER_CALL_TEST.md)

@@ -11,6 +11,7 @@ import contextlib
 import json
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -21,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
 from ..pipeline.languages import LanguageChoice
 from ..pipeline.replay import ReplayRunner
@@ -122,6 +124,21 @@ class SummaryRequest(BaseModel):
     text_consent: bool = False
 
 
+class AcceptCall(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['accept_call']
+    candidate_id: str = Field(min_length=1,max_length=600)
+    app_id: str = Field(min_length=1,max_length=256)
+    microphone_id: str = Field(default='default',min_length=1,max_length=256)
+    model: Literal['deepgram','moss-q6-k'] = 'deepgram'
+    language: LanguageChoice = 'auto'
+    consent_confirmed: bool
+    automatic_summary: bool = False
+    summary_provider: str | None = None
+    summary_model: str | None = None
+    summary_endpoint: str | None = None
+
+
 class DismissCandidate(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['dismiss_candidate']
@@ -138,6 +155,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     token = new_token() if require_launch_key else ''
     # No provider request or health probe occurs during startup.
     summary_task = None
+    auto_monitor = AutoCallMonitor()
+    auto_tasks = set()
+    closing = False
+    automatic_scheduled = set()
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
     for name, path in fixtures.items():
@@ -165,6 +186,63 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 queue.put_nowait({'type': 'reconnect_required'})
             else:
                 queue.put_nowait(event)
+        session = event.get('session',{}) if event.get('type') == 'session' else {}
+        if (not closing and session.get('status') == 'completed' and
+                session.get('capture',{}).get('auto_workflow') and session['id'] not in automatic_scheduled):
+            automatic_scheduled.add(session['id'])
+            task = asyncio.create_task(automatic_notes(session['id']))
+            auto_tasks.add(task)
+            task.add_done_callback(auto_tasks.discard)
+
+    async def automatic_notes(session_id):
+        nonlocal summary_task
+        recorder = app.state.recording
+        if recorder and recorder.task:
+            await recorder.task
+        if closing:
+            return
+        store = app.state.store
+        session = store.get(session_id)
+        grant = session.get('capture',{}).get('auto_summary') if session else None
+        if not grant:
+            return
+        try:
+            if store.conn.execute("SELECT 1 FROM events WHERE session_id=? AND type='automatic_summary_attempt'",
+                                  (session_id,)).fetchone():
+                return
+            if (summary_task is not None or not summary_provider or not summary_provider.public()['configured'] or
+                    grant != {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}):
+                raise ValueError('Summary endpoint changed or busy')
+            _,fingerprint,messages = store.summary_input(session_id,session['transcript_revision'])
+            with store.conn:
+                store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                    (session_id,store._now(),'info','automatic_summary_attempt',json.dumps({**grant,'input_hash':fingerprint})))
+            summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,messages))
+            summary_task.session_id = session_id
+            await publish({'type':'summary_started','session_id':session_id})
+        except (ValueError,*DATABASE_ERRORS):
+            await publish({'type':'summary_error','session_id':session_id,
+                'message':'Recording saved. Automatic notes are unavailable; open Meeting notes to generate them manually.'})
+
+    async def monitor_calls():
+        previous = None
+        while True:
+            await asyncio.sleep(1)
+            recorder = app.state.recording
+            sid = auto_monitor.session_id
+            if not sid or not recorder:
+                continue
+            if recorder.active_id != sid:
+                auto_monitor.clear()
+                continue
+            state,ended = auto_monitor.observe(app.state.discovery.snapshot())
+            current = {'type':'auto_call_status','session_id':sid,**state}
+            if current != previous:
+                previous = current
+                await publish(current)
+            if ended:
+                recorder.stop(sid)
+                auto_monitor.clear()
 
     async def generate_summary(session_id, revision, fingerprint, messages):
         nonlocal summary_task
@@ -173,7 +251,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 value = await summary_provider.generate(messages)
             saved = app.state.store.save_grounded_summary(session_id,revision,fingerprint,value,
                 provider=summary_provider.provider,model=summary_provider.model)
-            await publish({'type':'summary_ready','session_id':session_id,'summary':saved})
+            await publish({'type':'summary_ready','session_id':session_id,'summary':saved,
+                'session':app.state.store.get(session_id)})
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - provider boundary preserves prior data and redacts failures
@@ -185,12 +264,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
     @asynccontextmanager
     async def lifespan(app):
-        from contextlib import closing
+        nonlocal closing
+        from contextlib import closing as close_connection
 
         from ..storage.encrypted import encrypted_database
 
         manager = (encrypted_database(Path(database), key_store) if storage == 'encrypted'
-                   else closing(migrate(connect(database or ':memory:'))))
+                   else close_connection(migrate(connect(database or ':memory:'))))
         # Keychain access occurs during startup, before any recording or UI work.
         with manager as conn:
             store = SessionStore(conn)
@@ -209,10 +289,22 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
                     if recording_factory else ModelRecordingRunner(store,audio,MacOSMeetingAudioSource,publish,cloud_config=cloud_config))
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
+            monitor_task = None
             try:
                 await app.state.discovery.start()
+                closing = False
+                monitor_task = asyncio.create_task(monitor_calls())
                 yield
             finally:
+                closing = True
+                if monitor_task is not None:
+                    monitor_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await monitor_task
+                for task in list(auto_tasks):
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
                 try:
                     if summary_task is not None:
                         summary_task.cancel()
@@ -292,6 +384,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = app.state.store
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                'auto_call':{'session_id':auto_monitor.session_id},
                 'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
                 'summary_active_id':getattr(summary_task,'session_id',None),
                 'grounded_summaries':{s['id']:store.grounded_summary(s['id']) for s in history},
@@ -354,6 +447,38 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             from ..capture.devices import request_microphone_access
                             await asyncio.to_thread(request_microphone_access)
                             await app.state.discovery.refresh()
+                        elif command.get('action') == 'accept_call':
+                            request = AcceptCall.model_validate(command)
+                            recorder = app.state.recording
+                            if not recorder or app.state.runner.active_id or not request.consent_confirmed:
+                                raise ValueError('Recording unavailable or permission missing')
+                            grant = None
+                            if request.automatic_summary:
+                                if not summary_provider or not summary_provider.public()['configured']:
+                                    raise ValueError('Summary not configured')
+                                grant = {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
+                                if grant != {'provider':request.summary_provider,'model':request.summary_model,
+                                             'endpoint':request.summary_endpoint}:
+                                    raise ValueError('Summary settings changed; review permission again')
+                            source = await app.state.discovery.select(scope='application',app_id=request.app_id,
+                                microphone_id=request.microphone_id,candidate_id=request.candidate_id)
+                            from ..meetings.contracts import CaptureSelection
+                            selection = CaptureSelection(scope='application',bundle_ids=(source['app_id'],),
+                                microphone_device_id=request.microphone_id)
+                            if hasattr(recorder,'select_model'):
+                                recorder.select_model(request.model)
+                            title = f"{source['name']} · {datetime.now().astimezone().strftime('%b %d, %H:%M')}"
+                            session = recorder.start(selection,{**source,'engine':request.model,
+                                'language':request.language,'cloud_consent':True,'auto_workflow':True,
+                                'auto_title':True,'auto_summary':grant},title,consent_confirmed=True)
+                            auto_monitor.track(session['id'],request.app_id)
+                            with contextlib.suppress(ValueError):
+                                await app.state.discovery.dismiss(request.candidate_id)
+                            await publish({'type':'session','session':session})
+                        elif command.get('action') == 'keep_recording':
+                            if set(command) != {'action','session_id'}:
+                                raise ValueError('Invalid command')
+                            auto_monitor.keep_recording(command['session_id'])
                         elif command.get('action') in {'summarize','export_markdown'}:
                             request = SummaryRequest.model_validate(command)
                             rows,fingerprint,messages = store.summary_input(request.session_id,request.revision,
@@ -478,7 +603,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
                             'message': ('Summary/export rejected. Select the current saved transcript, check configuration and text-upload consent, and wait for any summary request to finish.'

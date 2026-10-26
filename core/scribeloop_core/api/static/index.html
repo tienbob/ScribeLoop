@@ -5,15 +5,16 @@
 <a class="skip-link" href="#workspace">Skip to conversation</a>
 <header><a class="wordmark" href="/" translate="no">scribe<span>loop</span><i aria-hidden="true"></i></a><span class="edition">THE LISTENING ROOM <span> / </span> LOCAL DEVELOPMENT</span><div class="connection-controls"><span id="connection" role="status">Connecting…</span></div></header>
 <section id="recording-bar" class="recording-bar" aria-label="Active session controls" hidden>
-<div><div class="recording-summary"><strong id="recording-state" role="status">Recording off</strong><span id="elapsed-time" aria-label="Elapsed session time" aria-live="off"></span></div><p id="active-scope"></p></div><div class="bar-actions"><button id="reconnect" type="button" hidden>Reconnect</button><button id="stop" type="button" hidden>Stop recording</button></div>
+<div><div class="recording-summary"><strong id="recording-state" role="status">Recording off</strong><span id="elapsed-time" aria-label="Elapsed session time" aria-live="off"></span></div><p id="active-scope"></p></div><div class="bar-actions"><span id="auto-end-status" role="status"></span><button id="keep-recording" type="button" hidden>Keep recording</button><button id="reconnect" type="button" hidden>Reconnect</button><button id="stop" type="button" hidden>Stop recording</button></div>
 </section>
 <main>
-<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">＋ New meeting</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
+<aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">Recording preferences</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
 <section id="workspace" class="workspace" tabindex="-1">
 <div class="eyebrow">YOUR CONVERSATIONS <span>—</span> KEPT CLOSE</div>
 <div class="heading"><h1>Keep the thread.</h1><div class="page-number" aria-hidden="true">01<span> / NOTEBOOK</span></div></div>
-<p class="intro">Follow the conversation. Keep every voice in view.</p>
-<section class="meeting-panel" aria-labelledby="meeting-heading">
+<p class="intro">Open your call. We’ll ask before taking notes.</p>
+<section class="watch-panel" aria-labelledby="watch-heading"><div class="section-label">CALL ASSISTANT</div><h2 id="watch-heading">Ready for your next conversation.</h2><p id="watch-status" role="status">Connecting to call detection…</p><p class="scope">Nothing is recorded until you agree. Approved calls stop after app audio activity ends, then notes are prepared automatically.</p><p class="scope">5-minute development limit · browser capture includes all tabs.</p></section>
+<details id="manual-recording" class="meeting-panel"><summary>Recording preferences &amp; manual recording</summary>
 <div class="meeting-heading"><div><div class="section-label">NEW MEETING</div><h2 id="meeting-heading">Set up your recording.</h2></div><span class="preview-tag">5-minute test</span></div>
 <div class="capture-features" aria-label="Transcription features"><div><span class="feature-dot" aria-hidden="true"></span><strong id="transcript-feature">Live transcript</strong><small id="transcript-feature-help">Words arrive while you speak</small></div><div><span class="feature-speakers" aria-hidden="true">◌</span><strong>Individual speakers</strong><small>Anonymous labels, kept with the words</small></div></div>
 <label class="language-choice">TRANSCRIPTION MODEL<select id="meeting-model" aria-describedby="model-help"><option value="deepgram">Cloud · Deepgram Nova-3 — live</option><option value="moss-q6-k">Local · MOSS Q6_K — after recording</option></select></label><p id="model-help" class="scope" role="status"></p>
@@ -32,7 +33,7 @@
 <p id="cloud-provider" class="scope" role="status"></p>
 <div class="record-action"><button id="record-meeting" type="button" disabled aria-describedby="record-help scope-warning">Record meeting ↗</button><p id="record-help" role="status">Connect to set up recording.</p></div>
 <p id="recording-unavailable" class="scope">Recordings are encrypted on this machine. Use headphones. Cloud streams live text; Local MOSS transcribes after Stop without uploading audio. Anonymous speaker labels may be mistaken, especially during overlap. This test stops after 5 minutes.</p>
-</section>
+</details>
 <details class="development-tools"><summary>Development audio replay</summary><form id="replay-form"><div class="form-top"><label>REPLAY TITLE<input id="replay-title" name="replay_title" maxlength="160" value="Public sample replay" autocomplete="off" required></label><label>PUBLIC AUDIO SAMPLE<select id="fixture" name="fixture" required><option value="">Connect to load samples</option></select></label></div><div class="form-bottom"><label class="consent"><input type="checkbox" id="consent" name="replay_consent" required> I’m authorized to replay this public test audio.</label><button id="start" type="submit" disabled>Start replay <span aria-hidden="true">↗</span></button></div><p class="scope">Replay an existing public sample without opening the microphone.</p></form></details>
 <div id="notice" role="alert" hidden></div>
 <div class="transcript-header"><div><span id="activity-dot" class="activity-dot" aria-hidden="true"></span><h2 id="session-heading">The conversation</h2><span id="session-status">READY WHEN YOU ARE</span></div></div>
@@ -59,7 +60,7 @@
 <p id="speaker-edit-status" class="scope" role="status" aria-live="polite"></p>
 </div><p id="speaker-status" class="scope">Anonymous labels appear with confirmed speech. They are not verified names.</p></section>
 <div id="transcript-update" class="sr-only" role="status"></div>
-<div id="transcript"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Set up a meeting above. Cloud text appears live; Local MOSS text appears after Stop.</p><span class="empty-rule"></span></div></div>
+<div id="transcript"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Your conversations will appear here after you approve a detected call.</p><span class="empty-rule"></span></div></div>
 <details id="notes-section" class="notes-section" hidden><summary>Transcript excerpts</summary><p class="scope">A text copy of this transcript. These excerpts are not a generated meeting summary.</p><pre id="meeting-notes" class="meeting-notes"></pre></details>
 <section id="summary-section" class="summary-section" aria-labelledby="summary-heading" hidden>
 <div class="roster-heading"><h3 id="summary-heading">Meeting notes</h3><span class="section-label">AI DRAFT · REVIEW SOURCES</span></div>
@@ -73,5 +74,6 @@
 <footer><span>WORDS, KEPT CLOSE.</span><span>Encrypted recording · your choice of local or cloud transcription</span></footer>
 </section>
 </main>
+<dialog id="call-permission" aria-labelledby="call-permission-heading" aria-describedby="call-permission-copy"><div class="section-label">POSSIBLE CALL DETECTED</div><h2 id="call-permission-heading">Take notes for this call?</h2><p id="call-permission-copy"></p><p id="call-permission-provider" class="scope"></p><p class="scope">By agreeing, you confirm permission to record everyone captured. This development build stops at 5 minutes.</p><details><summary>How recording ends &amp; what is saved</summary><p class="scope">A dated record is created when you agree, then renamed from the notes. Call detection uses app audio activity. After 60 seconds of known inactivity, recording stops and notes are prepared. Stop and Keep recording remain available. Uncertain detection keeps recording instead of guessing that the call ended.</p></details><div class="permission-actions"><button id="decline-call" type="button">Not now</button><button id="accept-call" type="button">Record &amp; take notes</button></div></dialog>
 <dialog id="unlock" aria-labelledby="unlock-title" aria-describedby="unlock-description"><form method="dialog" id="unlock-form"><div class="section-label">LOCAL CONNECTION</div><h2 id="unlock-title">Open your notebook.</h2><p id="unlock-description">Use the launch key from your local server terminal. It stays in this page’s memory.</p><label>Launch key<input id="launch-key" name="launch_key" type="password" autocomplete="off" spellcheck="false" required></label><button type="submit">Connect ↗</button></form></dialog>
 </body></html>

@@ -21,6 +21,35 @@ may be empty. Remote URLs require HTTPS and a key. URLs with embedded credential
 queries or fragments are rejected. The backend does not follow redirects, use
 ambient HTTP proxies, probe the provider, download a model or make startup requests.
 
+## Detected-call flow
+
+The default notebook watches app audio activity. A detected episode shows a single
+permission prompt that identifies app/browser scope, microphone, ASR backend and
+configured summary destination/model. **Record & take notes** grants recording,
+selected audio processing and one post-call text summary for this call. No separate
+checkbox or Record step is needed on this path. Declining suppresses the episode.
+One-time microphone/Screen Recording permissions and provider setup still apply.
+
+The backend ends capture after 60 continuous seconds of fresh, complete app
+inactivity evidence. A countdown offers **Keep recording** to restart the grace
+period; **Stop** is always available. Unknown/stale activity keeps capture running.
+This is an activity heuristic, not an official Teams/Slack/browser call-state API.
+Media playback can trigger suggestions and mute/helper behavior can confuse end
+inference. Browser capture includes all tabs. The five-minute development cap
+still applies. Detection is macOS-only and requires the native observer; the UI
+remains a browser development host, without native background notification UX.
+
+After successful transcription completion, the backend makes at most one automatic
+summary attempt to the destination/model approved in the prompt. The workflow can
+finish while the browser is disconnected, provided the backend is still running.
+A cited topic title replaces the automatically created app/time placeholder; the
+original session time and source remain in metadata. Missing summary setup keeps
+the dated transcript; failures keep saved audio/text and expose manual generation.
+There are no automatic paid retries or alternate-provider calls. Quitting the
+backend interrupts processing rather than silently resuming uploads at next launch.
+
+## Manual summary and export
+
 Open a completed, failed or interrupted saved meeting with confirmed transcript
 text. The **Meeting notes** section shows the configured destination and model.
 For a remote endpoint, check the separate text-upload consent, then select

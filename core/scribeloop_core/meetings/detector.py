@@ -46,6 +46,7 @@ class MeetingDetector:
         self._healthy = False
         self._generation = 0
         self.available = False
+        self.activity = {}
 
     @property
     def candidates(self) -> tuple[MeetingCandidate, ...]:
@@ -69,6 +70,7 @@ class MeetingDetector:
         self.available = snapshot.available and snapshot.complete
         self._healthy = self.available
         if not self.available:
+            self.activity = {}
             # Keep existing suggestions but mark discovery unavailable separately.
             # A partial snapshot is not evidence that absent processes are idle.
             return self.candidates
@@ -91,6 +93,8 @@ class MeetingDetector:
             if process.input_running is None or process.output_running is None:
                 unknown.add(app_id)
 
+        self.activity = {app_id:('active' if active.get(app_id) else
+            'unknown' if app_id in unknown else 'inactive') for app_id in self.apps}
         for app_id, app in self.apps.items():
             evidence = active.get(app_id, set())
             episode = self._episodes.get(app_id)

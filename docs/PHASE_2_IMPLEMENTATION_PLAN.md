@@ -127,7 +127,8 @@ Bind each saved summary to revision + corrected-transcript fingerprint, provider
 and model. Stale output must never replace a newer transcript's result. Preserve
 previous summaries on provider/schema/storage failure; edits mark old summaries
 outdated. Summary requests are explicit, bounded and asynchronous, with no retry,
-provider fallback or automatic post-recording call. The user selected an
+provider fallback. The initial manual-only summary flow below is superseded by
+the per-call permission workflow described later. The user selected an
 OpenAI-compatible endpoint configured with SUMMARY_BASE_URL, SUMMARY_MODEL,
 SUMMARY_API_KEY and optional SUMMARY_PROVIDER in .env (environment overrides).
 Remote endpoints require HTTPS and separate consent; loopback HTTP is allowed.
@@ -161,3 +162,60 @@ See [summary configuration and limits](MEETING_SUMMARIES.md). Real provider/mode
 compatibility and summary quality, narrow-layout visual QA and remote CI remain
 open acceptance work. Later Phase 2 retrieval/search and native packaging remain
 outside these increments.
+
+## UX revision — consented automatic call notebook (2026-10-26)
+
+Replace the default setup-first screen with call monitoring and a per-call
+permission prompt. One affirmative action authorizes the displayed app + microphone
+capture, selected ASR processing, and (when configured) one post-call summary to
+the displayed text endpoint. No recording precedes this grant. Remove checkboxes
+from this primary path; retain explicit advanced/manual controls for fallback.
+Create the record at acceptance with app/date/time as its temporary name.
+
+Track app activity in the backend, independently of browser connection. Automatic
+stop requires 60 continuous seconds of fresh, complete, explicitly inactive app
+activity; unknown/stale observations reset the countdown. Show the pending end
+and let the user keep recording or stop immediately. This is an activity heuristic,
+not verified Teams/Slack/browser call state; playback, mute and helper behavior can
+confuse it. Keep the existing five-minute development cap visible. Browser scope
+still includes all tabs, not an identified meeting tab. Declines and completed
+recordings suppress re-prompts for that activity episode.
+
+After successful capture/transcription completion, use the per-call grant for one
+bounded summary attempt (no retries/fallback), even after UI disconnect. Never
+summarize partial/error sessions automatically. Bind consent to endpoint/model;
+store the request before dispatch. Derive a cited short topic title from the same
+summary response, replacing only the automatic placeholder. Preserve time/source
+metadata. Missing configuration or summary failure leaves the recording available
+with a manual recovery path; never pretend notes were generated.
+
+Review findings driving this change: default setup form and duplicate checkboxes
+interrupt the call; activity suggestions currently require a separate source
+confirmation; call ending has no recording lifecycle binding; summary generation
+is manual; titles stay unrelated to content. Keep keyboard/focus and live status
+semantics, clear recording scope, explicit Stop and provider visibility.
+
+### Automatic call UX increment completed 2026-10-26
+
+- Default screen monitors for activity. A short modal contains scope/provider
+  disclosure and one affirmative recording/processing/notes action; detailed
+  setup and manual checkboxes are collapsed under preferences. Keyboard decline
+  and per-episode suppression prevent repeated prompts.
+- Backend AutoCallMonitor tracks only approved sessions. Sixty seconds of fresh,
+  known inactivity ends capture; gaps/unknown evidence reset the countdown. Keep
+  recording restarts it. Discovery heartbeats do not flood browser clients.
+- A per-call endpoint/model grant authorizes one automatic summary after successful
+  transcription completion, independent of browser connection. Persisted attempt
+  markers prevent automatic paid retries. Summary failure leaves manual recovery.
+- Cited summary titles replace automatic app/time names; session timestamps/source
+  stay intact. Saved title updates reach both history and the conversation header.
+- Verification: **360 Python tests passed**, eleven frontend regression groups,
+  Ruff, 64-module import smoke and diff checks passed. Fake activity and ASR/LLM
+  verified consent rejection, endpoint binding, automatic end, disconnect completion
+  and topic naming. Brave accessibility/screenshot review covered the default
+  layout and permission prompt using a preview with native recording disabled.
+  Preview stopped; no real call, device capture or provider upload was performed.
+
+Remaining: controlled real-call idle/mute/end validation across Teams/Slack/browser,
+five-minute cap removal only after long-session design/validation, native desktop
+notifications/packaging and narrow-layout QA. These are not passed by fake events.

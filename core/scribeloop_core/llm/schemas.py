@@ -46,6 +46,7 @@ class CitedAction(BaseModel):
 class GroundedSummary(BaseModel):
     """Cited extension of the summary sections; output remains untrusted data."""
     model_config = ConfigDict(extra='forbid', strict=True)
+    title: CitedText | None = None
     overview: CitedText
     key_points: list[CitedText] = Field(max_length=20)
     decisions: list[CitedText] = Field(max_length=20)

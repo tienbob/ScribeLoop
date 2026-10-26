@@ -440,3 +440,35 @@ assert.equal(demoDownloads.length,1);assert.equal(demoCreated.find(e=>e.download
 demoEvent({type:'transcript_replaced',session_id:sid,segments:correctedRows});
 assert.match(demoGet('summary-status').textContent,/outdated/);assert.equal(demoGet('summary-content').children.length,0);
 console.log('Grounded summary consent, source references, stale drafts and plaintext download passed');
+
+const detected={id:'automatic-episode',app_id:'com.brave.Browser',name:'Brave',kind:'browser',selectable:true,evidence:['input_active','output_active'],confidence:'ambiguous'};
+const automaticDiscovery={status:'available',permission:'authorized',devices_available:true,
+ apps:[{id:'com.brave.Browser',name:'Brave',kind:'browser',running:true}],microphones:[{id:'default',name:'Default microphone'}],candidates:[detected]};
+const asr={configured:true,cloud:true,provider:'deepgram',model:'nova-3',streaming:true};
+demoEvent({type:'snapshot',fixtures:[],sessions:[],active_id:null,replay_available:true,recording_available:true,storage:'encrypted',segments:{},
+ transcription:asr,transcription_models:{deepgram:asr},discovery:automaticDiscovery,
+ summary_provider:{configured:true,cloud:true,provider:'Text provider',model:'notes-model',endpoint:'https://summary.example/v1'}});
+assert.equal(demoGet('call-permission').open,true,'Fresh call activity asks permission');
+assert.match(demoGet('call-permission-copy').textContent,/all tabs in Brave/);
+assert.match(demoGet('call-permission-provider').textContent,/notes-model.*https:\/\/summary.example/);
+assert.equal(ds.sent.filter(x=>JSON.parse(x).action === 'accept_call').length,0,'Detection alone never starts capture');
+demoGet('decline-call').onclick();
+assert.equal(demoGet('call-permission').open,false);
+demoEvent({type:'discovery',discovery:automaticDiscovery});
+assert.equal(demoGet('call-permission').open,false,'Declined episode does not nag');
+demoEvent({type:'discovery',discovery:{...automaticDiscovery,candidates:[{...detected,id:'second-episode'}]}});
+assert.equal(demoGet('call-permission').open,true);
+demoGet('accept-call').onclick();
+const accepted=JSON.parse(ds.sent.at(-1));
+assert.equal(accepted.action,'accept_call');assert.equal(accepted.automatic_summary,true);
+assert.equal(accepted.consent_confirmed,true);assert.equal(accepted.summary_model,'notes-model');
+assert.equal(demoGet('call-permission').open,false);
+const autoSession={id:sid,title:'Brave · date/time',source:'meeting',status:'recording',started_at:Date.now(),capture:{auto_workflow:true,scope:'application',name:'Brave'}};
+demoEvent({type:'session',session:autoSession});
+demoEvent({type:'auto_call_status',session_id:sid,state:'ending',remaining_s:30});
+assert.equal(demoGet('keep-recording').hidden,false);assert.match(demoGet('auto-end-status').textContent,/30s/);
+demoGet('keep-recording').onclick();assert.equal(JSON.parse(ds.sent.at(-1)).action,'keep_recording');
+demoEvent({type:'session',session:{...autoSession,status:'completed'}});
+demoEvent({type:'summary_ready',session_id:sid,session:{...autoSession,status:'completed',title:'Garden project launch'},summary:savedDraft});
+assert.equal(demoGet('session-heading').textContent,'Garden project launch');
+console.log('Detected-call permission, decline suppression, end countdown and topic titles passed');

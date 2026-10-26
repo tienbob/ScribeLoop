@@ -113,6 +113,7 @@ class SessionStore:
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
                 'provider','model','engine','cloud_consent','cloud_budget_usd','language')}
+            session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
             session['transcript_provider'] = json.loads(provider[0])['provider'] if provider else capture.get('provider')
@@ -267,6 +268,13 @@ class SessionStore:
                 '(id,session_id,revision,input_hash,provider,model,summary_json,created_at) '
                 'VALUES (?,?,?,?,?,?,?,?)',
                 (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now()))
+            selection = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='recording_selection' ORDER BY id LIMIT 1",(session_id,)).fetchone()
+            if selection and json.loads(selection[0]).get('auto_title'):
+                title = (summary.get('title') or summary['overview'])['text']
+                title = ' '.join(title.split())[:100]
+                if title:
+                    self.conn.execute('UPDATE sessions SET title=? WHERE id=?',(title,session_id))
         return self.grounded_summary(session_id)
 
     def grounded_summary(self, session_id):
