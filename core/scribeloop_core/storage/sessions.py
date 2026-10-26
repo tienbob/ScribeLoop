@@ -450,6 +450,9 @@ class SessionStore:
                 raise ValueError('Confirmation exceeds durable recording')
             revision = self.conn.execute('SELECT COALESCE(MAX(revision),1) FROM segments WHERE session_id=?',
                                          (session_id,)).fetchone()[0]
+            if rows:
+                from .db import ensure_transcript_revision
+                ensure_transcript_revision(self.conn,session_id,revision,created_at=self._now())
             saved = []
             for chunk in rows:
                 if not chunk['is_final'] or not current['confirmed_ms'] <= chunk['start_ms'] < chunk['end_ms'] <= end_ms:

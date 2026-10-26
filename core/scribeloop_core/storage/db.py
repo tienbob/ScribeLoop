@@ -9,6 +9,7 @@ encryption, §6) is not needed.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -20,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 DDL = """
 CREATE TABLE sessions (
@@ -124,6 +125,19 @@ def configure(conn) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
 
 
+def ensure_transcript_revision(conn,session_id,revision,*,origin='confirmed',created_at=None):
+    """Insert missing provenance without replacing an existing revision's history."""
+    if conn.execute('SELECT 1 FROM transcript_revisions WHERE session_id=? AND revision=?',
+                    (session_id,revision)).fetchone():
+        return
+    metadata=conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='recording_selection' ORDER BY id LIMIT 1",
+                          (session_id,)).fetchone()
+    provenance=json.loads(metadata[0]) if metadata else {}
+    conn.execute('INSERT OR IGNORE INTO transcript_revisions '
+        '(session_id,revision,origin,provider,model,created_at) VALUES (?,?,?,?,?,?)',
+        (session_id,revision,origin,provenance.get('provider'),provenance.get('model'),created_at))
+
+
 def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Apply additive migrations, preserving existing transcript rows."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -210,6 +224,17 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
         INSERT OR IGNORE INTO summary_usage(session_id,requests,input_bytes)
           SELECT session_id,SUM(attempts),SUM(attempts*input_bytes) FROM summary_jobs GROUP BY session_id;
         """)
+    if version < 11:
+        # Streaming commits before v11 could omit provenance. Repair metadata only;
+        # preserve transcript/audio, revision identities and existing provenance.
+        with conn:
+            missing=conn.execute('SELECT DISTINCT g.session_id,g.revision,s.source,s.started_at '
+                'FROM segments g JOIN sessions s ON s.id=g.session_id '
+                'LEFT JOIN transcript_revisions r ON r.session_id=g.session_id AND r.revision=g.revision '
+                'WHERE r.session_id IS NULL').fetchall()
+            for row in missing:
+                ensure_transcript_revision(conn,row[0],row[1],
+                    origin='confirmed' if row[2]=='meeting' else 'legacy',created_at=row[3])
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
