@@ -231,7 +231,7 @@ struct RecordingReview: View {
             let duration = core.settings["duration_s"] as? Int ?? 3600
             Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Language: \(text(core.settings["language"]))").font(.callout)
             Text(candidate == nil ? "Press Stop to end a manual recording. Notes follow automatically." : "Recording stops after 60 seconds of known call inactivity. Unknown activity keeps recording; Stop always remains available.").font(.caption).foregroundStyle(.secondary)
-            if core.transcription["configured"] as? Bool != true { Label("Set your Deepgram API key in Preferences first.",systemImage:"key").foregroundStyle(.orange) }
+            if core.transcription["configured"] as? Bool != true { Label("App transcription is unavailable. Contact your administrator.",systemImage:"key").foregroundStyle(.orange) }
             HStack {
                 Button("Not now") { if let candidate { core.send(["action":"dismiss_candidate","candidate_id":candidate.id]) }; closeReview() }.keyboardShortcut(.cancelAction)
                 Spacer()

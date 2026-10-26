@@ -10,13 +10,32 @@ ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / 'build/macos'
 APP = ROOT / 'dist/macos/ScribeLoop.app'
 ENV = dict(os.environ, DEVELOPER_DIR='/Applications/Xcode.app/Contents/Developer')
+ENV.pop('SCRIBELOOP_BUILD_DEEPGRAM_API_KEY', None)
 
 
 def run(*args):
     subprocess.run([str(arg) for arg in args], cwd=ROOT, env=ENV, check=True)
 
 
+def transcription_key(environ=None, env_file=None):
+    environ = os.environ if environ is None else environ
+    key = environ.get('SCRIBELOOP_BUILD_DEEPGRAM_API_KEY', '').strip()
+    if not key:
+        path = ROOT/'.env' if env_file is None else Path(env_file)
+        if path.is_file():
+            for line in path.read_text(encoding='utf-8').splitlines():
+                name, separator, value = line.strip().removeprefix('export ').partition('=')
+                if separator and name.strip() == 'DEEPGRAM_API_KEY':
+                    key = value.strip()
+                    if len(key)>=2 and key[0]==key[-1] and key[0] in {'"', "'"}:
+                        key=key[1:-1]
+    if not 16<=len(key)<=512 or not key.isascii() or any(c.isspace() for c in key):
+        raise SystemExit('Set SCRIBELOOP_BUILD_DEEPGRAM_API_KEY or DEEPGRAM_API_KEY in the ignored build .env before packaging.')
+    return key
+
+
 def main():
+    key = transcription_key()
     python = BUILD / 'venv/bin/python'
     if not python.exists():
         raise SystemExit('Create the separate packaging venv using requirements-m0.txt first.')
@@ -38,6 +57,11 @@ def main():
     (contents / 'MacOS').mkdir(parents=True)
     (contents / 'Helpers').mkdir()
     (contents / 'Resources').mkdir()
+    config = contents / 'Resources/transcription.json'
+    with config.open('x', encoding='utf-8') as stream:
+        os.chmod(config, 0o600)
+        json.dump({'provider': 'deepgram', 'api_key': key}, stream)
+    key = None
     run('xcrun', 'swiftc', '-parse-as-library', '-swift-version', '5', '-O',
         '-module-cache-path', BUILD / 'swift-cache',
         ROOT / 'shell/macos/Desktop/DesktopClient.swift',

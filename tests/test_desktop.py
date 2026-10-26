@@ -41,9 +41,9 @@ def test_settings_do_not_read_env_and_never_echo_secrets(monkeypatch):
     monkeypatch.setenv('DEEPGRAM_API_KEY','ignored-environment-key')
     monkeypatch.setenv('OPENAI_API_KEY','ignored-environment-key')
     settings=DesktopSettings(Vault())
-    assert not settings.value.cloud().api_key and not settings.value.summary().configured
-    public=settings.save({'deepgram_key':'d'*32,'summary_key':'s'*32,'language':'vi'})
-    assert public['deepgram_configured'] and public['summary_configured']
+    assert not settings.cloud().api_key and not settings.value.summary().configured
+    public=settings.save({'summary_key':'s'*32,'language':'vi'})
+    assert public['summary_configured'] and 'deepgram_key' not in public
     assert 'd'*32 not in str(public) and 's'*32 not in str(public)
     settings.save({'summary_model':'example-model'})
     assert settings.value.summary_key=='s'*32
@@ -167,8 +167,8 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
     from test_cloud_meeting import ControlledSource
     from test_deepgram_meeting import Socket
 
-    settings=DesktopSettings(Vault())
-    settings.save({'deepgram_key':'synthetic-key-123456789','language':'en','duration_s':300})
+    settings=DesktopSettings(Vault(),transcription_key='synthetic-key-123456789')
+    settings.save({'language':'en','duration_s':300})
     contract=DesktopContract(settings,Path('/fake/helper'))
     class MicrophoneSource(ControlledSource):
         def frames(self):
@@ -256,3 +256,32 @@ def test_provider_presets_select_endpoints_and_do_not_reuse_keys():
     assert settings.value.summary_endpoint==SUMMARY_PRESETS['OpenAI']
     assert settings.value.summary_key=='new-openai-secret'
     assert settings.value.public()['summary_presets']==SUMMARY_PRESETS
+
+
+def test_transcription_is_operator_managed_and_legacy_user_key_is_ignored(monkeypatch):
+    import json
+    monkeypatch.setenv('DEEPGRAM_API_KEY','environment-must-not-win')
+    vault=Vault()
+    vault.value=json.dumps({'deepgram_key':'legacy-must-not-win','summary_key':'summary-secret'})
+    settings=DesktopSettings(vault,transcription_key='operator-build-key')
+    assert settings.cloud().api_key=='operator-build-key'
+    assert settings.value.summary_key=='summary-secret'
+    with pytest.raises(ValueError):
+        settings.save({'deepgram_key':'user-cannot-change-this'})
+    settings.save({'language':'vi'})
+    assert 'deepgram_key' not in vault.value
+    assert 'operator-build-key' not in vault.value
+    assert 'operator-build-key' not in str(settings.value.public())
+    assert settings.cloud().api_key=='operator-build-key'
+
+
+def test_build_credential_is_literal_validated_and_explicit(tmp_path):
+    import runpy
+    namespace=runpy.run_path(str(Path(__file__).parents[1]/'packaging/macos/build_desktop.py'))
+    read=namespace['transcription_key']
+    config=tmp_path/'build.env'
+    config.write_text('DEEPGRAM_API_KEY="literal-build-key-12345"\nOPENAI_API_KEY=ignored\n')
+    assert read({},config)=='literal-build-key-12345'
+    assert read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'explicit-build-key-12345'},config)=='explicit-build-key-12345'
+    with pytest.raises(SystemExit):
+        read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'invalid key'},config)

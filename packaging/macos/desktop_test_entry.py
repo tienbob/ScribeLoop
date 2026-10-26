@@ -51,7 +51,7 @@ def fixture_app(request, helpers):
         store.save_grounded_summary(sid,1,transcript_hash(rows),value,provider='Synthetic preview',model='fixture')
         def source(*_args,**_kwargs):
             raise ValueError('Preview never opens capture')
-        return CloudRecordingRouter(store,audio,source,publish,cloud_config=settings.value.cloud())
+        return CloudRecordingRouter(store,audio,source,publish,cloud_config=settings.cloud())
     return create_app(database=Path(request['database']),storage='encrypted',key_store=FixtureKeys(),
         discovery_factory=lambda publish:DiscoveryService(publish),recording_factory=recording,
         desktop=contract,launch_token=request['token'],summary_provider=settings.value.summary())[0]

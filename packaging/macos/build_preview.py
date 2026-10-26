@@ -20,6 +20,7 @@ def main():
     if app.exists():
         shutil.rmtree(app)
     shutil.copytree(build.APP,app,symlinks=True)
+    (app/'Contents/Resources/transcription.json').unlink(missing_ok=True)
     core=app/'Contents/Resources/Core'
     shutil.rmtree(core)
     shutil.copytree(build.BUILD/'frozen/scribeloop-preview-core',core,symlinks=True)

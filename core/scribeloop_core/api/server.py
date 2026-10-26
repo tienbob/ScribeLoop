@@ -573,7 +573,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 desktop.settings.save(command['settings'])
                                 summary_provider = desktop.settings.value.summary()
                                 if app.state.recording:
-                                    app.state.recording.base_config = desktop.settings.value.cloud()
+                                    app.state.recording.base_config = desktop.settings.cloud()
                                     app.state.recording.cloud = app.state.recording.base_config
                                 await publish({'type':'settings','settings':desktop.settings.value.public(),
                                     'summary_provider':summary_provider.public(),

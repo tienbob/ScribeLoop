@@ -13,6 +13,9 @@ def main():
     assert info['CFBundleIdentifier']=='ai.scribeloop.desktop'
     assert info['NSMicrophoneUsageDescription']
     assert not info['NSAppTransportSecurity'].get('NSAllowsArbitraryLoads',False)
+    config=json.loads((APP/'Contents/Resources/transcription.json').read_text())
+    assert config['provider']=='deepgram' and 16<=len(config['api_key'])<=512
+    del config
     native=0
     total=0
     for path in APP.rglob('*'):
@@ -40,7 +43,7 @@ def main():
                     raise RuntimeError(f'External runtime path: {path.name}')
     subprocess.run(['codesign','--verify','--deep','--strict',str(APP)],check=True)
     report={'ok':True,'native_binaries':native,'bundle_bytes':total,'external_dependencies':0,
-            'credentials_or_recordings_bundled':False,'release_signed':False,
+            'recordings_bundled':False, 'operator_transcription_credential_bundled':True,'release_signed':False,
             'minimum_os':info['LSMinimumSystemVersion']}
     (ROOT/'build/macos/desktop-audit.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report))

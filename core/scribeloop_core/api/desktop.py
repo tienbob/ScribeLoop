@@ -41,7 +41,14 @@ def make_app(request, helpers, *, settings=None, key_store=None, discovery_facto
     from ..meetings.macos import MacOSActivityObserver, installed_apps
     from ..meetings.service import DiscoveryService
 
-    settings = settings if settings is not None else DesktopSettings()
+    if settings is None:
+        config = helpers.parent/'Resources/transcription.json'
+        value = json.loads(config.read_text(encoding='utf-8'))
+        key = value.get('api_key') if isinstance(value,dict) else None
+        if (not isinstance(key,str) or not 16<=len(key)<=512 or not key.isascii()
+                or any(c.isspace() for c in key)):
+            raise ValueError('Operator transcription configuration is missing')
+        settings = DesktopSettings(transcription_key=key)
     contract = DesktopContract(settings, helpers/'scribeloop-meeting')
     def discovery(publish):
         return DiscoveryService(publish,
@@ -51,7 +58,7 @@ def make_app(request, helpers, *, settings=None, key_store=None, discovery_facto
         discovery_factory=discovery_factory or discovery, recording_factory=recording_factory,
         source_factory=functools.partial(MacOSMeetingAudioSource,helper_path=contract.helper),
         permission_request=functools.partial(request_microphone_access,contract.helper),
-        cloud_config=settings.value.cloud(), summary_provider=settings.value.summary(),
+        cloud_config=settings.cloud(), summary_provider=settings.value.summary(),
         launch_token=request['token'], desktop=contract)[0]
 
 

@@ -11,10 +11,10 @@ Building still requires Xcode and the separate packaging environment.
 open 'dist/macos/ScribeLoop.app'
 ```
 
-1. Open Preferences using the gear button. Add your Deepgram key and summary
-   provider key. OpenAI / `gpt-5.4-mini` is the default; compatible providers can
-   use their own base URL and model. Keys are saved in macOS Keychain. The app
-   deliberately does not import your development `.env` automatically.
+1. Open Preferences using the gear button. Configure your summary provider and
+   its key. OpenAI / `gpt-5.4-mini` is the default. Summary keys are saved in macOS
+   Keychain. Transcription is managed by the app operator at build time; users
+   cannot configure its provider/key. Runtime never imports development `.env`.
 2. Choose Auto or a fixed conversation language and a 5-minute, 1-hour or 3-hour
    recording preset. Vietnamese requires its fixed choice. Saving settings makes
    no provider request; changes require idle capture/text processing.
@@ -61,7 +61,8 @@ keys are not stored there. Database schema downgrade is not supported.
 ## Build and validate
 
 Prepare the isolated environment as described in [M0 build instructions](README.md),
-then run:
+then supply `SCRIBELOOP_BUILD_DEEPGRAM_API_KEY` in the build environment, or set
+`DEEPGRAM_API_KEY` in the ignored checkout `.env`, and run:
 
 ```sh
 build/macos/venv/bin/python packaging/macos/build_desktop.py
@@ -119,3 +120,20 @@ optional. Deepgram transcription remains unchanged.
 Endpoint references: [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai/),
 [Ollama API documentation](https://github.com/ollama/ollama/blob/main/docs/api/introduction.mdx),
 [LM Studio compatibility](https://lmstudio.ai/docs/developer/openai-compat).
+
+
+### Operator-managed transcription
+
+The build requires a valid operator Deepgram credential and embeds only that
+credential in `Contents/Resources/transcription.json` before ad-hoc signing.
+Missing/invalid configuration fails the build; it never ships a user-key fallback.
+The runtime reads this bundle configuration, not environment variables or legacy
+user Deepgram keys. User settings reject transcription credential changes; language
+and duration remain user choices. The synthetic preview removes the credential
+resource and injects empty test configuration. Audit output explicitly reports the
+operator credential's presence without printing it.
+
+A bundled credential can be extracted from a distributed desktop app. This locks
+normal app configuration; it is not a secrecy boundary. Shared service credentials
+should move behind an operator backend before public distribution. Do not commit or
+publish generated app artifacts containing this development key.

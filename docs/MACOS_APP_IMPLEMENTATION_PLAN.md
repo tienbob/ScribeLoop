@@ -409,3 +409,23 @@ Provider-picker validation: 9 desktop tests pass, production/preview native buil
 succeed, and native inspection confirms OpenAI/Ollama hide the URL while Custom
 exposes it. Provider endpoint enforcement, local no-key configuration and clearing
 credentials across destinations are covered without provider requests.
+
+### Operator-managed transcription — 2026-10-26
+
+Remove the Deepgram credential section from native preferences and reject user
+transcription-key changes at the desktop API. Desktop transcription uses only an
+operator credential supplied during packaging (`SCRIBELOOP_BUILD_DEEPGRAM_API_KEY`,
+or the build checkout's ignored `.env` DEEPGRAM_API_KEY). Runtime environment and
+legacy user Keychain Deepgram values cannot override it. Keep user summary-provider
+settings and recording language/duration choices. The preview bundle strips the
+operator credential and uses an empty injected configuration. No provider calls
+are made by validation. Bundling enforces app configuration, not key secrecy;
+a distribution backend is needed to protect a shared service credential.
+
+Operator-transcription validation: 423 Python tests and native preview smoke pass.
+Production bundle audit passes and reports the operator credential's presence;
+the preview explicitly has no transcription credential resource. Native screenshot
+inspection confirms Preferences starts with summary settings and contains no
+Deepgram credential editor. Tests prove user patches are rejected, legacy Keychain
+keys/runtime environment cannot override the operator key, and summary edits leave
+transcription configuration unchanged. No provider request was made.

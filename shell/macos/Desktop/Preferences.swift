@@ -5,14 +5,12 @@ import ServiceManagement
 struct Preferences: View {
     @ObservedObject var core: DesktopClient
     @Environment(\.dismiss) private var dismiss
-    @State private var deepgram = ""
     @State private var summaryKey = ""
     @State private var endpoint = "https://api.openai.com/v1"
     @State private var model = "gpt-5.4-mini"
     @State private var provider = "OpenAI"
     @State private var language = "auto"
     @State private var duration = 3600
-    @State private var clearDeepgram = false
     @State private var clearSummary = false
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var loginStatus = ""
@@ -22,11 +20,6 @@ struct Preferences: View {
         VStack(alignment:.leading,spacing:12) {
             HStack { Text("Preferences").font(.system(size:28,design:.serif)); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }.padding(.horizontal,24).padding(.top,20)
             Form {
-                Section("Cloud transcription · Deepgram Nova-3") {
-                    Text(core.settings["deepgram_configured"] as? Bool == true ? "API key saved in Keychain. Leave the field blank to keep it." : "Add your Deepgram API key. Saving makes no provider request.").font(.caption)
-                    SecureField("New API key",text:$deepgram).textContentType(.password)
-                    Toggle("Remove saved transcription key",isOn:$clearDeepgram)
-                }
                 Section("Summary provider · OpenAI compatible") {
                     Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
                         Text("OpenAI · Cloud").tag("OpenAI")
@@ -77,7 +70,7 @@ struct Preferences: View {
             if endpoint.isEmpty { endpoint = "https://api.openai.com/v1" }; if model.isEmpty { model = "gpt-5.4-mini" }; if provider.isEmpty { provider = "OpenAI" }
             if presets[provider]?.trimmingCharacters(in:CharacterSet(charactersIn:"/")) != endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) { provider = "Custom" }
             language = text(core.settings["language"]); if language.isEmpty { language = "auto" }; duration = core.settings["duration_s"] as? Int ?? 3600
-        }.onDisappear { deepgram = ""; summaryKey = "" }
+        }.onDisappear { summaryKey = "" }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
@@ -88,9 +81,8 @@ struct Preferences: View {
     }
     private func save() {
         var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"language":language,"duration_s":duration]
-        if !deepgram.isEmpty || clearDeepgram { value["deepgram_key"] = clearDeepgram ? "" : deepgram }
         if !summaryKey.isEmpty || clearSummary { value["summary_key"] = clearSummary ? "" : summaryKey }
-        core.send(["action":"save_settings","settings":value]); deepgram = ""; summaryKey = ""; clearDeepgram = false; clearSummary = false
+        core.send(["action":"save_settings","settings":value]); summaryKey = ""; clearSummary = false
     }
 }
 
