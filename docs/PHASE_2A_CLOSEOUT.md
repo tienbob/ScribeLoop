@@ -1,7 +1,7 @@
 # Phase 2a — finalization development closeout
 
-Updated 2026-10-26. The agreed six-item finalization scope is implemented and
-locally verified. Required Linux/macOS CI must pass on the review PR before exit.
+Updated 2026-10-26. **Development complete for the agreed six-item finalization scope.** Local
+acceptance and both required Linux/macOS CI jobs passed on [PR #4](https://github.com/tienbob/ScribeLoop/pull/4).
 This is development completion, not live quality, release or full Phase 2b–2d sign-off.
 
 ## Delivered scope
@@ -13,7 +13,7 @@ This is development completion, not live quality, release or full Phase 2b–2d 
 | 3. Grounded summaries | Configurable OpenAI-compatible text endpoint; strict cited draft sections, bounded requests, no retries/fallback | Prompt/data separation, citation membership, invalid JSON/schema, response cap, consent, freshness and error-redaction tests |
 | 4. Markdown export | Corrected transcript and matching summary, UTC meeting dates, relative timestamps, source attribution and citation anchors | UTF-8/injection-shaped text, corrected names, stable anchors, stale fingerprint, unique filenames and rejected arbitrary path/stale/deleted selection tests |
 | 5. UI/recovery | Current revision, live/processing/error state, corrected roster, cited notes, explicit plaintext download, reconnect restoration | Eleven frontend regression groups and API lifecycle tests; desktop preview checks described in the implementation plan |
-| 6. Acceptance | Offline regression suite and package verification; required CI matrix is Linux/macOS | 369 Python tests passed locally; Ruff, 64-module lightweight import smoke, frontend checks and wheel inspection passed |
+| 6. Acceptance | Offline regression suite and package verification; required CI matrix is Linux/macOS | 369 Python tests passed locally; core/dev/security-only environment: 349 passed, nine optional integration skips. Ruff, 64-module import smoke, frontend checks, wheel inspection and Linux/macOS CI passed |
 
 The default UX watches app metadata, asks one per-call permission, creates a dated
 record, ends on sustained app inactivity, then attempts one approved summary and
@@ -46,3 +46,12 @@ encryption; browser save settings apply. App deletion cannot erase exported copi
 
 See [implementation history and current decisions](PHASE_2_IMPLEMENTATION_PLAN.md),
 [automatic-call UX](AUTO_CALL_UX.md) and [Phase 1 acceptance gates](PHASE_1_CLOSEOUT.md).
+
+## CI evidence
+
+Implementation commit `37766f6d7669abafe2e208e9340de6d4cbab021e` passed both jobs in
+[CI run 17](https://github.com/tienbob/ScribeLoop/actions/runs/40262325346). The matrix
+checks Python tests, Ruff, frontend regressions and application imports; macOS also
+builds the native meeting helper and verifies generated signals. The latest commit
+checks remain visible on [the review PR](https://github.com/tienbob/ScribeLoop/pull/4).
+No CI evidence here represents a physical recording or a live provider evaluation.

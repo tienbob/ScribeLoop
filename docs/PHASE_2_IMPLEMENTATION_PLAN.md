@@ -2,7 +2,8 @@
 
 Phase 1 macOS development is closed; [release/quality gates](PHASE_1_CLOSEOUT.md)
 remain explicit. This plan starts with Phase 2a finalization from the architecture.
-Phase 2 implementation begins on `feature/phase-2-transcript-revisions`.
+Phase 2a finalization development is complete on `feature/phase-2-transcript-revisions`.
+See the [closeout and acceptance boundaries](PHASE_2A_CLOSEOUT.md).
 
 ## Preserved decisions
 
@@ -240,5 +241,8 @@ start/end UTC dates. Download names use a full random suffix; the API rejects
 output paths, stale revisions and deleted sessions. The notebook always shows
 the saved revision. Nine acceptance cases extend the existing suite. Local result:
 **369 Python tests passed**, eleven frontend groups, Ruff, 64-module import smoke
-and wheel-content verification passed. Remote Linux/macOS CI is the remaining
-required automated gate. See [Phase 2a closeout](PHASE_2A_CLOSEOUT.md).
+and wheel-content verification passed. Both required Linux/macOS CI jobs passed in
+[run 17](https://github.com/tienbob/ScribeLoop/actions/runs/40262325346) on [PR #4](https://github.com/tienbob/ScribeLoop/pull/4).
+Items 4 and 6, and the agreed finalization development scope, are complete. See
+[Phase 2a closeout](PHASE_2A_CLOSEOUT.md) for remaining real-world acceptance and
+broader roadmap work.
