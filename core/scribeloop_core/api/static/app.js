@@ -7,6 +7,7 @@ const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
 let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
 let modelProfiles = {};
+let audioStates=new Map(), audioPending=false, audioURL=null, audioSession=null;
 let agreement={accepted:false,version:null};
 let promptCandidate=null, offeredCalls=new Set(), autoCallState=null;
 let summaryProvider={configured:false}, savedSummaries=new Map(), summaryActiveId=null, summaryPending=false, exportPending=false, summarySession=null;
@@ -24,7 +25,7 @@ let transcriptView = '', rosterView = '', speakerPending = false;
 const languageNames={en:'English',vi:'Tiếng Việt',zh:'Chinese',es:'Spanish',fr:'French',de:'German',hi:'Hindi',ru:'Russian',pt:'Portuguese',ja:'Japanese',it:'Italian',nl:'Dutch'};
 function selectedModel(saved=false) { return $(saved ? 'saved-model' : 'meeting-model').value || 'deepgram'; }
 function profile(saved=false) { return modelProfiles[selectedModel(saved)] || transcription; }
-function modelHelp(p) { return p.provider === 'local-moss' ? `Local · MOSS Q6_K. Audio stays on this machine. Speaker transcript appears after Stop. English / Chinese only. ${p.configured ? 'Installed and ready.' : p.setup || 'Local runtime is not installed.'}` : 'Cloud · Deepgram Nova-3. Live transcription with speaker labels; audio is sent to Deepgram only with your consent.'; }
+function modelHelp(p) { return 'Cloud · Deepgram Nova-3. Live transcription with speaker labels. Stop finalizes this stream; full saved-audio reruns happen only when requested.'; }
 function modelLanguages(id,p) {
   if (!p.languages) return;
   const select=$(id);
@@ -87,7 +88,7 @@ function scopeDescription(source) {
   return kind === 'browser' ? `All tabs in ${source.name}` : `All audio from ${source.name || 'the selected app'}`;
 }
 function providerName() { return transcription.provider === 'deepgram' ? 'Deepgram' : 'Groq'; }
-function busy() { return Boolean(activeId) || recordPending; }
+function busy() { return Boolean(activeId) || recordPending || audioPending; }
 function formatDuration(ms) {
   const seconds = Math.max(0,Math.floor(ms/1000));
   return `${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
@@ -183,13 +184,13 @@ function renderDiscovery() {
   const processing = [...sessions.values()].some(s => s.source === 'meeting' && s.status === 'processing');
   const active = sessions.get(activeId);
   const locked = busy();
-  if(active?.capture?.engine && modelProfiles[active.capture.engine]) $('meeting-model').value=active.capture.engine;
+  $('meeting-model').value='deepgram';
   transcription=profile();
   $('meeting-model').disabled=!authenticated || locked || processing || !Object.keys(modelProfiles).length;
   modelLanguages('meeting-language',transcription);
   text('model-help',modelHelp(transcription));
-  text('transcript-feature',transcription.streaming === false ? 'After recording' : 'Live transcript');
-  text('transcript-feature-help',transcription.streaming === false ? 'Local words and speakers after Stop' : 'Words arrive while you speak');
+  text('transcript-feature','Live transcript');
+  text('transcript-feature-help','Words arrive while you speak');
   const reason = !authenticated ? 'Reconnect to set up recording.' :
     !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
     activeId ? 'Stop the active session before starting another.' :
@@ -231,12 +232,12 @@ function renderDiscovery() {
   $('meeting-microphone').disabled = !authenticated || locked;
   if(active?.capture?.language) $('meeting-language').value=active.capture.language;
   $('meeting-language').disabled = !authenticated || locked;
-  text('meeting-language-help',transcription.provider === 'local-moss' ? 'Local Auto supports English and Chinese. Other languages require the Cloud model.' : $('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
+  text('meeting-language-help',$('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
   $('title').disabled = locked;
   text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
-  text('scope-warning', chosenSource?.scope === 'microphone' ? `Only ${chosenSource.microphone_name || 'the selected microphone'} will be captured. No app/system audio or Screen Recording permission is needed. Cloud processes speech live; Local MOSS transcribes after Stop.` : chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
+  text('scope-warning', chosenSource?.scope === 'microphone' ? `Only ${chosenSource.microphone_name || 'the selected microphone'} will be captured. No app/system audio or Screen Recording permission is needed. Cloud processes speech live.` : chosenSource ? `${scopeDescription(chosenSource)} will be captured, plus ${chosenSource.microphone_name || 'the selected microphone'}.` :
     'Confirm a source to see exactly what will be captured.');
   const statuses = {
     available:'Watching app audio activity. Suggestions may also be media playback or microphone tests.',
@@ -387,6 +388,7 @@ function render() {
   const session = sessions.get(selectedId);
   text('new-session',activeId ? 'View active session' : 'Recording preferences');
   renderSummary(session);
+  renderAudio(session);
   const currentRevision=(segments.get(selectedId)||[])[0]?.revision || session?.transcript_revision;
   text('revision-status',session?.source === 'meeting' && currentRevision ? `Saved transcript · revision ${currentRevision}${session.status === 'processing' ? ' · retained while processing' : ''}` : '');
   $('session-heading').textContent = session ? session.title : 'The conversation';
@@ -400,7 +402,7 @@ function render() {
   const languageLock = languageLocks.get(selectedId);
   if (session && session.id !== savedModelSession && Object.keys(modelProfiles).length) {
     savedModelSession=session.id;
-    $('saved-model').value=(session.transcript_provider || session.capture?.provider) === 'local-moss' ? 'moss-q6-k' : 'deepgram';
+    $('saved-model').value='deepgram';
 
   }
   const savedProfile=profile(true);
@@ -414,9 +416,10 @@ function render() {
   text('meeting-notes',notes.get(selectedId) || '');
   $('notes-section').hidden = !notes.get(selectedId);
   $('reprocess-controls').hidden = session?.source !== 'meeting';
-  text('reprocess-help',savedProfile.provider === 'local-moss' ? 'Local MOSS runs after recording, with English / Chinese and speaker labels. No upload. The previous transcript stays available until both tracks succeed.' : 'A manual rerun uploads this saved audio under your app agreement. Your saved transcript stays available until the replacement completes.');
+  text('reprocess-help',`A manual rerun uploads this saved audio under your app agreement. Your saved transcript stays available until the replacement completes. ${summaryProvider.configured ? 'Then notes are regenerated once using '+summaryProvider.provider+' · '+summaryProvider.model+' at '+summaryProvider.endpoint+'.' : 'Configure a summary provider to regenerate notes too.'}`);
   $('reprocess-meeting').hidden = session?.source !== 'meeting';
-  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || !agreement.accepted ||
+  text('reprocess-meeting',summaryProvider.configured ? 'Rerun transcription & notes' : 'Transcribe again');
+  $('reprocess-meeting').disabled = Boolean(summaryActiveId) || !audioStates.get(selectedId)?.available || audioPending || !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || !agreement.accepted ||
     [...sessions.values()].some(s=>s.source === 'meeting' && s.status === 'processing');
   $('reprocess-language').disabled = !authenticated || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
   text('session-progress', session?.source === 'meeting' ? session.status === 'processing' ?
@@ -425,27 +428,27 @@ function render() {
     session.status === 'stopping' ? 'Stopping capture and finishing the encrypted audio…' :
     session.status === 'recording' ? `Recording encrypted audio. ${providerName()} ${transcription.streaming ? 'streams text and anonymous speaker labels' : 'sends text after short batches'}; Stop remains available.` :
     session.status === 'failed' ? 'Recording or transcription failed. Check the message above; saved audio remains encrypted.' : '' : '');
-  const idle = authenticated && !activeId && !recordPending && ![...sessions.values()].some(s=>s.status === 'processing');
+  const idle = authenticated && !busy() && ![...sessions.values()].some(s=>s.status === 'processing');
   $('saved-tools').hidden = session?.source !== 'meeting';
-  $('recover-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status);
-  $('resume-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status) ||
+  $('recover-meeting').disabled = !audioStates.get(selectedId)?.available || audioPending || !idle || !['failed','interrupted'].includes(session?.status);
+  $('resume-meeting').disabled = !audioStates.get(selectedId)?.available || audioPending || !idle || !['failed','interrupted'].includes(session?.status) ||
     (Boolean((segments.get(selectedId)||[]).length) && !session?.has_checkpoints) ||
     !savedProfile.configured || !agreement.accepted ||
     (Boolean((segments.get(selectedId)||[]).length) && Boolean(session?.transcript_provider || session?.capture?.provider) &&
       (session.transcript_provider || session.capture.provider) !== savedProfile.provider);
-  text('resume-meeting',savedProfile.provider === 'local-moss' ? 'Resume local transcription · rerun saved audio' : 'Resume transcription');
+  text('resume-meeting','Resume cloud transcription');
   $('delete-meeting').disabled = !idle || !$('delete-consent').checked;
   $('apply-retention').disabled = !idle || !$('retention-consent').checked;
   const usage=cloudUsage.get(selectedId);
   text('cloud-usage',usage ? `${usage.providers?.join(', ') || providerName()} upload reservations: ${usage.requests} · reserved estimate $${Number(usage.estimated_usd).toFixed(4)}. Actual billing depends on your provider account.` : '');
   const progress=liveProgress.get(selectedId);
-  text('live-progress',progress ? progress.mode === 'finalizing' ? 'Refining the saved transcript from the complete recording. Live text remains visible until the final pass succeeds.' : progress.mode === 'deferred' ? 'Live transcription paused at the lag limit. Encrypted recording continues; saved audio will be transcribed after Stop.' : `${progress.mode === 'local_batch' ? 'Local MOSS · processing saved audio' : progress.mode === 'catching_up' ? 'Catching up' : progress.mode === 'streaming' ? 'Streaming' : 'Cloud batch updates'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
+  text('live-progress',progress ? `${progress.mode === 'catching_up' ? 'Catching up' : 'Cloud streaming'} · ${formatDuration(progress.lag_ms)} behind recorded audio` : '');
   if (session?.recovery) text('session-progress','Recovered / interrupted audio. Only authenticated complete frames were retained; missing tail duration is unknown. Capture was not restarted.');
   if (session?.status === 'failed' && session.failure) text('session-progress',`${session.failure.message} [${session.failure.code}]`);
   const rows = [...(segments.get(selectedId) || [])].sort((a,b)=>a.start_ms-b.start_ms);
   const emptyMessage = !replayAvailable ? 'Storage is unavailable. Reconnect or restart the local server.' :
     session?.status === 'processing' ? 'Audio capture stopped. Transcribing the remaining audio batches…' :
-    session?.source === 'meeting' && liveStates.has(session.status) ? session.capture?.provider === 'local-moss' ? 'Recording encrypted audio locally. MOSS will transcribe and label speakers after Stop.' : 'Recording audio. Waiting for early speech and the first stable words…' :
+    session?.source === 'meeting' && liveStates.has(session.status) ? 'Recording audio. Waiting for early speech and the first stable words…' :
     session?.status === 'failed' ? 'This session failed. Check the message above.' :
     liveStates.has(session?.status) ? 'Listening for the first confirmed words…' : 'No speech has been transcribed in this session.';
   renderSpeakers(session,rows);
@@ -463,11 +466,27 @@ function connect() {
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
+    if (data.type === 'audio_state') {
+      audioStates.set(data.session_id,data.audio); render(); return;
+    }
+    if (data.type === 'audio_cleanup_error') { notice(data.message); return; }
+    if (data.type === 'audio_playback') {
+      audioPending=false;
+      if(data.session_id === selectedId) {
+        clearPlayback(); audioSession=selectedId;
+        const bytes=Uint8Array.from(atob(data.wav_base64),c=>c.charCodeAt(0));
+        audioURL=URL.createObjectURL(new Blob([bytes],{type:'audio/wav'}));
+        $('audio-player').src=audioURL; $('audio-player').hidden=false;
+        text('audio-playback-status','Ready to play. No cloud request was made.');
+      }
+      render(); return;
+    }
     if (data.type === 'agreement') {
       agreement=data.agreement; render(); return;
     }
     if (data.type === 'snapshot') {
       agreement=data.agreement || {accepted:false,version:null};
+      audioStates=new Map(Object.entries(data.audio_states || {})); audioPending=false;
       speakerPending=false; summaryPending=false; exportPending=false;
       summaryProvider=data.summary_provider || {configured:false};
       summaryActiveId=data.summary_active_id || null; savedSummaries=new Map(Object.entries(data.grounded_summaries || {}));
@@ -537,7 +556,7 @@ function connect() {
       state.mode=Object.values(state.streams).some(p=>p.mode === 'deferred') ? 'deferred' : state.lag_ms > 12000 ? 'catching_up' : 'live';
       liveProgress.set(data.session_id,state); render();
     } else if (['transcription_error','speaker_warning','recovery_complete'].includes(data.type)) {
-      recordPending=false; notice(data.message); render();
+      audioPending=false; recordPending=false; notice(data.message); render();
     } else if (data.type === 'session_deleted') {
       savedSummaries.delete(data.session_id); sessions.delete(data.session_id); segments.delete(data.session_id); notes.delete(data.session_id);
       speakerTurns.delete(data.session_id); languageLocks.delete(data.session_id); liveProgress.delete(data.session_id);
@@ -556,7 +575,7 @@ function connect() {
     } else if (data.type === 'notes') {
       notes.set(data.session_id,data.notes); render();
     } else if (data.type === 'recording_error') {
-      recordPending=false; notice(data.message); render();
+      audioPending=false; recordPending=false; notice(data.message); render();
     } else if (data.type === 'session') {
       if (data.session.source === 'meeting') { recordPending=false; }
       sessions.set(data.session.id,data.session);
@@ -580,9 +599,10 @@ function connect() {
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
+      audioPending=false;
       speakerPending=false; summaryPending=false; exportPending=false;
       if (data.context === 'meeting') {
-        recordPending=false; notice(data.message);
+        audioPending=false; recordPending=false; notice(data.message);
         if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
         render();
       } else { stopPending=false; notice(data.message); render(); }
@@ -591,7 +611,7 @@ function connect() {
   };
   socket.onclose = event => {
     if (socket !== connection) return;
-    connecting=false; authenticated=false; stopPending=false; recordPending=false; partials.clear();
+    connecting=false; authenticated=false; audioPending=false; stopPending=false; recordPending=false; partials.clear();
     clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
@@ -706,3 +726,34 @@ $('keep-recording').onclick=()=>{if(!$('keep-recording').disabled && activeId) s
 $('agree-app').onclick=()=>{if(agreement.version) send({action:'accept_agreement',version:agreement.version});};
 $('app-agreement').oncancel=event=>event.preventDefault();
 $('revoke-agreement').onclick=()=>send({action:'revoke_agreement'});
+
+function clearPlayback() {
+  const player=$('audio-player');
+  if(player.pause) player.pause();
+  player.src=''; player.hidden=true;
+  if(player.load) player.load();
+  if(audioURL) URL.revokeObjectURL(audioURL);
+  audioURL=null; text('audio-playback-status','');
+}
+function renderAudio(session) {
+  const saved=session?.source === 'meeting', state=audioStates.get(selectedId);
+  $('saved-audio').hidden=!saved;
+  if(audioSession !== selectedId || !state?.available) { clearPlayback(); audioSession=selectedId; }
+  const idle=authenticated && !busy() && ![...sessions.values()].some(s=>s.status === 'processing');
+  text('audio-retention-status',!state?.available ? state?.expired_at ? 'Audio expired. Your transcript and notes are preserved.' : 'Audio is unavailable. Saved text and notes remain readable.' : state.archived ? 'Archived · excluded from automatic audio expiry.' : `Audio expires ${new Date(state.expires_at).toLocaleString()}. Archive to keep it.`);
+  text('archive-audio',state?.archived ? 'Unarchive audio' : 'Archive audio');
+  $('archive-audio').disabled=!idle || !state?.available;
+  $('load-audio').disabled=!idle || !state?.available;
+  $('playback-track').disabled=!idle || !state?.available;
+  for(const option of $('playback-track').options || []) option.disabled=!state?.tracks?.includes(option.value);
+  if(state?.tracks?.length && !state.tracks.includes($('playback-track').value)) $('playback-track').value=state.tracks[0];
+}
+$('load-audio').onclick=()=>{
+  if($('load-audio').disabled) return;
+  audioPending=send({action:'play_audio',session_id:selectedId,stream:$('playback-track').value || 'mic'});
+  text('audio-playback-status','Authenticating and loading saved audio…'); render();
+};
+$('archive-audio').onclick=()=>{
+  if(!$('archive-audio').disabled) send({action:'archive_audio',session_id:selectedId,archived:!audioStates.get(selectedId)?.archived});
+};
+$('playback-track').onchange=()=>clearPlayback();

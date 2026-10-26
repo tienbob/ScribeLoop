@@ -103,13 +103,71 @@ upload checkboxes. Record / Not now remains required for every detected call.
 Revocation stops active capture, signals ASR cancellation and cancels summary work;
 it does not delete saved meetings. Existing grants never imply acceptance.
 
-The agreement explicitly describes current storage and marks automatic 30-day
-audio expiry/archive as pending. Cloud-only routing and audio-only retention,
-archive, playback/manual rerun availability remain the next implementation slice;
-the agreement change does not claim those features are complete. The five-minute
-capture limit and the deferred long-meeting/speaker-registry work remain open.
+The first-use slice initially marked automatic expiry/archive as pending. The
+following slice now implements cloud-only routing and audio retention/archive/
+playback/manual reruns; see its current status below. The five-minute capture
+limit and deferred long-meeting/speaker-registry work remain open.
 
 Validation for this slice: 372 Python tests passed; 12 frontend regression groups
 passed; Ruff and `git diff --check` passed. Generated-audio revocation coverage
 verifies that active capture stops before the saved transcription pass and keeps
 meeting metadata. No live API requests or private meeting recordings were used.
+
+## Next slice — cloud routing and retained audio
+
+Before implementation: expose only Deepgram streaming in the app and reject local
+model commands. Keep historical local experiment runners/tests outside production
+routing; do not delete downloaded models. Disable default local fixture inference.
+Stop finalizes the existing stream; only an explicit saved-audio action may rerun.
+
+Add persisted per-meeting archive/expiry state. Unarchived audio expires 30 days
+after the meeting ends (start time fallback), including old recordings after app
+agreement acceptance. Run cleanup at startup/periodically while idle and accepted;
+remove encrypted audio/key first, then mark expiry, leaving transcripts and notes.
+Failures remain retryable. Archive must not resurrect expired audio; unarchiving
+an old recording makes it eligible at the next cleanup. Permanent whole-meeting
+deletion remains a separate confirmed action.
+
+Playback uses the authenticated local WebSocket and one selected audio track,
+validated before release. Bound decoded audio to the current 305-second container
+limit; make an in-memory WAV/blob, never a plaintext temporary file. Block cleanup,
+reruns and deletion while a playback read owns the key. This preview mechanism is
+explicitly limited to current five-minute recordings; long-meeting playback will
+need a bounded HTTP/cursor design in the later slice. Expired/missing audio disables
+playback/resume/rerun, with saved text and notes still readable. No provider request
+is made for playback, archival, cleanup or loading history. Add archive, expiry and
+playback state to the saved-meeting UI; no per-upload consent checkbox returns.
+
+Manual rerun means the full requested flow: replace the transcript atomically, then
+make one summary/title request to the currently displayed configured summary
+endpoint. Only do so after successful transcript replacement and while the app
+agreement remains accepted. Preserve prior notes on failure; prevent duplicate
+initial-call summary scheduling and persist a per-revision manual-summary attempt.
+Missing summary configuration still permits transcription and explains why notes
+were not regenerated. No implicit rerun on Stop, startup or provider failure.
+
+## Cloud/retained-audio slice — complete
+
+- [x] Production cloud-only ASR router, local-model API rejection and UI removal;
+  default local fixture inference disabled. Historical local experiments retained.
+- [x] Schema v7 persistent audio archive/expiry state; 30-day, idle automatic
+  key-first audio-only cleanup. Current agreement version v2 discloses the policy.
+- [x] Authenticated, bounded in-memory playback with timestamp gaps, footer
+  validation, per-reader key lease and one outstanding delivery per connection.
+- [x] Saved audio state, archive/unarchive, player and unavailable/expired controls;
+  whole-meeting deletion remains separate and explicitly confirmed.
+- [x] Explicit rerun replaces ASR atomically, then requests notes/title once with a
+  durable per-revision attempt; failure preserves prior content, without fallback.
+- [x] Current README/docs cleaned up; local-selector instructions marked historical.
+
+Validation: full Python suite **383 passed**; **13 frontend regression groups**;
+Ruff and whitespace checks passed. Focused tests were rerun after reader/delivery
+hardening. Coverage includes archive persistence, startup cleanup, text preservation,
+key-first retry, tamper/size rejection, mic-only track selection, repeated reader
+cancellation, redirect rejection and full manual-rerun success/failure. Existing
+streaming tests assert Stop opens no second ASR pass. No live API requests or
+private recordings were used; no downloaded model weights were deleted.
+
+Long-meeting incremental readers/playback, rolling summaries, speaker registry,
+calibration and forget-person remain unfinished. The capture cap is still five
+minutes; this slice does not close all of Phase 2b.

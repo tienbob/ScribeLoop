@@ -318,9 +318,11 @@ class SessionAudioStore:
     def delete_session(self, session_id):
         """Retryable key-first removal, only after readers/writers are stopped."""
         _identity(session_id, 'loopback')
+        directory = self.root / session_id
+        if directory.is_symlink():
+            raise OSError('Refuse redirected recording directory')
         if self.keys.get('audio:' + session_id) is not None:
             self.forget_session_key(session_id)
-        directory = self.root / session_id
         if directory.exists():
             # Only application-owned encrypted artifacts; no arbitrary paths.
             for path in directory.iterdir():

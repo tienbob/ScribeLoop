@@ -1,4 +1,10 @@
-# Local MOSS Q6_K and cloud model selection
+# Historical local MOSS experiment
+
+> Superseded in Phase 2b (2026-10-26): local ASR is no longer available from the app
+> UI or API. The app only streams to Deepgram. Downloaded weights are preserved;
+> the scripts and experiment harness remain available for reproducing old results.
+> The setup/UI instructions below describe the earlier experiment, not current app behavior.
+
 
 The recording setup offers two explicit choices:
 

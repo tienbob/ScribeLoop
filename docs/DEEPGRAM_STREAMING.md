@@ -1,3 +1,8 @@
+> Current Phase 2b contract: cloud streaming only, versioned first-use app
+> agreement, 30-day audio-only expiry with archive, and explicit manual reruns.
+> See [retained audio](RETAINED_AUDIO.md). Historical per-upload checkbox behavior
+> described in earlier measurements is superseded.
+
 # Deepgram streaming and required speaker separation
 
 Updated 2026-10-23. Anonymous individual speaker attribution is a **core requirement**.
@@ -41,7 +46,8 @@ The existing ignored `.env` contains `DEEPGRAM_API_KEY`; it is read only by the
 backend. Neither snapshots, browser storage nor API error bodies disclose it.
 Restart the existing demo server before using updated code, then open its fresh
 launch URL. Record still requires source selection, participant permission and a
-separate **Deepgram** upload consent. Saved uploads have their own consent checkbox.
+the first-use app agreement. Each detected call still offers Record / Not now;
+manual reruns are explicit actions covered by that agreement.
 
 A 10-second audio reservation is committed before each block can upload. The
 shared cap across both tracks and saved actions is 80 block reservations and an
@@ -116,8 +122,8 @@ rows, separate source labels, per-row language names and a clearly marked live
 provisional draft. Speaker names remain anonymous; labels do not guarantee a
 person's identity or correct overlap separation. No provider/model fallback or
 extra inference call was introduced. Existing notebooks and legacy local speaker
-turns remain readable. Launch/Stop, upload consent and source confirmation remain
-explicit. Record resets its cloud-consent checkbox on a new meeting.
+turns remain readable. Record / Not now, Stop and source selection remain explicit. Processing
+authorization comes from the persistent first-use agreement; no upload checkbox is shown.
 
 Native browser accessibility inspection verified Auto, the Vietnamese guidance,
 three labels from the public fixture, and separate transcript words/metadata.

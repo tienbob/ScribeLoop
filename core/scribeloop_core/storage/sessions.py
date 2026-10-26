@@ -11,7 +11,7 @@ class SessionStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    AGREEMENT_VERSION = '2026-10-26-v1'
+    AGREEMENT_VERSION = '2026-10-26-v2'
 
     def agreement(self):
         row = self.conn.execute('SELECT accepted_at,revoked_at FROM app_agreement WHERE version=?',
@@ -452,7 +452,7 @@ class SessionStore:
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
-            for table in ('grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            for table in ('session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'
@@ -460,6 +460,38 @@ class SessionStore:
             self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))
         from .db import purge_checkpoint
         purge_checkpoint(self.conn)
+
+    def audio_policy(self, session_id):
+        session = self.get(session_id)
+        if not session or session['source'] != 'meeting':
+            raise ValueError('Select a saved meeting')
+        row = self.conn.execute('SELECT archived,expired_at FROM session_audio_policy WHERE session_id=?',
+                                (session_id,)).fetchone()
+        archived = bool(row and row['archived'])
+        return {'archived':archived, 'expired_at':row['expired_at'] if row else None,
+                'expires_at':None if archived else (session['ended_at'] or session['started_at'])+30*86400000}
+
+    def archive_audio(self, session_id, archived):
+        policy = self.audio_policy(session_id)
+        if not isinstance(archived,bool) or policy['expired_at'] is not None:
+            raise ValueError('Expired audio cannot be archived')
+        with self.conn:
+            self.conn.execute('INSERT INTO session_audio_policy(session_id,archived) VALUES (?,?) '
+                'ON CONFLICT(session_id) DO UPDATE SET archived=excluded.archived', (session_id,int(archived)))
+        return self.audio_policy(session_id)
+
+    def mark_audio_expired(self, session_id):
+        with self.conn:
+            self.conn.execute('INSERT INTO session_audio_policy(session_id,expired_at) VALUES (?,?) '
+                'ON CONFLICT(session_id) DO UPDATE SET expired_at=excluded.expired_at', (session_id,self._now()))
+            self.conn.execute('UPDATE session_streams SET audio_path=NULL WHERE session_id=?',(session_id,))
+
+    def audio_retention_candidates(self):
+        return [row[0] for row in self.conn.execute(
+            "SELECT s.id FROM sessions s LEFT JOIN session_audio_policy p ON p.session_id=s.id "
+            "WHERE s.source='meeting' AND s.status IN ('completed','failed','interrupted') "
+            "AND COALESCE(p.archived,0)=0 AND p.expired_at IS NULL "
+            "AND COALESCE(s.ended_at,s.started_at)<=?", (self._now()-30*86400000,))]
 
     def retention_candidates(self, days=30):
         if not isinstance(days,int) or days < 1:

@@ -43,6 +43,7 @@ class Socket {
 vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf8'),{
   document:{getElementById:get,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
   WebSocket:Socket,location:{hash:'#token=test-launch-key',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
+  URL:{createObjectURL:()=> 'blob:audio',revokeObjectURL(){}},Blob,atob,
   history:{replaceState(){fragmentRemoved=true;}}, setTimeout, setInterval:()=>null, URLSearchParams,
 });
 const socket=sockets[0];
@@ -203,6 +204,7 @@ assert.equal(get('record-meeting').disabled,true);
 deliver({type:'notes',session_id:'meeting',notes:'<script>literal notes</script>'});
 assert.equal(get('meeting-notes').textContent,'<script>literal notes</script>');
 deliver({type:'session',session:{id:'meeting',source:'meeting',title:'Call',status:'completed',started_at:Date.now()}});
+deliver({type:'audio_state',session_id:'meeting',audio:{available:true,tracks:['mic','loopback'],expires_at:Date.now()+86400000}});
 assert.equal(get('reprocess-meeting').disabled,false);
 get('reprocess-meeting').onclick();
 assert.equal(JSON.parse(socket.sent.at(-1)).action,'reprocess');
@@ -263,6 +265,7 @@ get('record-meeting').onclick();
 assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,true);
 liveEvent({type:'session',session:{id:'cloud',title:'Cloud',source:'meeting',status:'completed',started_at:Date.now(),has_checkpoints:true}});
 get('history').children[0].onclick();
+liveEvent({type:'audio_state',session_id:'cloud',audio:{available:true,tracks:['mic','loopback'],expires_at:Date.now()+86400000}});
 assert.equal(get('reprocess-meeting').disabled,false);
 get('reprocess-meeting').onclick();
 assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,true);
@@ -288,42 +291,20 @@ assert.equal(get('meeting-language').disabled,true,'Language stays stable while 
 console.log('Speaker roster, separate speech text and automatic multilingual status passed');
 
 const cloudProfile={cloud:true,configured:true,provider:'deepgram',model:'nova-3',streaming:true,auto_language:true,languages:{auto:'Auto',en:'English',vi:'Vietnamese'},default_language:'auto'};
-const localProfile={cloud:false,configured:true,provider:'local-moss',model:'MOSS Q6_K',streaming:false,auto_language:true,languages:{auto:'Auto',en:'English',zh:'Chinese'},default_language:'auto'};
 get('meeting-model').value='deepgram';get('saved-model').value='deepgram';
-get('meeting-language').options=['auto','en','vi','zh'].map(value=>({value}));
-get('reprocess-language').options=['auto','en','vi','zh'].map(value=>({value}));
-liveEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v1'},fixtures:[],sessions:[],active_id:null,segments:{},notes:{},recording_available:true,
- transcription:cloudProfile,transcription_models:{deepgram:cloudProfile,'moss-q6-k':localProfile},discovery:{...discovery,permission:'authorized'}});
-get('meeting-language').value='vi';
-get('meeting-model').value='moss-q6-k';get('meeting-model').onchange();
-assert.match(get('model-help').textContent,/Local.*after Stop/);
-assert.equal(get('meeting-language').value,'auto','Invalid language is reset on model change');
-assert.equal(get('meeting-language').options.find(o=>o.value==='vi').disabled,true);
-assert.equal(get('meeting-language').options.find(o=>o.value==='zh').disabled,false);
-assert.equal(get('transcript-feature').textContent,'After recording');
-get('meeting-microphone').value='default';get('meeting-microphone').onchange();
-get('meeting-source').value='system';get('meeting-source').onchange();
-get('source-form').onsubmit({preventDefault(){}});
-const localSelection=JSON.parse(recovered.sent.at(-1));
-liveEvent({type:'source_selected',request_id:localSelection.request_id,source:{scope:'system',name:'All system audio',microphone_id:'default'}});
-assert.equal(get('record-meeting').disabled,false,`Local model requires no cloud consent: ${get('record-help').textContent}`);
-get('record-meeting').onclick();
-assert.equal(JSON.parse(recovered.sent.at(-1)).model,'moss-q6-k');
-assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,false);
-liveEvent({type:'session',session:{id:'local',source:'meeting',title:'Local',status:'recording',started_at:Date.now(),capture:{engine:'moss-q6-k',provider:'local-moss'}}});
-assert.equal(get('meeting-model').disabled,true,'Model cannot change while capturing');
-liveEvent({type:'session',session:{id:'local',source:'meeting',title:'Local',status:'interrupted',started_at:Date.now(),has_checkpoints:true,transcript_provider:'local-moss',capture:{provider:'local-moss'}}});
-get('saved-model').value='moss-q6-k';get('saved-model').onchange();
-assert.equal(get('reprocess-meeting').disabled,false);
-assert.match(get('session-model').textContent,/Local.*MOSS/);
-get('reprocess-meeting').onclick();
-assert.equal(JSON.parse(recovered.sent.at(-1)).model,'moss-q6-k');
-assert.equal(JSON.parse(recovered.sent.at(-1)).cloud_consent,false);
-console.log('Local/cloud model selection, language limits and upload isolation passed');
+get('meeting-language').options=['auto','en','vi'].map(value=>({value}));
+get('reprocess-language').options=['auto','en','vi'].map(value=>({value}));
+liveEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v2'},fixtures:[],sessions:[],active_id:null,segments:{},notes:{},recording_available:true,
+ transcription:cloudProfile,transcription_models:{deepgram:cloudProfile},discovery:{...discovery,permission:'authorized'}});
+assert.match(get('model-help').textContent,/Cloud.*Stop finalizes/);
+assert.equal(get('transcript-feature').textContent,'Live transcript');
+assert.ok(!fs.readFileSync('core/scribeloop_core/api/static/index.html','utf8').includes('value="moss-q6-k"'));
+console.log('Cloud-only selection and explicit rerun copy passed');
 
 liveEvent({type:'session',session:{id:'local',source:'meeting',title:'Local',status:'completed',started_at:Date.now(),capture:{provider:'local-moss'}}});
 get('new-session').onclick();
 get('meeting-model').value='deepgram';get('meeting-model').onchange();
+get('meeting-microphone').value='default';get('meeting-microphone').onchange();
 get('meeting-source').value='microphone';get('meeting-source').onchange();
 get('source-form').onsubmit({preventDefault(){}});
 const micSelection=JSON.parse(recovered.sent.at(-1));
@@ -354,7 +335,7 @@ vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf
  document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:tag=>{const e=new Element(); e.tag=tag; demoCreated.push(e); return e;},createTextNode:text=>({textContent:text})},
  URL:{createObjectURL(blob){demoDownloads.push(blob);return 'blob:demo';},revokeObjectURL(){}},Blob,
  WebSocket:DemoSocket,location:{hash:'',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
- history:{replaceState(){}},setTimeout,setInterval:()=>null,URLSearchParams,
+ atob,history:{replaceState(){}},setTimeout,setInterval:()=>null,URLSearchParams,
 });
 assert.equal(demoSockets.length,1,'Demo opens connection without asking for a key');
 demoSockets[0].readyState=Socket.OPEN;demoSockets[0].onopen();
@@ -466,3 +447,24 @@ assert.equal(demoGet('app-agreement').open,false);
 demoGet('revoke-agreement').onclick();
 assert.equal(JSON.parse(ds.sent.at(-1)).action,'revoke_agreement');
 console.log('First-use agreement, explicit recording choice and revocation passed');
+
+// Available, archived and expired audio preserve the saved transcript workflow.
+demoEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v2'},fixtures:[],
+ sessions:[{id:sid,source:'meeting',status:'completed',title:'Retained',started_at:1}],active_id:null,
+ recording_available:true,segments:{[sid]:correctedRows},transcription:{cloud:true,configured:true,provider:'deepgram'},
+ audio_states:{[sid]:{available:true,tracks:['mic'],archived:false,expires_at:Date.now()+86400000}}});
+assert.equal(demoGet('load-audio').disabled,false);
+demoGet('archive-audio').onclick();
+assert.deepEqual(JSON.parse(ds.sent.at(-1)),{action:'archive_audio',session_id:sid,archived:true});
+demoEvent({type:'audio_state',session_id:sid,audio:{available:true,tracks:['mic'],archived:true}});
+assert.match(demoGet('audio-retention-status').textContent,/Archived/);
+demoGet('load-audio').onclick();
+assert.equal(JSON.parse(ds.sent.at(-1)).action,'play_audio');
+demoEvent({type:'audio_playback',session_id:sid,stream:'mic',wav_base64:btoa('RIFF-test')});
+assert.equal(demoGet('audio-player').hidden,false);
+demoEvent({type:'audio_state',session_id:sid,audio:{available:false,tracks:[],expired_at:Date.now()}});
+assert.equal(demoGet('audio-player').hidden,true);
+assert.equal(demoGet('reprocess-meeting').disabled,true);
+assert.equal(demoGet('load-audio').disabled,true);
+assert.match(demoGet('audio-retention-status').textContent,/transcript and notes are preserved/);
+console.log('Saved playback, archive and audio expiry controls passed');

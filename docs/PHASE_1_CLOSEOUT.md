@@ -1,3 +1,7 @@
+> Historical Phase 1 closeout. Phase 2b supersedes the local-model selector and
+> per-upload consent controls: the app is now cloud-only, with one first-use
+> agreement. See [current retained-audio workflow](RETAINED_AUDIO.md).
+
 # Phase 1 — macOS development closeout
 
 Updated 2026-10-23. **Development scope closed. Release/quality acceptance is not

@@ -208,46 +208,33 @@ def test_local_process_transfers_large_pcm_and_cancels_without_plaintext_files(m
             timer.cancel()
 
 
-def test_api_model_selection_restores_profile_and_local_speaker_rows(tmp_path,require_sqlcipher):
+def test_api_cloud_only_rejects_local_capture_and_saved_requests(tmp_path,require_sqlcipher):
     import json
 
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
-    from scribeloop_core.meetings.contracts import AppIdentity
-    from scribeloop_core.meetings.service import DiscoveryService
+    from scribeloop_core.pipeline.model_selection import CloudRecordingRouter
     from test_recording import Keys
     from test_recording_api import command, connection, receive
 
     def recording(store,audio,source,publish):
-        return ModelRecordingRunner(store,audio,lambda *a,**k:ControlledSource(),publish,
-            local_config=LocalConfig(request=result),cloud_config=DeepgramConfig(api_key=''))
-    def discovery(publish):
-        return DiscoveryService(publish,apps_provider=lambda:(AppIdentity(
-            app_id='com.brave.Browser',name='Brave',kind='browser',bundle_ids=('com.brave.Browser',)),))
+        return CloudRecordingRouter(store,audio,lambda *a,**k:ControlledSource(),publish,
+            cloud_config=DeepgramConfig(api_key=''))
     app,token=create_app(database=tmp_path/'models.sqlcipher',storage='encrypted',key_store=Keys(),
-        recording_factory=recording,discovery_factory=discovery)
-    with TestClient(app,base_url='http://127.0.0.1') as client:
-        with connection(client) as ws:
-            ws.send_text(token)
-            snapshot=ws.receive_json()
-            assert snapshot['transcription_models']['moss-q6-k']['cloud'] is False
-            assert snapshot['transcription_models']['deepgram']['cloud'] is True
-            assert 'auto' in snapshot['transcription_models']['deepgram']['languages']
-            assert 'zh' not in snapshot['transcription_models']['deepgram']['languages']
-            assert 'api_key' not in json.dumps(snapshot)
-            client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
-            ws.send_json(command(model='moss-q6-k',language='vi'))
+        recording_factory=recording)
+    with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
+        ws.send_text(token)
+        snapshot=ws.receive_json()
+        assert list(snapshot['transcription_models']) == ['deepgram']
+        assert snapshot['transcription_models']['deepgram']['cloud'] is True
+        assert snapshot['replay_enabled'] is False
+        assert 'api_key' not in json.dumps(snapshot)
+        client.portal.call(app.state.store.accept_agreement,app.state.store.AGREEMENT_VERSION)
+        ws.send_json(command(model='moss-q6-k',language='en'))
+        receive(ws,'error')
+        for action in ('resume','reprocess'):
+            ws.send_json({'action':action,'session_id':'a'*32,'model':'moss-q6-k','language':'en'})
             receive(ws,'error')
-            assert not client.portal.call(app.state.store.list)
-            ws.send_json(command(model='moss-q6-k',language='en',cloud_consent=False))
-            session=receive(ws,'session','preparing')['session']
-            assert session['capture']['provider']=='local-moss'
-            receive(ws,'session','recording')
-            ws.send_json({'action':'stop','session_id':session['id']})
-            receive(ws,'session','completed')
-        with connection(client) as ws:
-            ws.send_text(token)
-            snapshot=ws.receive_json()
-            assert snapshot['sessions'][0]['transcript_provider']=='local-moss'
-            rows=snapshot['segments'][session['id']]
-            assert len(rows)==4 and all(r['speaker_label'] for r in rows)
+        assert not client.portal.call(app.state.store.list)
+        assert 'Local · MOSS' not in client.get('/').text
+        assert 'media-src blob:' in client.get('/').headers['Content-Security-Policy']

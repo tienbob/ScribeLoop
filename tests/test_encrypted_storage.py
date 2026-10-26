@@ -97,7 +97,7 @@ def test_wrong_key_fails_closed_and_releases_resources(tmp_path):
     with pytest.raises(EncryptedStorageError):
         connect_encrypted(path, secrets.token_bytes(32))
     with encrypted_database(path, keys) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 6
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 7
 
 
 def test_exclusive_database_lock_and_exception_release(tmp_path):

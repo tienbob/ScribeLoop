@@ -1,10 +1,11 @@
-"""One selected backend per operation, sharing one capture lifecycle."""
+"""Cloud-only production router and a historical model-comparison harness."""
 from .deepgram_meeting import DeepgramRecordingRunner
-from .moss_meeting import MossRecordingRunner
 
 
 class ModelRecordingRunner:
     def __init__(self,*args,cloud_config=None,local_config=None):
+        # Historical experiment harness only; the app uses CloudRecordingRouter.
+        from .moss_meeting import MossRecordingRunner
         self.runners = {'deepgram':DeepgramRecordingRunner(*args,config=cloud_config),
                         'moss-q6-k':MossRecordingRunner(*args,config=local_config)}
         self.selected = 'deepgram'
@@ -45,3 +46,25 @@ class ModelRecordingRunner:
         self.closed = True
         for runner in self.runners.values():
             await runner.close()
+
+
+class CloudRecordingRouter(DeepgramRecordingRunner):
+    """Production app route: one cloud stream, no local model construction."""
+    def __init__(self,*args,cloud_config=None):
+        super().__init__(*args,config=cloud_config)
+
+    def profiles(self):
+        return {'deepgram':self.cloud.public()}
+
+    def select_model(self,model):
+        if model != 'deepgram' or self.closed or self.active_id or (self.task and not self.task.done()):
+            raise ValueError('Only cloud streaming transcription is available; wait for active work')
+
+    def start(self,selection,metadata,title,*,consent_confirmed):
+        return super().start(selection,{**metadata,'engine':'deepgram'},title,
+                             consent_confirmed=consent_confirmed)
+
+    def resume(self,sid,*,language='auto',cloud_consent=False):
+        if self.store.segments(sid) and self.store.transcript_provider(sid) != 'deepgram':
+            raise ValueError('Use Transcribe again to replace a historical local transcript')
+        return super().resume(sid,language=language,cloud_consent=cloud_consent)
