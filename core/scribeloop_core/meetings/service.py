@@ -34,12 +34,28 @@ class DiscoveryService:
         self._observed_at = None
         self._task = None
         self._previous = None
+        self.enabled = True
         self._lock = asyncio.Lock()
 
     async def start(self):
         await self.refresh()
         if self._has_providers:
             self._task = asyncio.create_task(self._run())
+
+    async def set_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('Invalid detection state')
+        if enabled == self.enabled:
+            return
+        self.enabled = enabled
+        if enabled:
+            await self.start()
+        else:
+            await self.close()
+            self._detector = MeetingDetector(self._apps, debounce_s=self._debounce_s)
+            self._incarnation = uuid4().hex
+            self._observed_at = None
+        await self._broadcast()
 
     async def close(self):
         if self._task:
@@ -101,7 +117,8 @@ class DiscoveryService:
     def snapshot(self):
         available = self._detector.available and self._fresh(self._observed_at)
         return {
-            'status': ('disabled' if self._observer is None else
+            'enabled': self.enabled,
+            'status': ('paused' if not self.enabled else 'disabled' if self._observer is None else
                        'available' if available else 'unavailable'),
             'recording_enabled': False,
             'activity': dict(self._detector.activity) if available else {},

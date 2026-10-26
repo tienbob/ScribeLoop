@@ -31,7 +31,7 @@ struct ScribeLoopM0App: App {
 
 struct FixtureWindow: View {
     @ObservedObject var core: CoreSupervisor
-    private let paper = Color(red: 0.96, green: 0.95, blue: 0.92)
+    private let paper = Color(nsColor: .windowBackgroundColor)
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 20) {
@@ -46,7 +46,8 @@ struct FixtureWindow: View {
                     }
                 }.listStyle(.sidebar)
                 Label("No recording or cloud calls", systemImage: "lock.shield").font(.caption)
-            }.padding(22).background(paper)
+            }.padding(22).background(Color(nsColor: .controlBackgroundColor))
+            .navigationSplitViewColumnWidth(min: 260, ideal: 290, max: 380)
         } detail: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -92,7 +93,7 @@ struct FixtureWindow: View {
             Button("Reconnect", systemImage: "link") { core.reconnect() }.disabled(!core.running)
             if core.running { Button("Stop core", systemImage: "stop.circle") { core.stop() } }
             else { Button("Start core", systemImage: "play.circle") { core.start() } }
-        }.tint(Color(red: 0.19, green: 0.36, blue: 0.27))
+        }.foregroundStyle(.primary).tint(.accentColor)
     }
     private func check(_ title: String, _ value: Bool?) -> some View {
         GridRow { Text(title); Label(value == true ? "Verified" : "Waiting", systemImage: value == true ? "checkmark.seal.fill" : "circle").foregroundStyle(value == true ? Color.green : Color.secondary) }

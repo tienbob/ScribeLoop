@@ -32,7 +32,7 @@ def test_fixture_network_policy():
             deny_external_network('socket.connect', (None, address))
 
 
-def test_encrypted_fixture_auth_and_read_only(tmp_path, monkeypatch):
+def test_encrypted_fixture_auth_and_read_only(tmp_path, monkeypatch, require_sqlcipher):
     # These credentials must never become configured providers in the fixture.
     monkeypatch.setenv('OPENAI_API_KEY', 'must-not-be-used')
     monkeypatch.setenv('DEEPGRAM_API_KEY', 'must-not-be-used')

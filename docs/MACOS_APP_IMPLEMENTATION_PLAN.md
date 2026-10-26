@@ -1,6 +1,6 @@
 # macOS desktop app — proposed implementation plan
 
-Drafted and audited 2026-10-26. **Planning only; native desktop implementation has not started.**
+Drafted and audited 2026-10-26. **M0 fixture implemented; production desktop implementation in progress.**
 Baseline: audited Phase 2b core `314dcbc`, merged through `0003b87`
 ([PR #5](https://github.com/tienbob/ScribeLoop/pull/5)).
 See the [pre-implementation plan audit](MACOS_APP_PLAN_AUDIT.md).
@@ -319,3 +319,77 @@ M0 fixture implementation is available. Broader packaging failure injection,
 older-OS compatibility and release-signing/TCC proof remain open gates; do not
 interpret this spike as a production-ready desktop app. M1 production host/data
 integration is next, following the audited plan.
+
+
+## Full desktop implementation authorized — 2026-10-26
+
+Build the local production app on `feature/macos-desktop-app`, preserving the M0
+fixture as a separate build. Implement M1–M4 together in dependency order:
+
+1. Private desktop bootstrap with a selected encrypted database path, bundled
+   helpers and environment-independent provider settings stored in Keychain.
+   No automatic developer `.env` import or existing-store migration.
+2. Protocol v2 envelopes with bounded request receipts/status lookup, boot/event
+   identity, bounded history/transcript pages and revision invalidation. Reconnect
+   reads state and never replays mutations. Settings changes require idle state.
+3. Native first-use agreement, secure settings, manual microphone/application
+   recording and source-aware detected-call Record / Not now. Menu bar Stop remains
+   available without the main window. Pausing stops backend observation while idle.
+4. Native saved-meeting workspace: paged transcript and speaker corrections,
+   cited summaries/section notes, bounded audio playback, archive, explicit rerun,
+   export, delete/recovery, people and recording presets. Existing stores can be
+   explicitly selected in place; new installs use Application Support.
+5. Package an independently named ScribeLoop.app and validate with injected fake
+   transports and synthetic data, compile/build, full regression tests and bundled
+   lifecycle checks. Never make paid provider requests or start physical capture as
+   an implementation test. Physical calls and signed distribution remain separate
+   acceptance; Developer ID/notarization remain deferred.
+
+Use local ad-hoc signing and conservatively host-only minimum OS until older-host
+validation. Do not claim M5 physical or M6 release acceptance from synthetic tests.
+
+
+### Native contrast correction — 2026-10-26
+
+Screenshot inspection found a fixed pale background combined with dark-appearance
+white text, making the workspace unreadable. Replace fixed paper colors with
+semantic macOS surfaces and primary/secondary foregrounds, use the system accent
+for controls, and constrain sidebar width. Rebuild both desktop and preview app,
+then inspect screenshots of notes, transcript and preferences before acceptance.
+
+### Full desktop local implementation evidence — 2026-10-26
+
+The production development artifact is `dist/macos/ScribeLoop.app`; build/setup
+instructions are in [DESKTOP.md](../packaging/macos/DESKTOP.md). The M0 app remains
+separate. Production bootstrap uses protocol 2, a private parent pipe, random-token
+WebSocket and explicit selected encrypted store. Provider configuration is injected
+from Keychain, never repository `.env` or inherited provider-key environment values.
+
+Implemented native agreement/settings, metadata discovery and idle pause, compact
+source-aware call review, manual microphone/app/system recording, live words and
+speaker labels, menu Stop, dated meetings/topic titles, paged history/transcripts,
+citation navigation, notes, bounded playback, archive/rerun, export, recovery/resume,
+manual people links and speaker corrections, and in-place store selection. Requests
+have bounded boot-scoped receipts; reconnect reads state/status without replay.
+Unknown mutations require explicit state review. Provider changes are frozen while
+capture or text work is active. Native UI caches at most 120 history entries and
+one 100-segment transcript page, with at most one five-minute decoded audio window.
+
+Validation: 420 Python tests pass, 15 frontend regression groups pass, module-tree
+import smoke passes. Production Swift sources compile and the approximately 81 MB
+app is ad-hoc signed. Bundle audit inspects 91 Mach-O binaries: no external
+non-system dependency/rpath, credentials, recordings or local model weights found.
+Separate preview native smoke passes through 230-row paging, agreement, settings,
+reconnect, backend pause and owned shutdown. A generated-PCM/fake-WebSocket test
+proves live speaker text before Stop, duplicate request suppression, settings freeze,
+reconnect preserving capture and one existing stream per selected track without a
+full rerun. Screenshots verified readable notes, transcript and preferences in dark
+appearance after the contrast correction. No physical capture, production Keychain
+or paid provider request was used for validation.
+
+M1–M4 local implementation is available, with physical/OS acceptance still open.
+This does not complete M5 physical validation or M6 distribution. Pending checks:
+real permission attribution and call timing, sleep/wake/device changes, login-item
+OS approval, minimum-OS/clean-Mac runtime support, signed upgrade access and
+notarization/installer release. The build conservatively requires the current host
+macOS version until compatibility is tested. Signing deferral remains in effect.

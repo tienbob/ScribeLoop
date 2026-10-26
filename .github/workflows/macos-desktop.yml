@@ -1,0 +1,31 @@
+name: macOS desktop
+on:
+  pull_request:
+    paths:
+      - 'shell/macos/**'
+      - 'packaging/macos/**'
+      - 'core/**'
+      - 'tests/test_desktop*'
+      - '.github/workflows/macos-desktop.yml'
+  workflow_dispatch:
+jobs:
+  native:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile native production UI
+        run: |
+          xcrun swiftc -parse-as-library -swift-version 5 -O \
+            -module-cache-path "$RUNNER_TEMP/swift-cache" \
+            shell/macos/Desktop/DesktopClient.swift \
+            shell/macos/Desktop/DesktopApp.swift \
+            shell/macos/Desktop/Preferences.swift \
+            -o "$RUNNER_TEMP/ScribeLoop"
+      - name: Compile isolated fixture UI
+        run: |
+          xcrun swiftc -parse-as-library -swift-version 5 \
+            -module-cache-path "$RUNNER_TEMP/swift-cache" \
+            shell/macos/ScribeLoop/CoreSupervisor.swift \
+            shell/macos/ScribeLoop/ScribeLoopApp.swift \
+            -o "$RUNNER_TEMP/ScribeLoopM0"

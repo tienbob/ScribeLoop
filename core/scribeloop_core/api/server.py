@@ -165,12 +165,13 @@ class DismissCandidate(BaseModel):
 
 def create_app(*, database=None, fixtures=None, backend_factory=None,
                storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
-               require_launch_key=True, summary_provider=None) -> tuple[FastAPI, str]:
+               require_launch_key=True, summary_provider=None, desktop=None, launch_token=None,
+               source_factory=None, permission_request=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
         raise ValueError('Disk storage requires an explicit storage mode and database path')
-    token = new_token() if require_launch_key else ''
+    token = (launch_token or new_token()) if require_launch_key else ''
     # No provider request or health probe occurs during startup.
     summary_task = None
     auto_monitor = AutoCallMonitor()
@@ -365,6 +366,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = SessionStore(conn)
             store.recover()
             app.state.store = store
+            app.state.desktop_database = Path(database).resolve() if database else None
             app.state.runner = ReplayRunner(store, backend_factory, publish)
             app.state.storage = storage
             app.state.recording = None
@@ -377,7 +379,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           key_store if key_store is not None else NativeKeyStore())
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
-                    if recording_factory else CloudRecordingRouter(store,audio,MacOSMeetingAudioSource,publish,cloud_config=cloud_config))
+                    if recording_factory else CloudRecordingRouter(store,audio,(source_factory or MacOSMeetingAudioSource),publish,cloud_config=cloud_config))
                 from ..storage.retained_audio import RetainedAudio
                 app.state.audio = RetainedAudio(store,audio)
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
@@ -422,6 +424,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
+    app.state.desktop_contract = desktop
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]'])
 
     @app.middleware('http')
@@ -441,16 +444,22 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
     @app.get('/')
     async def index():
+        if desktop:
+            return HTMLResponse('Desktop API only', status_code=404)
         html = (STATIC/'index.html').read_text(encoding='utf-8')
         return HTMLResponse(html.replace('<html lang="en">',
             '<html lang="en" data-require-launch-key="'+str(require_launch_key).lower()+'">'))
 
     @app.get('/app.js')
     async def javascript():
+        if desktop:
+            return HTMLResponse('', status_code=404)
         return FileResponse(STATIC / 'app.js', media_type='text/javascript')
 
     @app.get('/app.css')
     async def stylesheet():
+        if desktop:
+            return HTMLResponse('', status_code=404)
         return FileResponse(STATIC / 'app.css', media_type='text/css')
 
     @app.websocket('/ws')
@@ -477,6 +486,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             return text
 
         async def send(event):
+            if desktop:
+                event = desktop.event(event)
+                desktop.check_size(event)
             await asyncio.wait_for(ws.send_json(event), timeout=SEND_TIMEOUT_S)
 
         try:
@@ -487,32 +499,37 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     return
             clients.add(queue)
             store = app.state.store
-            history = store.list()
-            await send({'type': 'snapshot', 'fixtures': fixture_rows,
-                'agreement':store.agreement(),
-                'people':SpeakerRegistry(store).list(),
-                'summary_budgets':{row['id']:RollingNotes(store,summary_provider).public(row['id']) for row in history},
-                'rolling_notes':{row['id']:RollingNotes(store,summary_provider).latest(row['id']) for row in history if row['source']=='meeting'},
-                'audio_states':{s['id']:app.state.audio.status(s['id']) for s in history if app.state.audio and s['source']=='meeting'},
-                'auto_call':{'session_id':auto_monitor.session_id},
-                'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
-                'summary_active_id':getattr(summary_task,'session_id',None),
-                'grounded_summaries':{s['id']:store.grounded_summary(s['id']) for s in history},
-                'sessions': history, 'active_id': app.state.runner.active_id or
-                    (app.state.recording.active_id if app.state.recording else None),
-                'recording_available': app.state.recording is not None,
-                'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
-                'transcription_models': {'deepgram':app.state.recording.profiles()['deepgram']} if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
-                'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
-                'replay_available': not app.state.runner.unavailable,
-                'replay_enabled': explicit_replay_backend, 'storage': app.state.storage,
-                'discovery': app.state.discovery.snapshot(),
-                'segments': {s['id']: store.segments(s['id']) for s in history},
-                'transcript_revisions': {s['id']: store.revisions(s['id']) for s in history},
-                'notes': {s['id']: store.notes(s['id']) for s in history},
-                'language_locks': {s['id']:store.language_lock(s['id']) for s in history},
-                'speaker_turns': {s['id']:store.turns(s['id']) for s in history},
-                'checkpoints': {s['id']:store.checkpoints(s['id']) for s in history}})
+            if desktop:
+                await send(desktop.snapshot(app, summary_provider,
+                    app.state.runner.active_id or (app.state.recording.active_id if app.state.recording else None),
+                    getattr(summary_task,'session_id',None)))
+            else:
+                history = store.list()
+                await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                    'agreement':store.agreement(),
+                    'people':SpeakerRegistry(store).list(),
+                    'summary_budgets':{row['id']:RollingNotes(store,summary_provider).public(row['id']) for row in history},
+                    'rolling_notes':{row['id']:RollingNotes(store,summary_provider).latest(row['id']) for row in history if row['source']=='meeting'},
+                    'audio_states':{s['id']:app.state.audio.status(s['id']) for s in history if app.state.audio and s['source']=='meeting'},
+                    'auto_call':{'session_id':auto_monitor.session_id},
+                    'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
+                    'summary_active_id':getattr(summary_task,'session_id',None),
+                    'grounded_summaries':{s['id']:store.grounded_summary(s['id']) for s in history},
+                    'sessions': history, 'active_id': app.state.runner.active_id or
+                        (app.state.recording.active_id if app.state.recording else None),
+                    'recording_available': app.state.recording is not None,
+                    'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
+                    'transcription_models': {'deepgram':app.state.recording.profiles()['deepgram']} if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
+                    'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
+                    'replay_available': not app.state.runner.unavailable,
+                    'replay_enabled': explicit_replay_backend, 'storage': app.state.storage,
+                    'discovery': app.state.discovery.snapshot(),
+                    'segments': {s['id']: store.segments(s['id']) for s in history},
+                    'transcript_revisions': {s['id']: store.revisions(s['id']) for s in history},
+                    'notes': {s['id']: store.notes(s['id']) for s in history},
+                    'language_locks': {s['id']:store.language_lock(s['id']) for s in history},
+                    'speaker_turns': {s['id']:store.turns(s['id']) for s in history},
+                    'checkpoints': {s['id']:store.checkpoints(s['id']) for s in history}})
 
             async def send_events():
                 nonlocal playback_pending
@@ -526,15 +543,49 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         return
 
             async def receive_commands():
-                nonlocal summary_task,playback_pending
+                nonlocal summary_task,playback_pending,summary_provider
                 while True:
                     command = None
                     owns_playback = False
+                    dispatch_id = None
                     try:
-                        raw = await text_frame(4096)
+                        raw = await text_frame(12288 if desktop else 4096)
                         command = json.loads(raw)
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
+                        if desktop:
+                            dispatch_id, command = desktop.unwrap(command)
+                            if dispatch_id in desktop.receipts:
+                                await queue.put(desktop.receipts[dispatch_id])
+                                continue
+                            action = command.get('action')
+                            response = await desktop.read(app,command,summary_provider,
+                                app.state.recording.active_id if app.state.recording else None,
+                                getattr(summary_task,'session_id',None))
+                            if response is not None:
+                                await queue.put({**response,'response_to':dispatch_id})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            desktop.receipt(dispatch_id,'dispatching')
+                            if action == 'save_settings':
+                                if recording_busy() or summary_task is not None or auto_tasks or set(command)!={'action','settings'}:
+                                    raise ValueError('Wait for all processing before changing providers')
+                                desktop.settings.save(command['settings'])
+                                summary_provider = desktop.settings.value.summary()
+                                if app.state.recording:
+                                    app.state.recording.base_config = desktop.settings.value.cloud()
+                                    app.state.recording.cloud = app.state.recording.base_config
+                                await publish({'type':'settings','settings':desktop.settings.value.public(),
+                                    'summary_provider':summary_provider.public(),
+                                    'transcription':app.state.recording.cloud.public() if app.state.recording else {}})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action == 'set_detection':
+                                if recording_busy() or set(command)!={'action','enabled'}:
+                                    raise ValueError('Stop recording before pausing observation')
+                                await app.state.discovery.set_enabled(command['enabled'])
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                         action = command.get('action')
                         retained = app.state.audio
                         if retained and retained.busy and action in {'record','accept_call','resume','reprocess','recover','delete','retention','archive_audio','play_audio'}:
@@ -545,6 +596,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if not store.agreement()['accepted']:
                                 await queue.put({'type':'error','context':'meeting',
                                     'message':'Accept the first-use agreement before recording or processing.'})
+                                if desktop:
+                                    await queue.put(desktop.receipt(dispatch_id,'rejected'))
                                 continue
                             # Legacy wire fields are accepted, but authorization now comes
                             # exclusively from the durable, versioned app agreement.
@@ -603,7 +656,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if set(command) != {'action'} or app.state.recording is None:
                                 raise ValueError('Permission request unavailable')
                             from ..capture.devices import request_microphone_access
-                            await asyncio.to_thread(request_microphone_access)
+                            await asyncio.to_thread(permission_request or request_microphone_access)
                             await app.state.discovery.refresh()
                         elif command.get('action') == 'accept_call':
                             request = AcceptCall.model_validate(command)
@@ -811,13 +864,25 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await app.state.discovery.dismiss(request.candidate_id)
                         else:
                             raise ValueError('Unknown command')
+                        if desktop:
+                            await queue.put(desktop.receipt(dispatch_id,'accepted'))
                     except (ValueError, ValidationError, TypeError, OSError, KeyUnavailable, *DATABASE_ERRORS):
+                        if desktop and dispatch_id:
+                            await queue.put(desktop.receipt(dispatch_id,'rejected'))
                         if owns_playback:
                             playback_pending = False
                         if queue.full():
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
+                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status'}:
+                            queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
+                                'message':('Settings were not saved. Wait for processing to finish, check the URL/model/key fields and Keychain access.'
+                                    if action=='save_settings' else
+                                    'Stop recording before changing detection. The previous detection state remains available in Preferences.'
+                                    if action=='set_detection' else
+                                    'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
+                            continue
                         meeting = (isinstance(action, str) and action
                                    in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',

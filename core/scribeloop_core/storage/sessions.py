@@ -169,15 +169,18 @@ class SessionStore:
             'WHERE r.session_id=? GROUP BY r.session_id,r.revision ORDER BY r.revision DESC',
             (session_id,))]
 
-    def segments(self, session_id: str, *, revision: int | None = None):
+    def segments(self, session_id: str, *, revision: int | None = None,
+                 limit: int | None = None, offset: int = 0):
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError('Invalid transcript revision')
+        if (limit is not None and (type(limit) is not int or not 1 <= limit <= 201)) or type(offset) is not int or offset < 0:
+            raise ValueError('Invalid transcript page')
         rows = [dict(row) for row in self.conn.execute(
             'SELECT segments.*, session_speakers.local_label AS speaker_label FROM segments '
             'LEFT JOIN session_speakers ON session_speakers.id=segments.local_speaker_id '
             'WHERE segments.session_id=? AND revision=COALESCE(?,('
-            'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid',
-            (session_id, revision, session_id))]
+            'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid LIMIT ? OFFSET ?',
+            (session_id, revision, session_id, limit if limit is not None else -1, offset))]
         if not rows:
             return rows
         edits = {row['speaker_id']:dict(row) for row in self.conn.execute(
