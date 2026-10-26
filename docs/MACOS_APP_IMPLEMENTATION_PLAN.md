@@ -288,3 +288,34 @@ launch and clean exit, and record dependency/size/RSS/startup evidence. This spi
 must not touch real credentials/data, request microphone permission or call cloud
 providers. Complete the M0 decision record before the M1 production adapter and
 the full native UI. Signing and relocation remain explicit later gates.
+
+## M0 implementation started — 2026-10-26
+
+Use the installed `/Applications/Xcode.app` through per-command `DEVELOPER_DIR`;
+do not change the machine's global Xcode selection. Implement only the isolated
+fixture app, private authenticated bootstrap, bundled cloud-only Python runtime,
+read-only encrypted synthetic history and owned-child shutdown. The fixture backend
+must expose no recording, permission or provider commands and read no `.env` or
+production Keychain/data. Freeze from a separate environment, not the ML-heavy dev
+virtualenv. Validate bootstrap failures, auth, Finder-like launch, dependency paths,
+Swift build and explicit smoke/reconnect/shutdown. Real permissions/credentials and
+production UI remain M1+ work.
+
+### M0 fixture evidence — 2026-10-26
+
+Implemented on `feature/macos-m0-fixture`: native SwiftUI notebook/menu bar,
+owned bundled sidecar, private bounded stdin bootstrap and random-token WebSocket,
+read-only synthetic encrypted history and native-library probes. Separate packaging
+environment excludes local ML extras. Xcode 27.1 builds an approximately 80 MB
+ad-hoc signed host-only app. See [build and verification instructions](../packaging/macos/README.md).
+
+Validation: 412 Python tests pass; native startup/reconnect/same-session/shutdown
+smoke passes (~0.64 s); explicit STOP and parent EOF pass; 91 Mach-O binaries have
+no unbundled non-system dependency paths. Native window inspection shows Connected,
+the generated transcript and four verified storage/library checks. No production
+Keychain, capture permissions, provider keys or real recordings were used.
+
+M0 fixture implementation is available. Broader packaging failure injection,
+older-OS compatibility and release-signing/TCC proof remain open gates; do not
+interpret this spike as a production-ready desktop app. M1 production host/data
+integration is next, following the audited plan.
