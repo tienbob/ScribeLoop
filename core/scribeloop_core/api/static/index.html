@@ -52,7 +52,12 @@
 </details>
 <p id="live-progress" class="scope" role="status"></p>
 <p id="cloud-usage" class="scope" role="status"></p>
-<section id="speaker-roster" class="speaker-roster" aria-labelledby="speaker-roster-heading"><div class="roster-heading"><h3 id="speaker-roster-heading">Voices in this conversation</h3><span id="speaker-count" class="section-label">AWAITING SPEECH</span></div><div id="speaker-list" class="speaker-list" role="list" aria-label="Detected speakers"></div><p id="speaker-status" class="scope">Anonymous labels appear with confirmed speech. They are not verified names.</p></section>
+<section id="speaker-roster" class="speaker-roster" aria-labelledby="speaker-roster-heading"><div class="roster-heading"><h3 id="speaker-roster-heading">Voices in this conversation</h3><span id="speaker-count" class="section-label">AWAITING SPEECH</span></div><div id="speaker-list" class="speaker-list" role="list" aria-label="Detected speakers"></div><div id="speaker-editor" class="speaker-editor" hidden>
+<p class="scope">Correct names in this saved transcript. Merge only labels from the same track and model generation.</p>
+<div class="speaker-edit-grid"><label>Speaker to correct<select id="edit-speaker" aria-label="Speaker to correct"></select></label><label>Display name<input id="speaker-name" maxlength="80" autocomplete="off" placeholder="e.g. Alex" /></label><button id="rename-speaker" type="button">Save name</button></div>
+<div class="speaker-edit-grid"><label>Merge selected speaker into<select id="merge-target" aria-label="Merge selected speaker into"></select></label><button id="merge-speaker" type="button">Merge labels</button></div>
+<p id="speaker-edit-status" class="scope" role="status" aria-live="polite"></p>
+</div><p id="speaker-status" class="scope">Anonymous labels appear with confirmed speech. They are not verified names.</p></section>
 <div id="transcript-update" class="sr-only" role="status"></div>
 <div id="transcript"><div class="empty"><span class="empty-mark" aria-hidden="true">“</span><h3>Every good note starts<br>with listening.</h3><p>Set up a meeting above. Cloud text appears live; Local MOSS text appears after Stop.</p><span class="empty-rule"></span></div></div>
 <details id="notes-section" class="notes-section" hidden><summary>Transcript excerpts</summary><p class="scope">A text copy of this transcript. These excerpts are not a generated meeting summary.</p><pre id="meeting-notes" class="meeting-notes"></pre></details>

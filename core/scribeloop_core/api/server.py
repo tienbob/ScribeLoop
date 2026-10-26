@@ -94,6 +94,16 @@ class SavedMeeting(BaseModel):
     model: Literal['deepgram','moss-q6-k'] = 'deepgram'
 
 
+class SpeakerCorrection(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['rename_speaker','merge_speaker']
+    session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    revision: int = Field(ge=1)
+    speaker_id: str = Field(min_length=1,max_length=180)
+    label: str | None = Field(default=None,min_length=1,max_length=80)
+    merge_target: str | None = Field(default=None,min_length=1,max_length=180)
+
+
 class RetentionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['retention']
@@ -306,6 +316,22 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             from ..capture.devices import request_microphone_access
                             await asyncio.to_thread(request_microphone_access)
                             await app.state.discovery.refresh()
+                        elif command.get('action') in {'rename_speaker','merge_speaker'}:
+                            request = SpeakerCorrection.model_validate(command)
+                            recorder = app.state.recording
+                            if (app.state.runner.active_id or (recorder and
+                                    (recorder.active_id or (recorder.task and not recorder.task.done())))):
+                                raise ValueError('Wait for active work to finish')
+                            if ((request.action == 'rename_speaker' and
+                                    (request.label is None or request.merge_target is not None)) or
+                                    (request.action == 'merge_speaker' and
+                                    (request.merge_target is None or request.label is not None))):
+                                raise ValueError('Invalid correction fields')
+                            store.correct_speaker(request.session_id,request.revision,request.speaker_id,
+                                label=request.label,merge_target=request.merge_target)
+                            await publish({'type':'speakers_corrected','session_id':request.session_id,
+                                'segments':store.segments(request.session_id),
+                                'notes':store.notes(request.session_id)})
                         elif command.get('action') == 'reprocess':
                             request = ReprocessRecording.model_validate(command)
                             if not app.state.recording or app.state.runner.active_id:
@@ -387,10 +413,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
-                            'message': ('Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
+                            'message': ('Speaker correction rejected. Reopen the saved transcript; choose a valid name or a speaker from the same track and generation.'
+                            if action in {'rename_speaker','merge_speaker'} else
+                            'Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
                             if action in {'recover','resume','delete','retention'} else
                             'Source unavailable or suggestion expired. Choose again manually.')
                             if meeting else

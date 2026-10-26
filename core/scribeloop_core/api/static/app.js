@@ -17,7 +17,7 @@ let sourceRequest = 0, pendingSource = null, chosenSource = null;
 let renderedCandidates = '', renderedApps = '', renderedMicrophones = '';
 let microphoneNeedsChoice = false, connecting = false;
 const historyNodes = new Map(), transcriptNodes = new Map();
-let transcriptView = '', rosterView = '';
+let transcriptView = '', rosterView = '', speakerPending = false;
 const languageNames={en:'English',vi:'Tiếng Việt',zh:'Chinese',es:'Spanish',fr:'French',de:'German',hi:'Hindi',ru:'Russian',pt:'Portuguese',ja:'Japanese',it:'Italian',nl:'Dutch'};
 function selectedModel(saved=false) { return $(saved ? 'saved-model' : 'meeting-model').value || 'deepgram'; }
 function profile(saved=false) { return modelProfiles[selectedModel(saved)] || transcription; }
@@ -34,15 +34,46 @@ function modelLanguages(id,p) {
 function languageName(code) { return languageNames[code] || code; }
 function voiceNumber(label) { return Math.max(0,(Number(/Speaker (\d+)/.exec(label || '')?.[1]) || 1)-1); }
 function avatar(label) { const el=document.createElement('span'); el.className='speaker-avatar'; el.textContent=/Speaker (\d+)/.exec(label || '')?.[1] || '?'; el.setAttribute('data-voice',String(voiceNumber(label)%6)); el.setAttribute('aria-hidden','true'); return el; }
+function correctionRows() {
+  return [...new Map((segments.get(selectedId)||[]).filter(r=>r.display_speaker_id || r.local_speaker_id).map(r=>[r.display_speaker_id || r.local_speaker_id,r])).values()];
+}
+function renderMergeTargets() {
+  const identity=$('edit-speaker').value;
+  const rows=correctionRows(), row=rows.find(r=>(r.display_speaker_id || r.local_speaker_id) === identity);
+  $('speaker-name').value=row?.speaker_label || '';
+  $('merge-target').replaceChildren();
+  const placeholder=document.createElement('option'); placeholder.value=''; placeholder.textContent='Choose a matching label…'; $('merge-target').append(placeholder);
+  for(const target of rows) {
+    const id=target.display_speaker_id || target.local_speaker_id;
+    if(id === identity || id.slice(0,id.lastIndexOf(':')) !== identity.slice(0,identity.lastIndexOf(':'))) continue;
+    const option=document.createElement('option'); option.value=id; option.textContent=target.speaker_label; $('merge-target').append(option);
+  }
+  $('merge-target').value=''; correctionButtons();
+}
+function correctionButtons() {
+  const disabled=$('speaker-editor').hidden || speakerPending;
+  $('rename-speaker').disabled=disabled || !$('edit-speaker').value || !$('speaker-name').value.trim();
+  $('merge-speaker').disabled=disabled || !$('merge-target').value;
+}
 function renderSpeakers(session,rows) {
   $('speaker-roster').hidden = session != null && session.source !== 'meeting';
+  const editable=Boolean(authenticated && !activeId && !recordPending && !speakerPending &&
+    ![...sessions.values()].some(s=>s.status === 'processing') && session?.source === 'meeting' &&
+    ['completed','failed','interrupted'].includes(session.status) && correctionRows().length);
+  $('speaker-editor').hidden=!editable;
   const speakers=new Map();
-  rows.forEach(row=>{if(row.speaker_label) speakers.set(row.speaker_label,row.stream === 'mic' ? 'Microphone' : 'Meeting audio');});
-  const signature=JSON.stringify([selectedId,Boolean(rows.length),[...speakers]]);
-  if(signature === rosterView) return;
+  rows.forEach(row=>{if(row.speaker_label) speakers.set(row.display_speaker_id || row.local_speaker_id || `${row.stream}:${row.speaker_label}`,row);});
+  if(speakers.size) text('speaker-status','Anonymous speaker labels are scoped to each track and model generation. Names and merges are manual corrections for this transcript.');
+  const signature=JSON.stringify([selectedId,editable,[...speakers]]);
+  if(signature === rosterView) { correctionButtons(); return; }
   rosterView=signature; $('speaker-list').replaceChildren();
-  for(const [label,source] of speakers) { const chip=document.createElement('div'); chip.className='speaker-chip'; chip.setAttribute('role','listitem'); const name=document.createElement('span'); name.textContent=label; const scope=document.createElement('small'); scope.textContent=source; chip.append(avatar(label),name,scope); $('speaker-list').append(chip); }
+  for(const row of speakers.values()) { const chip=document.createElement('div'); chip.className='speaker-chip'; chip.setAttribute('role','listitem'); const name=document.createElement('span'); name.textContent=row.speaker_label; const scope=document.createElement('small'); scope.textContent=row.stream === 'mic' ? 'Microphone' : 'Meeting audio'; chip.append(avatar(row.speaker_label),name,scope); $('speaker-list').append(chip); }
   text('speaker-count',speakers.size ? `${speakers.size} SPEAKER LABEL${speakers.size === 1 ? '' : 'S'}` : rows.length ? 'NO SPEAKER LABELS' : 'AWAITING SPEECH');
+  const previous=$('edit-speaker').value;
+  $('edit-speaker').replaceChildren();
+  for(const row of correctionRows()) { const option=document.createElement('option'); option.value=row.display_speaker_id || row.local_speaker_id; option.textContent=`${row.speaker_label} · ${row.stream === 'mic' ? 'Microphone' : 'Meeting audio'}`; $('edit-speaker').append(option); }
+  $('edit-speaker').value=correctionRows().some(r=>(r.display_speaker_id || r.local_speaker_id) === previous) ? previous : (correctionRows()[0]?.display_speaker_id || correctionRows()[0]?.local_speaker_id || '');
+  renderMergeTargets();
 }
 function text(id, value) { if ($(id).textContent !== value) $(id).textContent = value; }
 function scopeDescription(source) {
@@ -374,6 +405,7 @@ function connect() {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
     if (data.type === 'snapshot') {
+      speakerPending=false;
       connecting=false; notice('');
       authenticated = true; recordingAvailable = data.recording_available === true; recordPending=false;
       notes = new Map(Object.entries(data.notes || {}));
@@ -435,6 +467,9 @@ function connect() {
       recordPending=false; $('retention-consent').checked=false; notice(`Removed ${data.deleted} expired meetings.`); render();
     } else if (data.type === 'language_locked') {
       languageLocks.set(data.session_id,data); render();
+    } else if (data.type === 'speakers_corrected') {
+      speakerPending=false; segments.set(data.session_id,data.segments); notes.set(data.session_id,data.notes);
+      text('speaker-edit-status','Speaker corrections saved.'); render();
     } else if (data.type === 'transcript_replaced') {
       segments.set(data.session_id,data.segments); text('transcript-update','Transcript replaced with the completed pass.'); render();
     } else if (data.type === 'notes') {
@@ -463,10 +498,11 @@ function connect() {
     } else if (data.type === 'replay_unavailable') {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
+      speakerPending=false;
       if (data.context === 'meeting') {
         recordPending=false; notice(data.message);
         if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
-        renderDiscovery();
+        render();
       } else { stopPending=false; notice(data.message); render(); }
     }
     else if (data.type === 'reconnect_required') notice('The connection fell behind. Reconnecting restores saved text.');
@@ -544,3 +580,18 @@ $('meeting-language').onchange=renderDiscovery;
 $('reprocess-language').onchange=render;
 $('meeting-model').onchange=()=>{ $('cloud-consent').checked=false; render(); };
 $('saved-model').onchange=()=>{ $('saved-cloud-consent').checked=false; render(); };
+
+$('edit-speaker').onchange=renderMergeTargets;
+$('speaker-name').oninput=correctionButtons;
+$('merge-target').onchange=correctionButtons;
+function correctSpeaker(action) {
+  const button=$(action === 'rename_speaker' ? 'rename-speaker' : 'merge-speaker');
+  if(button.disabled) return;
+  const rows=segments.get(selectedId)||[];
+  speakerPending=send({action,session_id:selectedId,revision:rows[0]?.revision,
+    speaker_id:$('edit-speaker').value,...(action === 'rename_speaker' ?
+    {label:$('speaker-name').value.trim()} : {merge_target:$('merge-target').value})});
+  text('speaker-edit-status',speakerPending ? 'Saving speaker corrections…' : 'Reconnect to save corrections.'); render();
+}
+$('rename-speaker').onclick=()=>correctSpeaker('rename_speaker');
+$('merge-speaker').onclick=()=>correctSpeaker('merge_speaker');

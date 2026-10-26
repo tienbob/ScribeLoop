@@ -84,3 +84,35 @@ speaker corrections, summaries and export remain subsequent increments.
 
 Next: speaker rename/merge persistence and API/UI, followed by grounded summaries
 and explicit export. Revision history has no user-facing selection control yet.
+
+## Second increment — speaker corrections (implementation scope)
+
+Add explicit saved-revision rename/merge controls to the existing speaker roster.
+Corrections are presentation mappings scoped to session + revision; original
+segment speaker IDs and older revisions stay intact. Merge only within the same
+source track and provider generation. Reject stale revision IDs, missing speakers,
+active recording/processing, blank/oversized names and cross-scope merges. Apply
+corrections to transcript, roster and regenerated excerpt notes, and restore them
+on reconnect. Store edits and refreshed excerpt notes atomically and remove edits
+on session deletion. No biometric identity learning or cloud request is involved.
+
+### Second increment completed 2026-10-26
+
+- Schema v4 stores revision-specific speaker display names and merge mappings;
+  model speaker IDs and earlier revisions remain unchanged. Chained merges stay
+  flat, and cross-track/cross-generation merges are rejected.
+- Saved speaker roster includes name and merge controls. Authenticated commands
+  validate the selected revision, saved state and speaker membership. Active work
+  blocks editing. Equal display names retain separate roster entries.
+- Correction mappings and regenerated excerpt notes commit atomically. Failed
+  note writes roll back edits; reconnect restores corrected text and notes;
+  session deletion removes the mappings before speaker/revision rows.
+- Validation: **351 Python tests passed**, nine frontend regression groups, Ruff,
+  61-module import smoke and diff checks passed. Brave accessibility and desktop
+  screenshot inspection verified the editor and a successful rename using only
+  invented text in a temporary public demo. Merge persistence/boundaries were
+  verified through API and frontend tests; narrow-layout visual QA remains open.
+  The temporary server was stopped. No audio devices or cloud ASR were used.
+
+Next: grounded structured summaries and explicit Markdown export. External summary
+provider/model and consent must be decided before any outbound transcript request.

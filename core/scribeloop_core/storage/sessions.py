@@ -94,6 +94,7 @@ class SessionStore:
             self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                               + ','.join('?' for _ in row) + ')', tuple(row.values()))
         row['speaker_label'] = self._speaker_label(row.get('local_speaker_id'))
+        row['display_speaker_id'] = row.get('local_speaker_id')
         return row
 
     def get(self, session_id: str):
@@ -146,12 +147,60 @@ class SessionStore:
     def segments(self, session_id: str, *, revision: int | None = None):
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError('Invalid transcript revision')
-        return [dict(row) for row in self.conn.execute(
+        rows = [dict(row) for row in self.conn.execute(
             'SELECT segments.*, session_speakers.local_label AS speaker_label FROM segments '
             'LEFT JOIN session_speakers ON session_speakers.id=segments.local_speaker_id '
             'WHERE segments.session_id=? AND revision=COALESCE(?,('
             'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid',
             (session_id, revision, session_id))]
+        if not rows:
+            return rows
+        edits = {row['speaker_id']:dict(row) for row in self.conn.execute(
+            'SELECT * FROM revision_speaker_edits WHERE session_id=? AND revision=?',
+            (session_id,rows[0]['revision']))}
+        for row in rows:
+            identity = row['local_speaker_id']
+            target = edits.get(identity,{}).get('merge_target') or identity
+            row['display_speaker_id'] = target
+            if target:
+                row['speaker_label'] = edits.get(target,{}).get('label') or self._speaker_label(target)
+        return rows
+
+    def correct_speaker(self, session_id, revision, speaker_id, *, label=None, merge_target=None):
+        """Manual presentation edits; original speaker identities remain untouched."""
+        import unicodedata
+        session = self.get(session_id)
+        if (not session or session['source'] != 'meeting' or
+                session['status'] not in {'completed','failed','interrupted'} or
+                type(revision) is not int or revision != session['transcript_revision']):
+            raise ValueError('Speaker correction requires the current saved revision')
+        if (label is None) == (merge_target is None):
+            raise ValueError('Choose rename or merge')
+        if label is not None:
+            if not isinstance(label,str):
+                raise ValueError('Invalid speaker name')
+            label = label.strip()
+            label.encode('utf-8')
+            if not 1 <= len(label) <= 80 or any(unicodedata.category(c).startswith('C') for c in label):
+                raise ValueError('Invalid speaker name')
+        rows = self.segments(session_id)
+        identities = {r['display_speaker_id'] for r in rows if r['display_speaker_id']}
+        if speaker_id not in identities:
+            raise ValueError('Unknown speaker in selected revision')
+        if merge_target is not None and (merge_target not in identities or merge_target == speaker_id or
+                speaker_id.rsplit(':',1)[0] != merge_target.rsplit(':',1)[0]):
+            raise ValueError('Merge requires distinct speakers from the same source and generation')
+        with self.conn:
+            self.conn.execute('INSERT INTO revision_speaker_edits '
+                '(session_id,revision,speaker_id,label,merge_target) VALUES (?,?,?,?,?) '
+                'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET '
+                'label=excluded.label,merge_target=excluded.merge_target',
+                (session_id,revision,speaker_id,label,merge_target))
+            if merge_target is not None:
+                self.conn.execute('UPDATE revision_speaker_edits SET merge_target=? '
+                    'WHERE session_id=? AND revision=? AND merge_target=?',
+                    (merge_target,session_id,revision,speaker_id))
+            self._write_transcript_notes(session_id)
 
     def create_recording(self, title, metadata):
         session_id = uuid4().hex
@@ -175,14 +224,17 @@ class SessionStore:
                     (str(audio.path(session_id, stream)), session_id, stream))
 
     def create_transcript_notes(self, session_id):
+        with self.conn:
+            return self._write_transcript_notes(session_id)
+
+    def _write_transcript_notes(self, session_id):
         rows = self.segments(session_id)
         content = 'Conversation notes · transcript excerpts\n\n'
         content += '\n'.join(f"[{row['start_ms']//60000}:{row['start_ms']//1000%60:02d}] "
             f"{'Microphone' if row['stream'] == 'mic' else 'Meeting audio'} · {row.get('speaker_label') or 'speaker unknown'}: {row['text']}" for row in rows)
         if not rows:
             content += 'No speech was transcribed. Check capture routing and microphone permission.'
-        with self.conn:
-            self.conn.execute('INSERT INTO summaries '
+        self.conn.execute('INSERT INTO summaries '
                 '(id,session_id,kind,span_start_ms,span_end_ms,content_md,actions_json,model_id,created_at) '
                 'VALUES (?,?,?,?,?,?,?,?,?)', (uuid4().hex, session_id, 'provisional', 0,
                     max((row['end_ms'] for row in rows), default=0), content, '[]',
@@ -334,7 +386,7 @@ class SessionStore:
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
-            for table in ('words','segments','session_speakers','speaker_remaps','speaker_embeddings',
+            for table in ('revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
                           'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'

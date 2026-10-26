@@ -379,3 +379,36 @@ demoSockets[0].readyState=Socket.OPEN;demoSockets[0].onopen();
 assert.equal(demoSockets[0].sent.length,0,'No launch key or fake auth frame is sent');
 assert.equal(demoGet('unlock').open,false);
 console.log('Keyless local demo connects directly without an unlock dialog passed');
+
+const ds=demoSockets[0], demoEvent=data=>ds.onmessage({data:JSON.stringify(data)});
+const sid='d'.repeat(32), gen='a'.repeat(32), other='b'.repeat(32);
+const speakerId=(generation,stream,n)=>`${sid}:deepgram:${generation}:${stream}:${n}`;
+const correctedRows=[['loopback',gen,0],['loopback',gen,1],['mic',gen,0],['loopback',other,0]].map(([stream,generation,n],i)=>({
+ id:`correct-${i}`,stream,start_ms:i*100,end_ms:(i+1)*100,text:`words ${i}`,revision:1,
+ local_speaker_id:speakerId(generation,stream,n),display_speaker_id:speakerId(generation,stream,n),speaker_label:i<2 ? 'Alex' : `Speaker ${i+1}`,
+}));
+demoEvent({type:'snapshot',fixtures:[],sessions:[{id:sid,source:'meeting',status:'completed',title:'Corrections',started_at:1}],
+ active_id:null,replay_available:true,storage:'public-demo',segments:{[sid]:correctedRows},notes:{[sid]:'original notes'}});
+assert.equal(demoGet('speaker-editor').hidden,false);
+assert.match(demoGet('speaker-status').textContent,/manual corrections/);
+assert.equal(demoGet('speaker-list').children.length,4,'Equal names must not collapse distinct identities');
+assert.equal(demoGet('merge-target').children.length,2,'Only the placeholder and same-generation/track target are offered');
+demoGet('speaker-name').value='<script>Minh</script>';demoGet('speaker-name').oninput();
+demoGet('rename-speaker').onclick();
+let correction=JSON.parse(ds.sent.at(-1));
+assert.equal(correction.action,'rename_speaker');assert.equal(correction.revision,1);
+assert.equal(correction.label,'<script>Minh</script>');
+assert.equal(demoGet('speaker-editor').hidden,true,'Disable editing while waiting for persistence');
+const renamed=correctedRows.map((r,i)=>({...r,speaker_label:i===0 ? correction.label : r.speaker_label}));
+demoEvent({type:'speakers_corrected',session_id:sid,segments:renamed,notes:'updated notes'});
+assert.equal(demoGet('speaker-editor').hidden,false);
+assert.equal(demoGet('speaker-list').children[0].children[1].textContent,'<script>Minh</script>');
+assert.equal(demoGet('meeting-notes').textContent,'updated notes');
+demoGet('merge-target').value=correctedRows[1].display_speaker_id;demoGet('merge-target').onchange();demoGet('merge-speaker').onclick();
+correction=JSON.parse(ds.sent.at(-1));assert.equal(correction.action,'merge_speaker');
+assert.equal(correction.merge_target,correctedRows[1].display_speaker_id);
+demoEvent({type:'error',context:'meeting',message:'stale request'});
+assert.equal(demoGet('speaker-editor').hidden,false,'Rejected edits can be retried');
+demoEvent({type:'session',session:{id:sid,source:'meeting',status:'processing',title:'Corrections',started_at:1}});
+assert.equal(demoGet('speaker-editor').hidden,true,'Processing locks speaker corrections');
+console.log('Revision-scoped speaker correction, merge boundaries and safe names passed');
