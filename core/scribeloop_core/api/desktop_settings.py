@@ -11,6 +11,12 @@ from ..storage.keys import KeyUnavailable
 
 SERVICE = 'ai.scribeloop.providers.v1'
 ACCOUNT = 'desktop-settings'
+SUMMARY_PRESETS = {
+    'OpenAI': 'https://api.openai.com/v1',
+    'Gemini': 'https://generativelanguage.googleapis.com/v1beta/openai',
+    'Ollama': 'http://localhost:11434/v1',
+    'LM Studio': 'http://localhost:1234/v1',
+}
 
 
 class Settings(BaseModel):
@@ -56,7 +62,8 @@ class Settings(BaseModel):
     def public(self):
         return {**self.model_dump(exclude={'deepgram_key', 'summary_key'}),
                 'deepgram_configured': bool(self.deepgram_key),
-                'summary_configured': self.summary().configured}
+                'summary_configured': self.summary().configured,
+                'summary_presets': SUMMARY_PRESETS}
 
 
 class DesktopSettings:
@@ -79,6 +86,15 @@ class DesktopSettings:
     def save(self, patch):
         if not isinstance(patch, dict) or len(json.dumps(patch)) > 8192:
             raise ValueError('Invalid settings')
+        patch = dict(patch)
+        provider = patch.get('summary_provider', self.value.summary_provider)
+        if isinstance(provider,str) and provider in SUMMARY_PRESETS and 'summary_provider' in patch:
+            patch['summary_endpoint'] = SUMMARY_PRESETS[provider]
+        destination = patch.get('summary_endpoint', self.value.summary_endpoint)
+        if (isinstance(destination,str) and
+                destination.rstrip('/') != self.value.summary_endpoint.rstrip('/') and
+                'summary_key' not in patch):
+            patch['summary_key'] = ''
         candidate = Settings.model_validate(self.value.model_dump() | patch)
         # Validate URL without a paid request; blank keys are allowed for staged setup.
         probe = candidate.model_copy(update={'summary_key': candidate.summary_key or 'validation-only'})

@@ -105,3 +105,17 @@ wake and device changes, clean-Mac/older-macOS runtime compatibility, login-item
 approval, signed upgrades, notarization and installer distribution remain acceptance
 checks. Developer ID signing remains deferred. Do not treat an ad-hoc development
 app as a notarized release or the synthetic preview as real-call validation.
+
+### Summary provider presets
+
+Preferences offers OpenAI and Gemini (Cloud), Ollama and LM Studio (Local), and
+Custom. Presets set the endpoint automatically and hide the URL editor. Custom
+exposes it for other compatible servers or nonstandard local ports. Choose a model
+ID from the selected provider, or an installed model ID for local servers. The app
+does not download or launch local models. Changing destinations clears the previous
+saved summary key unless a new key is supplied. Local server authentication is
+optional. Deepgram transcription remains unchanged.
+
+Endpoint references: [Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai/),
+[Ollama API documentation](https://github.com/ollama/ollama/blob/main/docs/api/introduction.mdx),
+[LM Studio compatibility](https://lmstudio.ai/docs/developer/openai-compat).

@@ -16,6 +16,8 @@ struct Preferences: View {
     @State private var clearSummary = false
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var loginStatus = ""
+    private var presets: [String:String] { core.settings["summary_presets"] as? [String:String] ?? [:] }
+    private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             HStack { Text("Preferences").font(.system(size:28,design:.serif)); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }.padding(.horizontal,24).padding(.top,20)
@@ -26,9 +28,17 @@ struct Preferences: View {
                     Toggle("Remove saved transcription key",isOn:$clearDeepgram)
                 }
                 Section("Summary provider · OpenAI compatible") {
-                    TextField("Provider",text:$provider); TextField("API base URL",text:$endpoint)
-                    TextField("Model",text:$model); SecureField("New summary API key",text:$summaryKey).textContentType(.password)
-                    Text("Blank keeps the saved key. OpenAI uses Responses; other endpoints use Chat Completions. Transcript text is sent here for notes.").font(.caption).foregroundStyle(.secondary)
+                    Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
+                        Text("OpenAI · Cloud").tag("OpenAI")
+                        Text("Gemini · Cloud").tag("Gemini")
+                        Text("Ollama · Local").tag("Ollama")
+                        Text("LM Studio · Local").tag("LM Studio")
+                        Text("Custom · OpenAI compatible").tag("Custom")
+                    }
+                    if provider == "Custom" { TextField("API base URL",text:$endpoint) }
+                    TextField("Model ID",text:$model,prompt:Text(localSummary ? "Name of your installed model" : "Model ID from your provider"))
+                    SecureField(localSummary ? "API key (optional)" : "New summary API key",text:$summaryKey).textContentType(.password)
+                    Text(localSummary ? "Uses your running local server and installed model. An API key is optional unless you enabled server authentication. Transcription still uses Deepgram." : "Transcript text is sent to this provider for notes. Leave the key blank to keep it only when the destination stays the same; changing providers clears the old key.").font(.caption).foregroundStyle(.secondary)
                     Toggle("Remove saved summary key",isOn:$clearSummary)
                 }
                 Section("Recording preset") {
@@ -37,7 +47,7 @@ struct Preferences: View {
                         ForEach([("auto","Auto · multilingual"),("en","English"),("vi","Tiếng Việt"),("es","Spanish"),("fr","French"),("de","German"),("hi","Hindi"),("ru","Russian"),("pt","Portuguese"),("ja","Japanese"),("it","Italian"),("nl","Dutch")],id:\.0) { code, name in Text(name).tag(code) }
                     }
                     Text("Auto follows Deepgram's supported languages; Vietnamese requires a fixed choice. No ineffective language hints are sent. Settings apply to new work after processing finishes.").font(.caption).foregroundStyle(.secondary)
-                    Button("Save settings securely") { save() }.disabled(!core.connected || core.busy)
+                    Button("Save settings securely") { save() }.disabled(!core.connected || core.busy || model.trimmingCharacters(in:.whitespaces).isEmpty)
                 }
                 Section("Permissions and call detection") {
                     Text("Microphone: \(text(core.discovery["permission"])) · Detection: \(text(core.discovery["status"]))").font(.callout)
@@ -65,8 +75,16 @@ struct Preferences: View {
         }.onAppear {
             endpoint = text(core.settings["summary_endpoint"]); model = text(core.settings["summary_model"]); provider = text(core.settings["summary_provider"])
             if endpoint.isEmpty { endpoint = "https://api.openai.com/v1" }; if model.isEmpty { model = "gpt-5.4-mini" }; if provider.isEmpty { provider = "OpenAI" }
+            if presets[provider]?.trimmingCharacters(in:CharacterSet(charactersIn:"/")) != endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) { provider = "Custom" }
             language = text(core.settings["language"]); if language.isEmpty { language = "auto" }; duration = core.settings["duration_s"] as? Int ?? 3600
         }.onDisappear { deepgram = ""; summaryKey = "" }
+    }
+    private func selectProvider(_ selected: String) {
+        guard selected != provider else { return }
+        provider = selected
+        if let preset = presets[selected] { endpoint = preset }
+        summaryKey = ""; clearSummary = false
+        model = selected == "OpenAI" ? "gpt-5.4-mini" : ""
     }
     private func save() {
         var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"language":language,"duration_s":duration]

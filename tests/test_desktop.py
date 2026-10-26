@@ -231,3 +231,28 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
             ws.send_json(envelope({'action':'meeting_page','session_id':sid}))
             detail=receive(ws,'meeting_page')
             assert detail['segments'] and detail['notes'] and detail['audio']['available']
+
+
+def test_provider_presets_select_endpoints_and_do_not_reuse_keys():
+    from scribeloop_core.api.desktop_settings import SUMMARY_PRESETS
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_key':'openai-secret'})
+    assert settings.value.summary().configured
+    settings.save({'summary_provider':'Gemini','summary_model':'example-gemini-model'})
+    assert settings.value.summary_endpoint==SUMMARY_PRESETS['Gemini']
+    assert not settings.value.summary_key and not settings.value.summary().configured
+    settings.save({'summary_key':'gemini-secret'})
+    for provider in ('Ollama','LM Studio'):
+        settings.save({'summary_provider':provider,'summary_model':'installed-model',
+                       'summary_endpoint':'https://must-be-overridden.example/v1'})
+        assert settings.value.summary_endpoint==SUMMARY_PRESETS[provider]
+        assert settings.value.summary().configured and not settings.value.summary().cloud
+        assert not settings.value.summary_key
+    settings.save({'summary_provider':'Custom','summary_endpoint':'https://custom.example/v1',
+                   'summary_key':'custom-secret','summary_model':'custom-model'})
+    assert settings.value.summary_endpoint=='https://custom.example/v1'
+    assert settings.value.summary_key=='custom-secret'
+    settings.save({'summary_provider':'OpenAI','summary_key':'new-openai-secret'})
+    assert settings.value.summary_endpoint==SUMMARY_PRESETS['OpenAI']
+    assert settings.value.summary_key=='new-openai-secret'
+    assert settings.value.public()['summary_presets']==SUMMARY_PRESETS

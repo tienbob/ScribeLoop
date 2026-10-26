@@ -393,3 +393,19 @@ real permission attribution and call timing, sleep/wake/device changes, login-it
 OS approval, minimum-OS/clean-Mac runtime support, signed upgrade access and
 notarization/installer release. The build conservatively requires the current host
 macOS version until compatibility is tested. Signing deferral remains in effect.
+
+### Summary provider picker — 2026-10-26
+
+Replace the native provider text field with OpenAI, Gemini, Ollama, LM Studio and
+Custom choices. Known providers automatically select their documented API endpoint
+and hide its editor; Custom exposes the URL field. The backend owns the preset
+mapping. Preserve existing nonstandard endpoints as Custom. Changing destinations
+clears the old summary credential unless a new key is explicitly supplied, so a
+provider switch cannot send another provider's saved key. Local summary servers
+use their installed model ID and optional authentication; transcription stays on
+Deepgram. Validate settings and rebuild without calling any provider.
+
+Provider-picker validation: 9 desktop tests pass, production/preview native builds
+succeed, and native inspection confirms OpenAI/Ollama hide the URL while Custom
+exposes it. Provider endpoint enforcement, local no-key configuration and clearing
+credentials across destinations are covered without provider requests.
