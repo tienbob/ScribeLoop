@@ -85,6 +85,10 @@ def test_confirmed_persistence_reconnect_and_no_partials_on_disk(setup):
             ws.send_text(token)
             snapshot = ws.receive_json()
             assert snapshot['sessions'][0]['id'] == session_id
+            assert snapshot['sessions'][0]['transcript_revision'] == 1
+            history = snapshot['transcript_revisions'][session_id]
+            assert len(history) == 1 and history[0]['segment_count'] == 2
+            assert history[0]['selected'] == 1
             assert len(snapshot['segments'][session_id]) == 2
             assert all(s['text'] == 'confirmed words' for s in snapshot['segments'][session_id])
     assert backends[0].closed

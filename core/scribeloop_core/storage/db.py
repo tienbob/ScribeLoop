@@ -20,7 +20,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 
 DDL = """
 CREATE TABLE sessions (
@@ -125,7 +125,7 @@ def configure(conn) -> None:
 
 
 def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
-    """Apply pending migrations (currently only v1 — the §3.1 schema)."""
+    """Apply additive migrations, preserving existing transcript rows."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < 1:
         conn.executescript(DDL)
@@ -142,6 +142,35 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
           stream TEXT, start_ms INTEGER, end_ms INTEGER, label TEXT,
           confidence REAL);
         CREATE INDEX IF NOT EXISTS idx_turns_time ON speaker_turns(session_id,start_ms);
+        """)
+    if version < 3:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS transcript_revisions (
+          session_id TEXT NOT NULL REFERENCES sessions(id),
+          revision INTEGER NOT NULL CHECK(revision >= 1),
+          origin TEXT NOT NULL CHECK(origin IN ('confirmed','replacement','legacy')),
+          provider TEXT, model TEXT, created_at INTEGER,
+          PRIMARY KEY(session_id, revision));
+        INSERT OR IGNORE INTO transcript_revisions(session_id,revision,origin)
+          SELECT DISTINCT session_id,revision,'legacy' FROM segments;
+        """)
+    if version < 4:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS revision_speaker_edits (
+          session_id TEXT NOT NULL, revision INTEGER NOT NULL,
+          speaker_id TEXT NOT NULL REFERENCES session_speakers(id),
+          label TEXT, merge_target TEXT REFERENCES session_speakers(id),
+          PRIMARY KEY(session_id,revision,speaker_id),
+          FOREIGN KEY(session_id,revision) REFERENCES transcript_revisions(session_id,revision));
+        """)
+    if version < 5:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS grounded_summaries (
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL, revision INTEGER NOT NULL,
+          input_hash TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+          summary_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+          FOREIGN KEY(session_id,revision) REFERENCES transcript_revisions(session_id,revision));
+        CREATE INDEX IF NOT EXISTS idx_grounded_session ON grounded_summaries(session_id,created_at);
         """)
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

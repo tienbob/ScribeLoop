@@ -17,6 +17,7 @@ class Element {
   cloneNode() { return new Element(); }
   showModal() { this.open=true; }
   focus() {}
+  click() { this.clicked=true; }
   set innerHTML(value) { throw new Error('Transcript must not use innerHTML'); }
 }
 const elements=new Map();
@@ -367,10 +368,11 @@ assert.match(get('session-progress').textContent,/Native audio timestamps jumped
 const demoElements=new Map();
 const demoGet=id=>{if(!demoElements.has(id))demoElements.set(id,new Element());return demoElements.get(id);};
 demoGet('transcript').firstElementChild=new Element();
-const demoSockets=[];
+const demoSockets=[], demoDownloads=[], demoCreated=[];
 class DemoSocket extends Socket { constructor(){super();demoSockets.push(this);} }
 vm.runInNewContext(fs.readFileSync('core/scribeloop_core/api/static/app.js','utf8'),{
- document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
+ document:{documentElement:{dataset:{requireLaunchKey:'false'}},getElementById:demoGet,createElement:tag=>{const e=new Element(); e.tag=tag; demoCreated.push(e); return e;},createTextNode:text=>({textContent:text})},
+ URL:{createObjectURL(blob){demoDownloads.push(blob);return 'blob:demo';},revokeObjectURL(){}},Blob,
  WebSocket:DemoSocket,location:{hash:'',pathname:'/',protocol:'http:',host:'127.0.0.1:8757'},
  history:{replaceState(){}},setTimeout,setInterval:()=>null,URLSearchParams,
 });
@@ -379,3 +381,96 @@ demoSockets[0].readyState=Socket.OPEN;demoSockets[0].onopen();
 assert.equal(demoSockets[0].sent.length,0,'No launch key or fake auth frame is sent');
 assert.equal(demoGet('unlock').open,false);
 console.log('Keyless local demo connects directly without an unlock dialog passed');
+
+const ds=demoSockets[0], demoEvent=data=>ds.onmessage({data:JSON.stringify(data)});
+const sid='d'.repeat(32), gen='a'.repeat(32), other='b'.repeat(32);
+const speakerId=(generation,stream,n)=>`${sid}:deepgram:${generation}:${stream}:${n}`;
+const correctedRows=[['loopback',gen,0],['loopback',gen,1],['mic',gen,0],['loopback',other,0]].map(([stream,generation,n],i)=>({
+ id:`correct-${i}`,stream,start_ms:i*100,end_ms:(i+1)*100,text:`words ${i}`,revision:1,
+ local_speaker_id:speakerId(generation,stream,n),display_speaker_id:speakerId(generation,stream,n),speaker_label:i<2 ? 'Alex' : `Speaker ${i+1}`,
+}));
+demoEvent({type:'snapshot',fixtures:[],sessions:[{id:sid,source:'meeting',status:'completed',title:'Corrections',started_at:1}],
+ active_id:null,replay_available:true,storage:'public-demo',segments:{[sid]:correctedRows},notes:{[sid]:'original notes'}});
+assert.equal(demoGet('speaker-editor').hidden,false);
+assert.match(demoGet('speaker-status').textContent,/manual corrections/);
+assert.equal(demoGet('speaker-list').children.length,4,'Equal names must not collapse distinct identities');
+assert.equal(demoGet('merge-target').children.length,2,'Only the placeholder and same-generation/track target are offered');
+demoGet('speaker-name').value='<script>Minh</script>';demoGet('speaker-name').oninput();
+demoGet('rename-speaker').onclick();
+let correction=JSON.parse(ds.sent.at(-1));
+assert.equal(correction.action,'rename_speaker');assert.equal(correction.revision,1);
+assert.equal(correction.label,'<script>Minh</script>');
+assert.equal(demoGet('speaker-editor').hidden,true,'Disable editing while waiting for persistence');
+const renamed=correctedRows.map((r,i)=>({...r,speaker_label:i===0 ? correction.label : r.speaker_label}));
+demoEvent({type:'speakers_corrected',session_id:sid,segments:renamed,notes:'updated notes'});
+assert.equal(demoGet('speaker-editor').hidden,false);
+assert.equal(demoGet('speaker-list').children[0].children[1].textContent,'<script>Minh</script>');
+assert.equal(demoGet('meeting-notes').textContent,'updated notes');
+demoGet('merge-target').value=correctedRows[1].display_speaker_id;demoGet('merge-target').onchange();demoGet('merge-speaker').onclick();
+correction=JSON.parse(ds.sent.at(-1));assert.equal(correction.action,'merge_speaker');
+assert.equal(correction.merge_target,correctedRows[1].display_speaker_id);
+demoEvent({type:'error',context:'meeting',message:'stale request'});
+assert.equal(demoGet('speaker-editor').hidden,false,'Rejected edits can be retried');
+demoEvent({type:'session',session:{id:sid,source:'meeting',status:'processing',title:'Corrections',started_at:1}});
+assert.equal(demoGet('speaker-editor').hidden,true,'Processing locks speaker corrections');
+console.log('Revision-scoped speaker correction, merge boundaries and safe names passed');
+
+const sumItem={text:'<script>Review plan</script>',segment_ids:[correctedRows[0].id]};
+const summaryDraft={overview:sumItem,key_points:[sumItem],decisions:[],action_items:[],open_questions:[],uncertainties:[]};
+const savedDraft={summary:summaryDraft,stale:false,provider:'Configured provider',model:'chosen-model'};
+demoEvent({type:'snapshot',fixtures:[],sessions:[{id:sid,source:'meeting',status:'completed',title:'Notes',started_at:1}],
+ active_id:null,replay_available:true,storage:'public-demo',segments:{[sid]:correctedRows},
+ grounded_summaries:{[sid]:savedDraft},summary_provider:{configured:true,cloud:true,provider:'Configured provider',model:'chosen-model',endpoint:'https://summary.example/v1'}});
+assert.equal(demoGet('generate-summary').disabled,true,'Cloud summary needs separate transcript consent');
+assert.match(demoGet('summary-provider').textContent,/chosen-model.*https:\/\/summary.example/);
+assert.equal(demoGet('summary-content').children[1].textContent,'<script>Review plan</script>','Model output stays inert text');
+assert.match(demoGet('summary-content').children[2].textContent,/Source/);
+demoGet('summary-consent').checked=true;demoGet('summary-consent').onchange();
+assert.equal(demoGet('generate-summary').disabled,false);
+demoGet('generate-summary').onclick();
+let requested=JSON.parse(ds.sent.at(-1));assert.equal(requested.action,'summarize');assert.equal(requested.text_consent,true);
+assert.equal(requested.model,'chosen-model');assert.equal(demoGet('summary-consent').checked,false);
+demoEvent({type:'summary_started',session_id:sid});
+assert.equal(demoGet('generate-summary').disabled,true);
+demoEvent({type:'summary_error',session_id:sid,message:'Provider failed'});
+assert.equal(demoGet('summary-content').children[1].textContent,'<script>Review plan</script>','Provider failure preserves saved notes');
+demoGet('download-markdown').onclick();assert.equal(JSON.parse(ds.sent.at(-1)).action,'export_markdown');
+demoEvent({type:'markdown_export',session_id:sid,content:'# Safe export',filename:'unique.md'});
+assert.equal(demoDownloads.length,1);assert.equal(demoCreated.find(e=>e.download === 'unique.md').clicked,true);
+demoEvent({type:'transcript_replaced',session_id:sid,segments:correctedRows});
+assert.match(demoGet('summary-status').textContent,/outdated/);assert.equal(demoGet('summary-content').children.length,0);
+console.log('Grounded summary consent, source references, stale drafts and plaintext download passed');
+
+const detected={id:'automatic-episode',app_id:'com.brave.Browser',name:'Brave',kind:'browser',selectable:true,evidence:['input_active','output_active'],confidence:'ambiguous'};
+const automaticDiscovery={status:'available',permission:'authorized',devices_available:true,
+ apps:[{id:'com.brave.Browser',name:'Brave',kind:'browser',running:true}],microphones:[{id:'default',name:'Default microphone'}],candidates:[detected]};
+const asr={configured:true,cloud:true,provider:'deepgram',model:'nova-3',streaming:true};
+demoEvent({type:'snapshot',fixtures:[],sessions:[],active_id:null,replay_available:true,recording_available:true,storage:'encrypted',segments:{},
+ transcription:asr,transcription_models:{deepgram:asr},discovery:automaticDiscovery,
+ summary_provider:{configured:true,cloud:true,provider:'Text provider',model:'notes-model',endpoint:'https://summary.example/v1'}});
+assert.equal(demoGet('call-permission').open,true,'Fresh call activity asks permission');
+assert.match(demoGet('call-permission-copy').textContent,/all tabs in Brave/);
+assert.match(demoGet('call-permission-provider').textContent,/notes-model.*https:\/\/summary.example/);
+assert.equal(ds.sent.filter(x=>JSON.parse(x).action === 'accept_call').length,0,'Detection alone never starts capture');
+demoGet('decline-call').onclick();
+assert.equal(demoGet('call-permission').open,false);
+demoEvent({type:'discovery',discovery:automaticDiscovery});
+assert.equal(demoGet('call-permission').open,false,'Declined episode does not nag');
+demoEvent({type:'discovery',discovery:{...automaticDiscovery,candidates:[{...detected,id:'second-episode'}]}});
+assert.equal(demoGet('call-permission').open,true);
+demoGet('accept-call').onclick();
+const accepted=JSON.parse(ds.sent.at(-1));
+assert.equal(accepted.action,'accept_call');assert.equal(accepted.automatic_summary,true);
+assert.equal(accepted.consent_confirmed,true);assert.equal(accepted.summary_model,'notes-model');
+assert.equal(demoGet('call-permission').open,false);
+const autoSession={id:sid,title:'Brave · date/time',source:'meeting',status:'recording',started_at:Date.now(),capture:{auto_workflow:true,scope:'application',name:'Brave'}};
+demoEvent({type:'session',session:autoSession});
+demoEvent({type:'auto_call_status',session_id:sid,state:'ending',remaining_s:30});
+assert.equal(demoGet('keep-recording').hidden,false);assert.match(demoGet('auto-end-status').textContent,/30s/);
+demoGet('keep-recording').onclick();assert.equal(JSON.parse(ds.sent.at(-1)).action,'keep_recording');
+demoEvent({type:'session',session:{...autoSession,status:'completed'}});
+demoEvent({type:'summary_ready',session_id:sid,session:{...autoSession,status:'completed',title:'Garden project launch'},summary:savedDraft});
+assert.equal(demoGet('session-heading').textContent,'Garden project launch');
+console.log('Detected-call permission, decline suppression, end countdown and topic titles passed');
+demoEvent({type:'segment',session_id:sid,segment:{id:'acceptance-segment',revision:3,stream:'loopback',start_ms:0,end_ms:1000,text:'finalization check'}});
+assert.match(demoGet('revision-status').textContent,/revision 3/,'Revision remains visible without a generated summary');

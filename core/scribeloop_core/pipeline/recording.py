@@ -376,10 +376,14 @@ class RecordingRunner:
             await self._state(session_id, 'interrupted')
         else:
             if replace:
+                config = getattr(self,'cloud',None) or getattr(self,'config',None)
+                provenance = config.public() if config is not None else {}
                 self.store.revise_transcript(session_id, replacement,
-                    provider=self.cloud.public()['provider'] if hasattr(self,'cloud') else getattr(self,'provider',None))
+                    provider=provenance.get('provider',getattr(self,'provider',None)),
+                    model=provenance.get('model'))
                 await self.publish({'type':'transcript_replaced', 'session_id':session_id,
-                                    'segments':self.store.segments(session_id)})
+                                    'segments':self.store.segments(session_id),
+                                    'transcript_revisions':self.store.revisions(session_id)})
             await self._finish(session_id)
 
     async def _complete_live(self, session_id):

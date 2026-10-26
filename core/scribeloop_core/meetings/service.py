@@ -104,6 +104,8 @@ class DiscoveryService:
             'status': ('disabled' if self._observer is None else
                        'available' if available else 'unavailable'),
             'recording_enabled': False,
+            'activity': dict(self._detector.activity) if available else {},
+            'activity_observed_at': self._observed_at,
             'permission': self._devices.permission,
             'devices_available': self._devices.available,
             'apps': [{'id': app.app_id, 'name': app.name, 'kind': app.kind,
@@ -125,8 +127,11 @@ class DiscoveryService:
 
     async def _broadcast(self):
         state = self.snapshot()
-        if state != self._previous:
-            self._previous = state
+        # The backend monitor reads fresh timestamps directly. UI clients need
+        # state changes, not one event per observation heartbeat.
+        comparable = {key:value for key,value in state.items() if key != 'activity_observed_at'}
+        if comparable != self._previous:
+            self._previous = comparable
             await self._publish({'type': 'discovery', 'discovery': state})
 
     async def dismiss(self, candidate_id):

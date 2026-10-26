@@ -1,12 +1,16 @@
 # Documentation index
 
-Start with [Phase 1 closeout](PHASE_1_CLOSEOUT.md) for current capabilities,
-launch commands, verification and remaining acceptance gates.
+Start with [Phase 2a closeout](PHASE_2A_CLOSEOUT.md), [Phase 2 progress](PHASE_2_IMPLEMENTATION_PLAN.md) for current work,
+[summary setup and export](MEETING_SUMMARIES.md) for text-provider configuration,
+and [Phase 1 closeout](PHASE_1_CLOSEOUT.md) for launch commands and remaining
+capture/release acceptance gates.
 
 ## Current development
 
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
-- [Phase 2 handoff and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
+- [Phase 2 progress and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
+- [Grounded summaries and Markdown export](MEETING_SUMMARIES.md)
+- [Automatic call notebook UX](AUTO_CALL_UX.md)
 - [Deepgram streaming and speaker labels](DEEPGRAM_STREAMING.md)
 - [Local MOSS Q6_K setup and model selection](LOCAL_MOSS.md)
 - [Browser call test](BROWSER_CALL_TEST.md)
