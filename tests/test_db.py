@@ -1,8 +1,8 @@
 """Schema tests (§3.1): migration, pragmas, FK enforcement."""
+import sqlite3
 from pathlib import Path
 
 import pytest
-
 from scribeloop_core.storage.db import connect, migrate
 
 
@@ -25,7 +25,7 @@ def test_migrate_creates_schema(db):
         "words", "summaries", "embeddings_chunks", "events",
     }
     assert expected <= tables
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_pragmas_on(db):
@@ -34,7 +34,7 @@ def test_pragmas_on(db):
 
 
 def test_foreign_keys_enforced(db):
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         db.execute(
             "INSERT INTO segments (id, session_id, stream, local_speaker_id,"
             " start_ms, end_ms, text, revision, source)"

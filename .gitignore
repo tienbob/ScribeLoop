@@ -19,6 +19,10 @@ data/
 models/
 *.wav
 *.flac
+*.slpa
+*.sqlcipher
+*.sqlcipher-*
+*.sqlcipher.lock
 
 # Env & secrets
 .env

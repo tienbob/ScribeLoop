@@ -84,6 +84,7 @@ def test_baseline_report_and_no_overwrite(manifest, monkeypatch):
     spec = importlib.util.spec_from_file_location("evaluate_corpus", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    monkeypatch.setattr(module,'version',lambda name:'mock-backend-version')
     monkeypatch.setitem(sys.modules, "bakeoff", SimpleNamespace(
         run_backend=lambda *args: ([{"text": "hello", "is_final": True}], 0.1, 0.01, 0.15)
     ))
@@ -95,6 +96,7 @@ def test_baseline_report_and_no_overwrite(manifest, monkeypatch):
     assert report["groups"]["synthetic/original"]["wer"] == 0.5
     assert report["recordings"][0]["audio_s"] == 0.15
     assert report["der"] is None and report["live_latency"] is None
+    assert report['backend_version']=='mock-backend-version'
     assert not report["targets_signed_off"]
     assert "hello" not in output.read_text()
     with pytest.raises(SystemExit):

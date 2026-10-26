@@ -16,7 +16,7 @@ try:
     from silero_vad import VADIterator, load_silero_vad
 
     _SILERO_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dep at import time
+except Exception:  # noqa: BLE001 - optional ML imports can fail on native library loading
     _SILERO_AVAILABLE = False
 
 #: Silero requires 512-sample windows at 16 kHz.
