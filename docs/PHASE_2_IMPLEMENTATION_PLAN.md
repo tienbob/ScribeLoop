@@ -2,7 +2,7 @@
 
 Phase 1 macOS development is closed; [release/quality gates](PHASE_1_CLOSEOUT.md)
 remain explicit. This plan starts with Phase 2a finalization from the architecture.
-No Phase 2 implementation is claimed by this handoff.
+Phase 2 implementation begins on `feature/phase-2-transcript-revisions`.
 
 ## Preserved decisions
 
@@ -52,3 +52,35 @@ worker require separate measured designs; none should invent timing or identity.
 Phase 2b covers retrieval/search and summary context; Phase 2c covers advanced
 mic attribution/echo handling; Phase 2d covers second-OS capture and packaging.
 Keep those increments separate from the first usable revision/summary/export flow.
+
+## First increment — revision persistence
+
+Before speaker correction UI, add a versioned transcript revision registry and
+read-only history. Confirmed live rows and atomic saved replacements retain their
+existing selection behavior (latest revision); provisional text remains ephemeral.
+Record provider/model when known, with unknown provenance for legacy rows rather
+than guessing. Migrate old databases without changing transcript IDs, text or
+speaker scopes. Expose history in reconnect snapshots, preserve it on failed
+replacement, and remove it during session deletion. Confirmed appends after saved
+replacement must extend the selected revision,
+so resumed text cannot disappear into revision 1. Historical revision selection,
+speaker corrections, summaries and export remain subsequent increments.
+
+### Completed 2026-10-26
+
+- Schema v3 adds the revision registry. Existing transcript/speaker IDs are
+  preserved; legacy provenance remains explicitly unknown. Upgrade retries are safe.
+- New confirmed revisions and atomic replacements record provider/model when
+  available. Partial replacements are rejected. Failed replacements retain the
+  prior transcript, revision metadata and provider.
+- Session metadata identifies the selected revision; reconnect snapshots include
+  history and replacement events include refreshed revision metadata. Internal
+  history reads can retrieve a specific revision without changing selection.
+- Resume appends extend the selected revision, preserving earlier history.
+  Session deletion removes the registry with the rest of the session data.
+- Validation: full suite **338 passed**; after adding the upgrade-retry regression,
+  all **10 focused revision tests passed**. Ruff, eight frontend regression groups,
+  61-module import smoke and diff checks passed. No audio capture or cloud calls.
+
+Next: speaker rename/merge persistence and API/UI, followed by grounded summaries
+and explicit export. Revision history has no user-facing selection control yet.

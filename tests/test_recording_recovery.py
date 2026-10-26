@@ -206,7 +206,7 @@ def test_retention_only_includes_old_idle_authorized_meetings(state):
         store.retention_candidates(0)
 
 
-def test_v1_to_v2_migration_preserves_existing_session(tmp_path):
+def test_v1_migration_preserves_existing_session(tmp_path):
     from scribeloop_core.storage.db import DDL
     conn = connect(tmp_path/'old.db')
     conn.executescript(DDL)
@@ -215,7 +215,7 @@ def test_v1_to_v2_migration_preserves_existing_session(tmp_path):
     conn.commit()
     migrate(conn)
     migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
     assert conn.execute("SELECT title FROM sessions WHERE id='legacy'").fetchone()[0] == 'Keep me'
     conn.close()
 

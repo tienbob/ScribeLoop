@@ -65,18 +65,31 @@ class SessionStore:
         row = self.conn.execute('SELECT local_label FROM session_speakers WHERE id=?',(identity,)).fetchone()
         return row[0] if row else None
 
-    def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback', revision: int = 1):
+    def append(self, session_id: str, chunk: dict, *, stream: str = 'loopback', revision: int | None = None):
         if stream not in {'loopback', 'mic'}:
             raise ValueError('Unknown transcript stream')
         if not chunk['is_final']:
             return None
+        if revision is None:
+            revision = self.conn.execute(
+                'SELECT COALESCE(MAX(revision),1) FROM segments WHERE session_id=?',
+                (session_id,)).fetchone()[0]
+        if type(revision) is not int or revision < 1:
+            raise ValueError('Invalid transcript revision')
         row = {'id': uuid4().hex, 'session_id': session_id, 'stream': stream,
                'start_ms': int(chunk['start_ms']), 'end_ms': int(chunk['end_ms']),
                'text': chunk['text'], 'language': chunk.get('language'),
-               'confidence': chunk.get('confidence'), 'source': 'offline' if revision > 1 else 'stream', 'revision': revision}
+               'confidence': chunk.get('confidence'), 'source': 'stream', 'revision': revision}
         if row['start_ms'] < 0 or row['end_ms'] < row['start_ms']:
             raise ValueError('Invalid transcript timestamps')
         with self.conn:
+            metadata = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='recording_selection' ORDER BY id LIMIT 1", (session_id,)).fetchone()
+            provenance = json.loads(metadata[0]) if metadata else {}
+            self.conn.execute('INSERT OR IGNORE INTO transcript_revisions '
+                '(session_id,revision,origin,provider,model,created_at) VALUES (?,?,?,?,?,?)',
+                (session_id,revision,'confirmed',provenance.get('provider'),
+                 provenance.get('model'),self._now()))
             row['local_speaker_id'] = self._speaker(session_id,stream,chunk.get('speaker_key'))
             self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('
                               + ','.join('?' for _ in row) + ')', tuple(row.values()))
@@ -89,6 +102,8 @@ class SessionStore:
 
     def _session(self, row):
         session = dict(row)
+        session['transcript_revision'] = self.conn.execute(
+            'SELECT MAX(revision) FROM segments WHERE session_id=?', (session['id'],)).fetchone()[0]
         if session['source'] == 'meeting':
             metadata = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_selection' "
@@ -118,13 +133,25 @@ class SessionStore:
         return [self._session(row) for row in self.conn.execute(
             'SELECT * FROM sessions ORDER BY started_at DESC, id DESC LIMIT 100')]
 
-    def segments(self, session_id: str):
+    def revisions(self, session_id: str):
+        """Read-only history; a replacement becomes visible only after commit."""
+        return [dict(row) for row in self.conn.execute(
+            'SELECT r.*, COUNT(s.id) AS segment_count, '
+            '(r.revision=(SELECT MAX(revision) FROM segments WHERE session_id=r.session_id)) AS selected '
+            'FROM transcript_revisions r LEFT JOIN segments s '
+            'ON s.session_id=r.session_id AND s.revision=r.revision '
+            'WHERE r.session_id=? GROUP BY r.session_id,r.revision ORDER BY r.revision DESC',
+            (session_id,))]
+
+    def segments(self, session_id: str, *, revision: int | None = None):
+        if revision is not None and (type(revision) is not int or revision < 1):
+            raise ValueError('Invalid transcript revision')
         return [dict(row) for row in self.conn.execute(
             'SELECT segments.*, session_speakers.local_label AS speaker_label FROM segments '
             'LEFT JOIN session_speakers ON session_speakers.id=segments.local_speaker_id '
-            'WHERE segments.session_id=? AND revision=('
-            'SELECT MAX(revision) FROM segments WHERE session_id=?) ORDER BY start_ms, segments.rowid',
-            (session_id, session_id))]
+            'WHERE segments.session_id=? AND revision=COALESCE(?,('
+            'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid',
+            (session_id, revision, session_id))]
 
     def create_recording(self, title, metadata):
         session_id = uuid4().hex
@@ -167,7 +194,7 @@ class SessionStore:
             'ORDER BY created_at DESC,rowid DESC LIMIT 1', (session_id,)).fetchone()
         return row['content_md'] if row else ''
 
-    def revise_transcript(self, session_id, chunks, *, provider=None):
+    def revise_transcript(self, session_id, chunks, *, provider=None, model=None):
         from ..pipeline.replay import ReplayChunk
         if not chunks:
             raise ValueError('Empty reprocessing result; retain the previous transcript')
@@ -176,12 +203,17 @@ class SessionStore:
             if chunk.get('stream') not in {'mic','loopback'}:
                 raise ValueError('Invalid transcript stream')
             row = ReplayChunk.model_validate(chunk).model_dump()
+            if not row['is_final']:
+                raise ValueError('Replacement transcript must contain only confirmed text')
             rows.append({**row, 'stream':chunk['stream']})
         revision = self.conn.execute('SELECT COALESCE(MAX(revision),0)+1 FROM segments WHERE session_id=?',
                                      (session_id,)).fetchone()[0]
         # append() uses transaction contexts; an outer savepoint makes all rows atomic.
         self.conn.execute('SAVEPOINT transcript_revision')
         try:
+            self.conn.execute('INSERT INTO transcript_revisions '
+                '(session_id,revision,origin,provider,model,created_at) VALUES (?,?,?,?,?,?)',
+                (session_id,revision,'replacement',provider,model,self._now()))
             for chunk in rows:
                 row = {'id':uuid4().hex, 'session_id':session_id, 'stream':chunk['stream'],
                        'start_ms':chunk['start_ms'], 'end_ms':chunk['end_ms'], 'text':chunk['text'],
@@ -200,6 +232,7 @@ class SessionStore:
             self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
             self.conn.execute('RELEASE SAVEPOINT transcript_revision')
             raise
+        return revision
 
     def set_language_lock(self, session_id, lock):
         from ..pipeline.languages import LANGUAGE_NAMES
@@ -303,7 +336,7 @@ class SessionStore:
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
             for table in ('words','segments','session_speakers','speaker_remaps','speaker_embeddings',
                           'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
-                          'session_streams','events'):
+                          'session_streams','events','transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'
                 self.conn.execute(f'DELETE FROM {table} WHERE {column}=?', (session_id,))
             self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))
