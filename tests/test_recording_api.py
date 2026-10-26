@@ -62,6 +62,7 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
         ws.send_json(command(consent_confirmed=False))
         receive(ws, 'error')
         assert opened == []
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
         ws.send_json(command())
         session = receive(ws, 'session', 'preparing')['session']
         assert session['capture']['name']=='Brave'
@@ -124,6 +125,7 @@ def test_saved_recovery_resume_delete_and_retention_require_auth_and_confirmatio
                 writer.abort()
             store.transition(sid,'interrupted')
             return sid
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
         sid = client.portal.call(prepare)
         ws.send_json({'action':'recover','session_id':sid,'path':'/etc/passwd'})
         receive(ws,'error')

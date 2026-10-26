@@ -282,6 +282,7 @@ def test_api_restores_speaker_labels_and_hides_credentials(tmp_path,require_sqlc
             ws.send_json(command(cloud_consent=False,language='en'))
             receive(ws,'error')
             assert not sockets
+            client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
             ws.send_json(command(cloud_consent=True,language='en'))
             sid=receive(ws,'session','recording')['session']['id']
             assert receive(ws,'segment')['segment']['speaker_label'].startswith('Speaker ')

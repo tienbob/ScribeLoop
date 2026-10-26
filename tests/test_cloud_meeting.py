@@ -198,7 +198,7 @@ async def test_explicit_cloud_reprocess_revision_and_checkpoint_do_not_duplicate
     assert len(calls)==2 and len(store.segments(sid))==2
 
 
-def test_cloud_api_requires_new_and_saved_consent_and_keeps_key_out_of_snapshot(tmp_path,require_sqlcipher):
+def test_cloud_api_requires_app_agreement_and_keeps_key_out_of_snapshot(tmp_path,require_sqlcipher):
     import json
 
     from fastapi.testclient import TestClient
@@ -230,16 +230,20 @@ def test_cloud_api_requires_new_and_saved_consent_and_keeps_key_out_of_snapshot(
         ws.send_json(command(cloud_consent=False))
         receive(ws,'error')
         assert not opened
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
         ws.send_json(command(cloud_consent=True,language='vi'))
         sid=receive(ws,'session','recording')['session']['id']
         receive(ws,'segment')
         ws.send_json({'action':'stop','session_id':sid})
         receive(ws,'session','completed')
+        ws.send_json({'action':'revoke_agreement'})
+        receive(ws,'agreement')
         ws.send_json({'action':'reprocess','session_id':sid,'language':'vi'})
         receive(ws,'error')
         ws.send_json({'action':'resume','session_id':sid,'cloud_consent':False})
         receive(ws,'error')
-        ws.send_json({'action':'reprocess','session_id':sid,'language':'vi','cloud_consent':True})
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
+        ws.send_json({'action':'reprocess','session_id':sid,'language':'vi','cloud_consent':False})
         receive(ws,'session','completed')
         assert len(opened)==1
         assert client.portal.call(app.state.store.cloud_usage,sid)['requests']>0

@@ -25,7 +25,7 @@ def test_migrate_creates_schema(db):
         "words", "summaries", "embeddings_chunks", "events", "transcript_revisions",
     }
     assert expected <= tables
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_pragmas_on(db):

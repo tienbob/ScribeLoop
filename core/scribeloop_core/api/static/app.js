@@ -7,6 +7,7 @@ const emptyTemplate = $('transcript').firstElementChild.cloneNode(true);
 let stopPending = false, authenticated = false, replayAvailable = true, replayEnabled = true, recordingAvailable = false, recordPending = false;
 let transcription = {cloud:false,configured:true}, cloudUsage = new Map();
 let modelProfiles = {};
+let agreement={accepted:false,version:null};
 let promptCandidate=null, offeredCalls=new Set(), autoCallState=null;
 let summaryProvider={configured:false}, savedSummaries=new Map(), summaryActiveId=null, summaryPending=false, exportPending=false, summarySession=null;
 let savedModelSession = null;
@@ -157,13 +158,13 @@ function closeCallPrompt() {
 function renderCallAssistant() {
   const processing=[...sessions.values()].some(s=>s.status === 'processing');
   const current=discovery.candidates.find(c=>c.id === promptCandidate?.id && c.selectable);
-  if(promptCandidate && (!current || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
+  if(promptCandidate && (!current || !agreement.accepted || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
   text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs the encrypted macOS app.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
   const ending=autoCallState?.session_id === activeId && autoCallState?.state === 'ending';
   $('keep-recording').hidden=!ending;
   $('keep-recording').disabled=!authenticated;
   text('auto-end-status',ending ? `App audio is inactive. Ending in ${autoCallState.remaining_s}s.` : autoCallState?.session_id === activeId && autoCallState?.state === 'unknown' ? 'Call detection uncertain · recording continues' : '');
-  if(!authenticated || !recordingAvailable || busy() || processing || discovery.status !== 'available' || discovery.permission !== 'authorized' || !profile().configured) return;
+  if(!agreement.accepted || !authenticated || !recordingAvailable || busy() || processing || discovery.status !== 'available' || discovery.permission !== 'authorized' || !profile().configured) return;
   if(!promptCandidate) {
     const candidate=discovery.candidates.find(c=>c.selectable && !offeredCalls.has(c.id));
     if(!candidate) return;
@@ -198,12 +199,11 @@ function renderDiscovery() {
     discovery.permission !== 'authorized' ? 'Enable microphone access before recording.' :
     !$('title').value.trim() ? 'Add a meeting title.' :
     !chosenSource ? 'Choose an audio source and microphone, then press Confirm source.' :
-    !$('record-consent').checked ? 'Confirm participant permission above to enable Record.' :
-    transcription.cloud && !$('cloud-consent').checked ? `Confirm sending this meeting audio to ${providerName()} before Record.` :
+    !agreement.accepted ? 'Accept the first-use agreement to enable Record.' :
     chosenSource?.scope === 'microphone' ? 'Ready. Press Record microphone to capture your selected mic.' :
     'Ready. Start your call, then press Record meeting.';
   $('record-meeting').disabled = !authenticated || !recordingAvailable || !chosenSource ||
-    !$('record-consent').checked || !transcription.configured || (transcription.cloud && !$('cloud-consent').checked) || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
+    !agreement.accepted || !transcription.configured || locked || processing || discovery.permission !== 'authorized' || !$('title').value.trim();
   text('record-help',reason);
   text('record-meeting',recordPending ? 'Preparing…' : chosenSource?.scope === 'microphone' ? 'Record microphone ↗' : 'Record meeting ↗');
   $('recording-bar').hidden = authenticated && !activeId && !processing && !recordPending;
@@ -233,11 +233,6 @@ function renderDiscovery() {
   $('meeting-language').disabled = !authenticated || locked;
   text('meeting-language-help',transcription.provider === 'local-moss' ? 'Local Auto supports English and Chinese. Other languages require the Cloud model.' : $('meeting-language').value === 'auto' || !$('meeting-language').value ? 'Auto recognizes English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian and Dutch. For Vietnamese, choose Tiếng Việt.' : `Fixed language: ${languageName($('meeting-language').value)}. Select Auto to follow supported language changes.`);
   $('title').disabled = locked;
-  $('record-consent').disabled = !authenticated || locked;
-  $('cloud-consent-row').hidden = !transcription.cloud;
-  $('cloud-consent').disabled = !authenticated || locked;
-  text('cloud-consent-copy',chosenSource?.scope === 'microphone' ? `Send only this microphone recording to ${providerName()} for live cloud transcription.` : `Send this meeting’s microphone and selected app audio to ${providerName()} for cloud transcription.`);
-  text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${providerName()} for this transcription/resume request.`);
   text('cloud-provider',transcription.cloud ? `${providerName()} · ${transcription.model} · ${transcription.configured ? 'key configured' : 'key missing'} · estimated audio cap $${Number(transcription.budget_usd || .05).toFixed(2)} per saved meeting. No local speech models.` : '');
   $('select-source').disabled = !authenticated || locked || pendingSource !== null || !$('meeting-source').value || !$('meeting-microphone').value;
   text('select-source', pendingSource !== null ? 'Checking source…' : 'Confirm source ↗');
@@ -283,7 +278,7 @@ function renderHistory() {
       const button=document.createElement('button'); button.type='button';
       const title=document.createElement('span'), meta=document.createElement('small');
       button.append(title,meta);
-      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; render(); };
+      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false;  render(); };
       node={button,title,meta}; historyNodes.set(session.id,node);
     }
     if (node.title.textContent !== session.title) node.title.textContent=session.title;
@@ -357,12 +352,11 @@ function renderSummary(session) {
   const rows=segments.get(selectedId)||[], saved=savedSummaries.get(selectedId);
   const valid=session?.source === 'meeting' && rows.length && ['completed','failed','interrupted'].includes(session.status);
   $('summary-section').hidden=!valid;
-  if(summarySession !== selectedId) { summarySession=selectedId; $('summary-consent').checked=false; text('summary-status',''); }
+  if(summarySession !== selectedId) { summarySession=selectedId;  text('summary-status',''); }
   const destination=summaryProvider.configured ? `${summaryProvider.cloud ? 'Cloud' : 'Local'} · ${summaryProvider.provider} · ${summaryProvider.model} · ${summaryProvider.endpoint}` : 'Configure SUMMARY_BASE_URL, SUMMARY_MODEL and SUMMARY_API_KEY in .env, then restart the app.';
   text('summary-provider',destination);
   const blocked=!authenticated || !valid || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
-  $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || (summaryProvider.cloud && !$('summary-consent').checked);
-  $('summary-consent-row').hidden=!summaryProvider.configured || !summaryProvider.cloud;
+  $('generate-summary').disabled=blocked || !summaryProvider.configured || Boolean(summaryActiveId) || summaryPending || !agreement.accepted;
   $('download-markdown').disabled=blocked || exportPending;
   if(summaryActiveId === selectedId) text('summary-status','Generating summary. Previous notes remain available.');
   $('summary-content').replaceChildren();
@@ -382,6 +376,12 @@ function renderSummary(session) {
   }
 }
 function render() {
+  const dialog=$('app-agreement');
+  text('agreement-status',agreement.accepted ? 'App agreement accepted. Each call still waits for Record.' : 'Accept the app agreement before recording or processing.');
+  $('revoke-agreement').disabled=!authenticated || !agreement.accepted;
+  text('agreement-providers',`Transcription: ${profile().provider || 'not configured'} · ${profile().model || ''}. Notes: ${summaryProvider.endpoint || 'not configured'}.`);
+  if(authenticated && !agreement.accepted && !dialog.open) { closeCallPrompt(); dialog.showModal(); $('agree-app').focus(); }
+  if(agreement.accepted && dialog.open) { if(dialog.close) dialog.close(); else dialog.open=false; }
   renderDiscovery();
   renderHistory();
   const session = sessions.get(selectedId);
@@ -392,7 +392,7 @@ function render() {
   $('session-heading').textContent = session ? session.title : 'The conversation';
   $('session-status').textContent = session ? session.status.toUpperCase() : 'READY WHEN YOU ARE';
   $('activity-dot').classList.toggle('active', Boolean(activeId));
-  $('start').disabled = Boolean(activeId) || !authenticated || !replayAvailable || !replayEnabled || !$('fixture').value;
+  $('start').disabled = !agreement.accepted || Boolean(activeId) || !authenticated || !replayAvailable || !replayEnabled || !$('fixture').value;
   $('partial').textContent = partialText(partials.get(selectedId));
   if (!replayAvailable) $('session-status').textContent = 'STORAGE UNAVAILABLE';
   if (activeId) $('start').textContent = sessions.get(activeId)?.source === 'meeting' ? 'Meeting recording active' : sessions.get(activeId)?.status === 'loading' ? 'Loading model…' : 'Replay in progress';
@@ -401,7 +401,7 @@ function render() {
   if (session && session.id !== savedModelSession && Object.keys(modelProfiles).length) {
     savedModelSession=session.id;
     $('saved-model').value=(session.transcript_provider || session.capture?.provider) === 'local-moss' ? 'moss-q6-k' : 'deepgram';
-    $('saved-cloud-consent').checked=false;
+
   }
   const savedProfile=profile(true);
   $('saved-model').disabled=!authenticated || busy() || [...sessions.values()].some(s=>s.status === 'processing') || !Object.keys(modelProfiles).length;
@@ -414,11 +414,9 @@ function render() {
   text('meeting-notes',notes.get(selectedId) || '');
   $('notes-section').hidden = !notes.get(selectedId);
   $('reprocess-controls').hidden = session?.source !== 'meeting';
-  $('saved-cloud-consent-row').hidden = !savedProfile.cloud;
-  text('saved-cloud-consent-copy',`Send this selected saved meeting’s audio to ${savedProfile.provider === 'deepgram' ? 'Deepgram' : providerName()} for this transcription/resume request.`);
-  text('reprocess-help',savedProfile.provider === 'local-moss' ? 'Local MOSS runs after recording, with English / Chinese and speaker labels. No upload. The previous transcript stays available until both tracks succeed.' : 'Cloud transcription uploads saved audio only with the consent above. Your saved transcript stays available until the replacement completes.');
+  text('reprocess-help',savedProfile.provider === 'local-moss' ? 'Local MOSS runs after recording, with English / Chinese and speaker labels. No upload. The previous transcript stays available until both tracks succeed.' : 'A manual rerun uploads this saved audio under your app agreement. Your saved transcript stays available until the replacement completes.');
   $('reprocess-meeting').hidden = session?.source !== 'meeting';
-  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || (savedProfile.cloud && !$('saved-cloud-consent').checked) ||
+  $('reprocess-meeting').disabled = !authenticated || !recordingAvailable || Boolean(activeId) || recordPending || !savedProfile.configured || !agreement.accepted ||
     [...sessions.values()].some(s=>s.source === 'meeting' && s.status === 'processing');
   $('reprocess-language').disabled = !authenticated || Boolean(activeId) || recordPending || [...sessions.values()].some(s=>s.status === 'processing');
   text('session-progress', session?.source === 'meeting' ? session.status === 'processing' ?
@@ -432,7 +430,7 @@ function render() {
   $('recover-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status);
   $('resume-meeting').disabled = !idle || !['failed','interrupted'].includes(session?.status) ||
     (Boolean((segments.get(selectedId)||[]).length) && !session?.has_checkpoints) ||
-    !savedProfile.configured || (savedProfile.cloud && !$('saved-cloud-consent').checked) ||
+    !savedProfile.configured || !agreement.accepted ||
     (Boolean((segments.get(selectedId)||[]).length) && Boolean(session?.transcript_provider || session?.capture?.provider) &&
       (session.transcript_provider || session.capture.provider) !== savedProfile.provider);
   text('resume-meeting',savedProfile.provider === 'local-moss' ? 'Resume local transcription · rerun saved audio' : 'Resume transcription');
@@ -465,7 +463,11 @@ function connect() {
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
+    if (data.type === 'agreement') {
+      agreement=data.agreement; render(); return;
+    }
     if (data.type === 'snapshot') {
+      agreement=data.agreement || {accepted:false,version:null};
       speakerPending=false; summaryPending=false; exportPending=false;
       summaryProvider=data.summary_provider || {configured:false};
       summaryActiveId=data.summary_active_id || null; savedSummaries=new Map(Object.entries(data.grounded_summaries || {}));
@@ -511,7 +513,7 @@ function connect() {
     } else if (data.type === 'auto_call_status') {
       autoCallState=data; renderDiscovery();
     } else if (data.type === 'summary_started') {
-      summaryPending=false; summaryActiveId=data.session_id; $('summary-consent').checked=false; render();
+      summaryPending=false; summaryActiveId=data.session_id;  render();
     } else if (data.type === 'summary_ready' || data.type === 'summary_error') {
       summaryPending=false; summaryActiveId=null;
       if(data.summary) savedSummaries.set(data.session_id,data.summary);
@@ -556,7 +558,7 @@ function connect() {
     } else if (data.type === 'recording_error') {
       recordPending=false; notice(data.message); render();
     } else if (data.type === 'session') {
-      if (data.session.source === 'meeting') { recordPending=false; $('record-consent').checked=false; $('cloud-consent').checked=false; }
+      if (data.session.source === 'meeting') { recordPending=false; }
       sessions.set(data.session.id,data.session);
       if (['completed','failed','interrupted'].includes(data.session.status)) liveProgress.delete(data.session.id);
       if (liveStates.has(data.session.status)) { const newActive=activeId !== data.session.id; activeId=data.session.id; if (newActive || !selectedId) selectedId=activeId; }
@@ -599,9 +601,9 @@ function connect() {
   renderDiscovery();
 }
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
-$('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:$('consent').checked}); };
+$('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:agreement.accepted}); };
 $('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
-$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false; $('saved-cloud-consent').checked=false; $('title').value='Meeting conversation'; $('record-consent').checked=false; $('cloud-consent').checked=false; $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
+$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false;  $('title').value='Meeting conversation';   $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { if (busy()) return; clearSource(); renderDiscovery(); };
@@ -609,13 +611,12 @@ $('meeting-microphone').onchange = () => { if (busy()) return; microphoneNeedsCh
 renderDiscovery();
 connect();
 
-$('record-consent').onchange = renderDiscovery;
 $('record-meeting').onclick = () => {
   if ($('record-meeting').disabled || !chosenSource) return;
   recordPending=send({action:'record',request_id:++sourceRequest,scope:chosenSource.scope,
     app_id:chosenSource.app_id,microphone_id:chosenSource.microphone_id,
     candidate_id:null,title:$('title').value.trim() || 'Meeting test',
-    model:selectedModel(),consent_confirmed:$('record-consent').checked,cloud_consent:transcription.cloud && $('cloud-consent').checked,language:$('meeting-language').value || 'auto'});
+    model:selectedModel(),consent_confirmed:agreement.accepted,cloud_consent:transcription.cloud && agreement.accepted,language:$('meeting-language').value || 'auto'});
   renderDiscovery();
 };
 
@@ -625,8 +626,8 @@ setInterval(() => { if (activeId) renderDiscovery(); },1000);
 
 $('reprocess-meeting').onclick = () => {
   if ($('reprocess-meeting').disabled) return;
-  recordPending=send({action:'reprocess',session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && $('saved-cloud-consent').checked});
-  $('saved-cloud-consent').checked=false;
+  recordPending=send({action:'reprocess',session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && agreement.accepted});
+
   render();
 };
 
@@ -636,7 +637,7 @@ $('reconnect').onclick = () => connect();
 function savedAction(action) {
   const button=$(action === 'recover' ? 'recover-meeting' : 'resume-meeting');
   if (button.disabled) return;
-  recordPending=send({action,session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && $('saved-cloud-consent').checked}); $('saved-cloud-consent').checked=false; render();
+  recordPending=send({action,session_id:selectedId,model:selectedModel(true),language:$('reprocess-language').value || 'auto',cloud_consent:profile(true).cloud && agreement.accepted});  render();
 }
 $('recover-meeting').onclick=()=>savedAction('recover');
 $('resume-meeting').onclick=()=>savedAction('resume');
@@ -653,13 +654,11 @@ $('apply-retention').onclick=()=>{
   recordPending=send({action:'retention',days,confirmed:$('retention-consent').checked}); render();
 };
 
-$('cloud-consent').onchange=renderDiscovery;
-$('saved-cloud-consent').onchange=render;
 
 $('meeting-language').onchange=renderDiscovery;
 $('reprocess-language').onchange=render;
-$('meeting-model').onchange=()=>{ $('cloud-consent').checked=false; render(); };
-$('saved-model').onchange=()=>{ $('saved-cloud-consent').checked=false; render(); };
+$('meeting-model').onchange=()=>{  render(); };
+$('saved-model').onchange=()=>{  render(); };
 
 $('edit-speaker').onchange=renderMergeTargets;
 $('speaker-name').oninput=correctionButtons;
@@ -676,12 +675,11 @@ function correctSpeaker(action) {
 $('rename-speaker').onclick=()=>correctSpeaker('rename_speaker');
 $('merge-speaker').onclick=()=>correctSpeaker('merge_speaker');
 
-$('summary-consent').onchange=render;
 $('generate-summary').onclick=()=>{
   if($('generate-summary').disabled) return;
   summaryPending=send({action:'summarize',session_id:selectedId,revision:(segments.get(selectedId)||[])[0]?.revision,
-    provider:summaryProvider.provider,model:summaryProvider.model,text_consent:$('summary-consent').checked});
-  $('summary-consent').checked=false; render();
+    provider:summaryProvider.provider,model:summaryProvider.model,text_consent:agreement.accepted});
+   render();
 };
 $('download-markdown').onclick=()=>{
   if($('download-markdown').disabled) return;
@@ -704,3 +702,7 @@ function declineCall() {
 $('decline-call').onclick=declineCall;
 $('call-permission').oncancel=event=>{event.preventDefault();declineCall();};
 $('keep-recording').onclick=()=>{if(!$('keep-recording').disabled && activeId) send({action:'keep_recording',session_id:activeId});};
+
+$('agree-app').onclick=()=>{if(agreement.version) send({action:'accept_agreement',version:agreement.version});};
+$('app-agreement').oncancel=event=>event.preventDefault();
+$('revoke-agreement').onclick=()=>send({action:'revoke_agreement'});

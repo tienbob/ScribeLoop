@@ -50,7 +50,8 @@ worker require separate measured designs; none should invent timing or identity.
 
 ## Later Phase 2 work
 
-Phase 2b covers retrieval/search and summary context; Phase 2c covers advanced
+Phase 2b now follows the [long meetings, speakers and summaries plan](PHASE_2B_IMPLEMENTATION_PLAN.md).
+Retrieval/search is a separate later increment. Phase 2c covers advanced
 mic attribution/echo handling; Phase 2d covers second-OS capture and packaging.
 Keep those increments separate from the first usable revision/summary/export flow.
 

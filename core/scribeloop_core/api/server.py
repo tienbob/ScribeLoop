@@ -1,7 +1,7 @@
 """Authenticated local replay and opt-in encrypted native meeting test workspace.
 
-Native recording requires SQLCipher, macOS, explicit source selection and consent.
-Cloud meeting transcription requires separate explicit consent; credentials stay in the backend.
+Native recording requires SQLCipher, macOS, explicit recording choice and an app agreement.
+Cloud processing uses the durable first-use agreement; credentials stay in the backend.
 """
 from __future__ import annotations
 
@@ -199,7 +199,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         recorder = app.state.recording
         if recorder and recorder.task:
             await recorder.task
-        if closing:
+        if closing or not app.state.store.agreement()['accepted']:
             return
         store = app.state.store
         session = store.get(session_id)
@@ -384,6 +384,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             store = app.state.store
             history = store.list()
             await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                'agreement':store.agreement(),
                 'auto_call':{'session_id':auto_monitor.session_id},
                 'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
                 'summary_active_id':getattr(summary_task,'session_id',None),
@@ -421,7 +422,46 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         command = json.loads(raw)
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
-                        if command.get('action') == 'start':
+                        action = command.get('action')
+                        if action in {'record','accept_call','resume','reprocess','summarize'}:
+                            if not store.agreement()['accepted']:
+                                await queue.put({'type':'error','context':'meeting',
+                                    'message':'Accept the first-use agreement before recording or processing.'})
+                                continue
+                            # Legacy wire fields are accepted, but authorization now comes
+                            # exclusively from the durable, versioned app agreement.
+                            for field in ('consent_confirmed','cloud_consent','text_consent'):
+                                if field in command:
+                                    if not isinstance(command[field],bool):
+                                        raise ValueError('Invalid legacy authorization field')
+                                    command[field] = True
+                            if action in {'record','accept_call'}:
+                                command['consent_confirmed'] = True
+                            if action in {'record','resume','reprocess'}:
+                                command['cloud_consent'] = True
+                            if action == 'summarize':
+                                command['text_consent'] = True
+                        if action == 'accept_agreement':
+                            if set(command) != {'action','version'} or not isinstance(command['version'],str):
+                                raise ValueError('Invalid agreement')
+                            await publish({'type':'agreement','agreement':store.accept_agreement(command['version'])})
+                        elif action == 'revoke_agreement':
+                            if set(command) != {'action'}:
+                                raise ValueError('Invalid agreement')
+                            state = store.revoke_agreement()
+                            recorder = app.state.recording
+                            if recorder:
+                                if recorder.active_id:
+                                    recorder.stop(recorder.active_id)
+                                cancellation = getattr(recorder,'cancel_processing',None)
+                                if cancellation is not None:
+                                    cancellation.set()
+                            if summary_task:
+                                summary_task.cancel()
+                            for task in list(auto_tasks):
+                                task.cancel()
+                            await publish({'type':'agreement','agreement':state})
+                        elif command.get('action') == 'start':
                             if not explicit_replay_backend and hasattr(app.state.recording,'cloud'):
                                 raise ValueError('Local model replay is disabled in cloud mode')
                             if app.state.recording and (app.state.recording.active_id or
@@ -603,10 +643,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             return
                         action = command.get('action') if isinstance(command, dict) else None
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
-                            'message': ('Summary/export rejected. Select the current saved transcript, check configuration and text-upload consent, and wait for any summary request to finish.'
+                            'message': ('Summary/export rejected. Select the current saved transcript, check configuration and the first-use agreement, and wait for any summary request to finish.'
                             if action in {'summarize','export_markdown'} else
                             'Speaker correction rejected. Reopen the saved transcript; choose a valid name or a speaker from the same track and generation.'
                             if action in {'rename_speaker','merge_speaker'} else

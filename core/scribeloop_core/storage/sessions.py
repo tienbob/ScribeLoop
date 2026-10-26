@@ -11,6 +11,30 @@ class SessionStore:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
+    AGREEMENT_VERSION = '2026-10-26-v1'
+
+    def agreement(self):
+        row = self.conn.execute('SELECT accepted_at,revoked_at FROM app_agreement WHERE version=?',
+                                (self.AGREEMENT_VERSION,)).fetchone()
+        return {'version':self.AGREEMENT_VERSION, 'accepted':bool(row and row['revoked_at'] is None),
+                'accepted_at':row['accepted_at'] if row else None,
+                'revoked_at':row['revoked_at'] if row else None}
+
+    def accept_agreement(self, version):
+        if version != self.AGREEMENT_VERSION:
+            raise ValueError('Agreement version changed')
+        with self.conn:
+            self.conn.execute('INSERT INTO app_agreement(version,accepted_at,revoked_at) VALUES (?,?,NULL) '
+                'ON CONFLICT(version) DO UPDATE SET accepted_at=excluded.accepted_at,revoked_at=NULL',
+                (version,self._now()))
+        return self.agreement()
+
+    def revoke_agreement(self):
+        with self.conn:
+            self.conn.execute('UPDATE app_agreement SET revoked_at=? WHERE version=?',
+                              (self._now(),self.AGREEMENT_VERSION))
+        return self.agreement()
+
     def recover(self):
         with self.conn:
             self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=? "

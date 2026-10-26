@@ -122,6 +122,7 @@ def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sq
             assert ws.receive_json()['sessions'] == [] and state['calls'] == 0
             ws.send_json({**grant,'consent_confirmed':False})
             assert ws.receive_json()['type'] == 'error' and state['calls'] == 0
+            client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
             ws.send_json({**grant,'summary_endpoint':'https://changed.example/v1'})
             assert ws.receive_json()['type'] == 'error' and state['calls'] == 0
             ws.send_json(grant)

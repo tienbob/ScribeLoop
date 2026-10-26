@@ -235,6 +235,7 @@ def test_api_model_selection_restores_profile_and_local_speaker_rows(tmp_path,re
             assert 'auto' in snapshot['transcription_models']['deepgram']['languages']
             assert 'zh' not in snapshot['transcription_models']['deepgram']['languages']
             assert 'api_key' not in json.dumps(snapshot)
+            client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
             ws.send_json(command(model='moss-q6-k',language='vi'))
             receive(ws,'error')
             assert not client.portal.call(app.state.store.list)

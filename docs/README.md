@@ -9,6 +9,7 @@ capture/release acceptance gates.
 
 - [Implementation plan](PHASE_1_IMPLEMENTATION_PLAN.md)
 - [Phase 2 progress and implementation order](PHASE_2_IMPLEMENTATION_PLAN.md)
+- [Phase 2b: long meetings, speakers and summaries](PHASE_2B_IMPLEMENTATION_PLAN.md)
 - [Grounded summaries and Markdown export](MEETING_SUMMARIES.md)
 - [Automatic call notebook UX](AUTO_CALL_UX.md)
 - [Deepgram streaming and speaker labels](DEEPGRAM_STREAMING.md)

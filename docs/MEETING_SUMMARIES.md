@@ -24,10 +24,10 @@ ambient HTTP proxies, probe the provider, download a model or make startup reque
 ## Detected-call flow
 
 The default notebook watches app audio activity. A detected episode shows a single
-permission prompt that identifies app/browser scope, microphone, ASR backend and
-configured summary destination/model. **Record & take notes** grants recording,
-selected audio processing and one post-call text summary for this call. No separate
-checkbox or Record step is needed on this path. Declining suppresses the episode.
+Record / Not now choice that identifies app/browser scope, microphone, ASR backend and
+configured summary destination/model. The first-use app agreement covers recording permission and cloud processing.
+**Record & take notes** starts this call and one post-call text summary. No repeated
+processing-consent checkbox is needed. Declining suppresses the episode.
 One-time microphone/Screen Recording permissions and provider setup still apply.
 
 The backend ends capture after 60 continuous seconds of fresh, complete app
@@ -40,7 +40,8 @@ still applies. Detection is macOS-only and requires the native observer; the UI
 remains a browser development host, without native background notification UX.
 
 After successful transcription completion, the backend makes at most one automatic
-summary attempt to the destination/model approved in the prompt. The workflow can
+summary attempt to the destination/model shown in the call prompt, while the
+first-use agreement remains accepted. The workflow can
 finish while the browser is disconnected, provided the backend is still running.
 A cited topic title replaces the automatically created app/time placeholder; the
 original session time and source remain in metadata. Missing summary setup keeps
@@ -52,8 +53,7 @@ backend interrupts processing rather than silently resuming uploads at next laun
 
 Open a completed, failed or interrupted saved meeting with confirmed transcript
 text. The **Meeting notes** section shows the configured destination and model.
-For a remote endpoint, check the separate text-upload consent, then select
-**Generate summary**. Only selected transcript text, timestamps, segment IDs and
+After accepting the first-use app agreement, select **Generate summary**. Only selected transcript text, timestamps, segment IDs and
 speaker labels are sent, with the summary schema and instructions; no audio or
 other saved meetings are sent. Each click makes one request, without automatic
 retry/fallback. Choose a text model that can follow the JSON schema in the prompt.

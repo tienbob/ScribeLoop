@@ -134,6 +134,7 @@ def test_api_mic_only_streams_before_stop_with_one_connection(tmp_path,require_s
     with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
         ws.send_text(token)
         ws.receive_json()
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
         ws.send_json(command(scope='microphone',app_id=None,model='deepgram',language='en',cloud_consent=True))
         sid=receive(ws,'session','preparing')['session']['id']
         row=receive(ws,'segment')['segment']
