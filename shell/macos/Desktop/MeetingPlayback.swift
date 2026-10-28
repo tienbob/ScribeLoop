@@ -23,10 +23,10 @@ import AVFoundation
     private var wantsPlay = false
     private var ticker: Task<Void,Never>?
 
-    func open(_ sid: String) {
-        close(); sessionID = sid; loading = true
+    func open(_ sid: String, autoplay: Bool = false) {
+        close(); sessionID = sid; loading = true; wantsPlay = autoplay
         infoRequest = request?(["action":"audio_info","session_id":sid])
-        if infoRequest == nil { loading = false; failure = "Reconnect to load audio." }
+        if infoRequest == nil { loading = false; wantsPlay = false; failure = "Reconnect to load audio." }
         ticker = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds:100_000_000)
@@ -44,6 +44,8 @@ import AVFoundation
             tracks = value["tracks"] as? [String] ?? []
             durations = (value["track_durations"] as? [String:NSNumber] ?? [:]).mapValues { $0.doubleValue / 1000 }
             duration = durations.values.max() ?? 0; position = 0
+            if wantsPlay && duration > 0 { seek(0,autoplay:true) }
+            else { wantsPlay = false }
             return
         }
         guard let entry = pending.removeValue(forKey:response), entry.0 == generation,

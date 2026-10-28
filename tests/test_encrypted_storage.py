@@ -44,6 +44,42 @@ class MemoryKeys:
         del self.keys[account]
 
 
+def test_workspace_unlock_reopens_multiple_audio_keys_without_native_audio_reads(tmp_path):
+    from scribeloop_core.capture.source import AudioFrame
+    from scribeloop_core.storage.audio import SessionAudioStore
+    from scribeloop_core.storage.workspace_keys import WorkspaceAudioKeys
+
+    class DatabaseOnlyKeys(MemoryKeys):
+        def get(self, account):
+            assert account.startswith('database:'), 'No individual recording unlock after migration'
+            return super().get(account)
+
+        def _exists(self, account):
+            return account in self.keys
+
+    path = tmp_path/'workspace.sqlcipher'
+    keys = DatabaseOnlyKeys()
+    unlocked = []
+    def unlock(key, native):
+        unlocked.append(WorkspaceAudioKeys(tmp_path/'audio-keys', key, native))
+    ids = ['a'*32, 'b'*32]
+    with encrypted_database(path, keys, on_unlock=unlock):
+        audio = SessionAudioStore(tmp_path/'recordings', unlocked[-1])
+        for sid in ids:
+            audio.create_session(sid)
+            with audio.writer(sid, 'mic') as writer:
+                writer.write(AudioFrame(np.zeros(160, dtype='float32'), 'mic', 0, 0))
+        audio.clear_unlocked_keys()
+        unlocked[-1].close()
+    with encrypted_database(path, keys, on_unlock=unlock):
+        audio = SessionAudioStore(tmp_path/'recordings', unlocked[-1])
+        for sid in ids:
+            assert len(list(audio.frames(sid, 'mic'))) == 1
+        audio.clear_unlocked_keys()
+        unlocked[-1].close()
+    assert keys.created == 1 and len(keys.keys) == 1
+
+
 def test_encrypted_database_reopens_and_encrypts_database_and_wal(tmp_path):
     path = tmp_path / 'private.sqlcipher'
     keys = MemoryKeys()
@@ -97,7 +133,7 @@ def test_wrong_key_fails_closed_and_releases_resources(tmp_path):
     with pytest.raises(EncryptedStorageError):
         connect_encrypted(path, secrets.token_bytes(32))
     with encrypted_database(path, keys) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 12
 
 
 def test_exclusive_database_lock_and_exception_release(tmp_path):

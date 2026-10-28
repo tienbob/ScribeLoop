@@ -6,6 +6,7 @@ on:
       - 'packaging/macos/**'
       - 'core/**'
       - 'tests/test_desktop*'
+      - 'tests/native_streaming_status.swift'
       - '.github/workflows/macos-desktop.yml'
   workflow_dispatch:
 jobs:
@@ -21,6 +22,7 @@ jobs:
             shell/macos/Desktop/DesktopClient.swift \
             shell/macos/Desktop/MeetingPlayback.swift \
             shell/macos/Desktop/PlaybackSmoke.swift \
+            shell/macos/Desktop/Appearance.swift \
             shell/macos/Desktop/DesktopApp.swift \
             shell/macos/Desktop/Preferences.swift \
             -o "$RUNNER_TEMP/ScribeLoop"
@@ -31,3 +33,12 @@ jobs:
             shell/macos/ScribeLoop/CoreSupervisor.swift \
             shell/macos/ScribeLoop/ScribeLoopApp.swift \
             -o "$RUNNER_TEMP/ScribeLoopM0"
+      - name: Verify native streaming status without audio or core launch
+        run: |
+          xcrun swiftc -parse-as-library -swift-version 5 -O \
+            -module-cache-path "$RUNNER_TEMP/swift-cache" \
+            shell/macos/Desktop/DesktopClient.swift \
+            shell/macos/Desktop/MeetingPlayback.swift \
+            tests/native_streaming_status.swift \
+            -o "$RUNNER_TEMP/ScribeLoopStreamingStatus"
+          "$RUNNER_TEMP/ScribeLoopStreamingStatus"

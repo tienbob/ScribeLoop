@@ -55,6 +55,11 @@ import Foundation
         playback.chooseTrack("mic")
         guard await wait({!playback.loading && playback.track == "mic" && playback.position == 0.9}) else { return false }
         playback.close()
+        guard playback.duration == 0 && !playback.active else { return false }
+        // The first explicit Play loads metadata and then begins playback.
+        playback.open("test",autoplay:true)
+        guard await wait({playback.playing}) else { return false }
+        playback.close()
         return playback.duration == 0 && !playback.active
     }
 }

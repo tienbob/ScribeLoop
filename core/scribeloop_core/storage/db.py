@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 DDL = """
 CREATE TABLE sessions (
@@ -235,6 +235,32 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
             for row in missing:
                 ensure_transcript_revision(conn,row[0],row[1],
                     origin='confirmed' if row[2]=='meeting' else 'legacy',created_at=row[3])
+    if version < 12:
+        conn.executescript('''
+        CREATE TABLE IF NOT EXISTS summary_source_versions (
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          bucket INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(session_id,bucket));
+        INSERT OR IGNORE INTO summary_source_versions(session_id,bucket,generation)
+          SELECT session_id,start_ms/900000,0 FROM segments GROUP BY session_id,start_ms/900000;
+        ''')
+        for action, references in [('INSERT',('NEW',)),('DELETE',('OLD',)),('UPDATE',('OLD','NEW'))]:
+            changes=''.join(f'''INSERT INTO summary_source_versions(session_id,bucket,generation)
+                VALUES ({ref}.session_id,{ref}.start_ms/900000,1)
+                ON CONFLICT(session_id,bucket) DO UPDATE SET generation=generation+1;'''
+                for ref in references)
+            conn.executescript(f'''CREATE TRIGGER IF NOT EXISTS summary_segments_{action.lower()}
+                AFTER {action} ON segments BEGIN {changes} END;''')
+        for table in ('revision_speaker_edits','person_links','session_speakers'):
+            for action, references in [('INSERT',('NEW',)),('DELETE',('OLD',)),('UPDATE',('OLD','NEW'))]:
+                condition=' OR '.join(f'session_id={ref}.session_id' for ref in references)
+                conn.executescript(f'''CREATE TRIGGER IF NOT EXISTS summary_{table}_{action.lower()}
+                    AFTER {action} ON {table} BEGIN
+                    UPDATE summary_source_versions SET generation=generation+1 WHERE {condition}; END;''')
+        conn.executescript('''CREATE TRIGGER IF NOT EXISTS summary_person_name_update
+            AFTER UPDATE ON speakers BEGIN
+            UPDATE summary_source_versions SET generation=generation+1 WHERE session_id IN
+              (SELECT session_id FROM person_links WHERE person_id=OLD.id OR person_id=NEW.id); END;''')
     if version < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()

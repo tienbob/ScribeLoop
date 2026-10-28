@@ -8,27 +8,26 @@ import wave
 import numpy as np
 
 from ..capture.source import SAMPLE_RATE
-from .keys import KeyUnavailable
 
 
 class RetainedAudio:
     def __init__(self,store,audio):
         self.store,self.audio = store,audio
+        audio.memory_cache = store.memory_cache
         self.busy = False
         from .playback import PlaybackIndex
         self.playback_index = PlaybackIndex(audio)
 
     def status(self,sid):
         policy = self.store.audio_policy(sid)
-        try:
-            unlocked = policy['expired_at'] is None and self.audio.keys.get('audio:'+sid) is not None
-        except KeyUnavailable:
-            unlocked = False
-        if (self.audio.root/sid).is_symlink():
-            unlocked = False
+        # History/details must not unlock secrets merely to show a record.
+        # Availability describes retained files; actual reads still require a key
+        # and authenticate the complete encrypted audio before returning PCM.
+        retained = policy['expired_at'] is None and not (self.audio.root/sid).is_symlink()
         streams = ('mic',) if self.store.get(sid).get('capture',{}).get('scope') == 'microphone' else ('mic','loopback')
         tracks = [stream for stream in streams
-                  if unlocked and self.audio.path(sid,stream).is_file()]
+                  if retained and not self.audio.path(sid,stream).is_symlink()
+                  and self.audio.path(sid,stream).is_file()]
         return {**policy,'available':bool(tracks),'tracks':tracks}
 
     def require(self,sid):

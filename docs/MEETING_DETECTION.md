@@ -1,8 +1,12 @@
 # Meeting discovery — observer and authenticated source UI
 
-**Update:** an opt-in encrypted five-minute Brave call test is now connected.
-See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
-M2/M3 verification below describes those increments before this integration.
+**Current status (2026-10-28):** native desktop recording, permission controls,
+encrypted recorder, live Deepgram and notes are implemented. Use the
+[current acceptance checklist](CURRENT_STATUS.md) and
+[controlled-call plan](BROWSER_CALL_TEST.md). The dated M2/M3 evidence below is
+historical; references to a future coordinator/M4, disabled Record, local-model
+selectors and host permission state describe that earlier checkpoint. Physical
+routing/alignment and real-call compatibility still require acceptance.
 
 Implemented **2026-10-22**: metadata-only macOS observer, installed-app registry,
 typed discovery/source contracts, pure candidate state machine, diagnostic CLI,
@@ -89,7 +93,7 @@ identity. Recognition is not a support claim. Multiple browser tabs cannot be
 distinguished; every browser candidate remains ambiguous.
 
 Native property failures and process-list races produce incomplete/unavailable
-snapshots. Such snapshots never count as idle time or satisfy debounce. Missing
+snapshots. Such snapshots never count as idle time or confirm a start. Missing
 or unknown properties are not false activity values. Empty successful process
 lists are permitted, but cannot establish that live-call signals work.
 Successfully queried unbundled clients are ignored because they cannot match an
@@ -97,17 +101,28 @@ installed-app bundle identity; they do not invalidate unrelated app observations
 
 ## Candidate contract
 
-- Defaults: three-second debounce, fifteen-second end grace, five-second maximum
-  observation gap. These are configurable starting values, not tuned targets.
-- Aggregate positive input/output evidence across an app's exact known helpers.
-  Both directions in a meeting app yield `possible`; one direction or any browser
-  yields `ambiguous`. An open idle app yields no candidate.
-- Keep one candidate ID per app/activity episode. Dismissal suppresses that
-  episode, including activity changes and observer failures. A new ID appears
-  after healthy idle observations satisfy end grace and activity returns.
+- Native discovery confirms a known microphone off→on transition with two
+  consecutive input-and-output observations. Already-duplex startup/recovery and
+  browsers require three observations. At the normal one-second poll this means
+  roughly one or two seconds after the first qualifying observation, plus polling
+  and observer latency; it is not a guaranteed detection latency.
+- Aggregate exact known helpers. Output-only alerts never arm a call. A microphone
+  start can precede remote audio; output starting while an already-held microphone
+  remains on does not establish a new call. Startup detection remains a heuristic,
+  not proof of a call. Browsers always remain `ambiguous`. Use New recording for
+  receive-only calls or missed starts.
+- Keep one candidate ID through mute and brief silence. Not now or closing the
+  native prompt suppresses the current episode. Fifteen seconds of healthy inactivity
+  in both directions ends it. A new observed microphone edge can then prompt even
+  within the five-minute fallback quiet period; uncertain startup/recovery episodes
+  during that quiet period remain suppressed. Registry/helper churn and observer
+  failures preserve dismissals. Native shown-ID tracking prevents repeated prompts.
+- Maximum observation gap is five seconds. Unknown/incomplete observations and
+  gaps cannot establish edges or accumulate confirmations. Call-end monitoring
+  retains its independent any-direction activity signal.
 - Silence is not examined. Loss of activity only removes a suggestion after the
   grace period; the detector has no access to recording Stop.
-- Unknown/incomplete observations and long gaps reset unconfirmed debounce and
+- Unknown/incomplete observations and long gaps reset unconfirmed observations and
   end-grace accumulation. Existing suggestions/dismissals remain in memory;
   consumers must honor `available` and `last_seen`, and revalidate before use.
   IDs are local to the detector instance; the implemented API adds an incarnation
@@ -149,7 +164,7 @@ meeting source wires both streams to one host-clock origin; see the
   `com.microsoft.teams.helper` identities were verified from local plists. Brave
   and its nested helper identities were discovered locally. Slack was absent at
   the expected installation path; its real identities/call behavior remain untested.
-- Deterministic tests cover activity debounce, helper aggregation, idle apps,
+- Deterministic tests cover activity confirmation, helper aggregation, idle apps,
   dismissal/new episodes, mute/output-only ambiguity, browsers, multiple
   candidates, observer gaps/failures, malformed metadata, explicit capture scope,
   and shared-clock offsets.

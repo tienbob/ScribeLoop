@@ -15,6 +15,8 @@ class SeededService(DiscoveryService):
 
     async def start(self):
         await self.refresh()
+        self.now = 101.5
+        await self.refresh()
         self.now = 103.0
         await self.refresh()
 

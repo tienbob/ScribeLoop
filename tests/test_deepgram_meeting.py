@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 
+import httpx
 import numpy as np
 import pytest
 from scribeloop_core.pipeline.deepgram_meeting import (
@@ -171,6 +172,10 @@ async def test_fault_keeps_recorder_running_and_fresh_resume_does_not_merge_peop
     await runner.task
     labels={r['speaker_label'] for r in store.segments(sid)}
     assert len(labels)==4
+    runner.cloud.batch_transport=httpx.MockTransport(lambda request:httpx.Response(200,json={
+        'results':{'channels':[{'alternatives':[{'words':[
+            {'word':'hello','start':0,'end':.1,'speaker':0},
+            {'word':'there','start':.1,'end':.2,'speaker':1}]}]} for _ in range(2)]}}))
     runner.reprocess(sid,language='en',cloud_consent=True)
     await runner.task
     new_labels={r['speaker_label'] for r in store.segments(sid)}

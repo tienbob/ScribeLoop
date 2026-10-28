@@ -38,15 +38,18 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     @Published var people: [Record] = []
     @Published var nextPeopleOffset: Int?
     @Published var activeID: String?
+    @Published var processingID: String?
+    @Published var processingLabel = "Transcribing saved audio…"
     @Published var summaryID: String?
     @Published var partials: [String:String] = [:]
+    @Published var streamingProgress: [String:Object] = [:]
     @Published var requests: [String:String] = [:]
     @Published var playing = false
     @Published var callEnding = false
     @Published var nextCursor: [Any]?
     @Published var database: String
     var onCandidate: ((Record) -> Void)?
-    private var shownCandidate: String?
+    private var shownCandidates = Set<String>()
     private var mutationIDs = Set<String>()
     private var process: Process?
     private var input: Pipe?, output: Pipe?, diagnostics: Pipe?
@@ -66,7 +69,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     private var lastSequence = 0
     var connected: Bool { state == "Connected" }
     var running: Bool { process?.isRunning == true }
-    var busy: Bool { activeID != nil || summaryID != nil }
+    var busy: Bool { activeID != nil || processingID != nil || summaryID != nil }
     var accepted: Bool { agreement["accepted"] as? Bool == true }
     var selected: Record? { sessions.first { $0.id == selectedID } }
     var speakerRoster: [Record] { objects(detail["speakers"]) }
@@ -75,6 +78,16 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     var offset: Int { (detail["offset"] as? NSNumber)?.intValue ?? 0 }
     var total: Int { (detail["total"] as? NSNumber)?.intValue ?? 0 }
     var detection: Bool { discovery["enabled"] as? Bool ?? true }
+    var streamingLabel: String? {
+        guard let sid = activeID ?? processingID else { return nil }
+        let progress = streamingProgress.values.filter { text($0["session_id"]) == sid }
+        guard !progress.isEmpty else { return nil }
+        let sendLag = progress.map { ($0["send_lag_ms"] as? NSNumber)?.doubleValue ?? 0 }.max() ?? 0
+        let pending = progress.map { ($0["lag_ms"] as? NSNumber)?.doubleValue ?? 0 }.max() ?? 0
+        if sendLag >= 1000 { return String(format:"Catching up · %.1f s of audio waiting to send",sendLag/1000) }
+        if pending >= 2000 { return String(format:"Awaiting confirmed text · %.1f s of audio pending",pending/1000) }
+        return "Live transcription connected"
+    }
     var monitorLabel: String {
         guard connected else { return state }
         switch text(discovery["status"]) {
@@ -98,7 +111,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     func start() {
         guard !running else { return }
         clearConnection(); port = nil; buffer = Data(); boot = ""; stopping = false
-        sessions = []; detail = [:]; partials = [:]; activeID = nil; summaryID = nil; selectedID = nil
+        sessions = []; detail = [:]; partials = [:]; streamingProgress = [:]; activeID = nil; processingID = nil; summaryID = nil; selectedID = nil
         for id in mutationIDs { requests[id] = "unknown" }
         agreement = [:]; settings = [:]; discovery = [:]; state = "Starting"; message = nil
         do {
@@ -197,7 +210,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
         let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window"]
-        if !reads.contains(action) && action != "stop" && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
+        if !reads.contains(action) && !["stop","revoke_agreement"].contains(action) && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
         if requests.count >= 256 { requests = requests.filter { !["accepted","rejected"].contains($0.value) } }
@@ -227,7 +240,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             transcription = v["transcription"] as? Object ?? [:]; discovery = v["discovery"] as? Object ?? [:]
             agreement = v["agreement"] as? Object ?? [:]; sessions = objects(v["sessions"]); nextCursor = v["next_cursor"] as? [Any]
             activeID = v["active_id"] as? String; summaryID = v["summary_active_id"] as? String
-            partials = [:]; detail = [:]
+            processingID = v["processing_id"] as? String
+            partials = [:]; detail = [:]; streamingProgress = [:]
             suggestCall()
             let uncertain = requests.filter { ["pending","dispatching","unknown"].contains($0.value) }.map(\.key)
             for id in uncertain { send(["action":"request_status","request_id":id]) }
@@ -259,16 +273,35 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "session":
             let row = v["session"] as? Object ?? [:]; upsert(row)
             let status = text(row["status"]), sid = text(row["id"])
+            let wasRecording = activeID == sid
             if ["preparing","recording","transcribing"].contains(status) { stopAudio(); activeID = sid; if selectedID != sid { select(sid) } }
             else if activeID == sid { activeID = nil; partials = [:]; callEnding = false }
+            if status == "processing" { processingID = sid; processingLabel = wasRecording ? "Finishing live transcription…" : "Transcribing saved audio…" }
+            else if processingID == sid { processingID = nil }
             reloadSoon()
+        case "transcription_progress":
+            if text(v["mode"]) == "streaming" {
+                streamingProgress[text(v["stream"])] = v
+                if processingID == text(v["session_id"]) { processingLabel = "Finishing live transcription…" }
+            }
+            if text(v["mode"]) == "batch_upload" { processingLabel = "Uploading saved audio…" }
+            else if text(v["mode"]) == "batch_wait" { processingLabel = "Waiting for transcription…" }
         case "session_deleted":
-            let sid = text(v["session_id"]); sessions.removeAll { $0.id == sid }
-            if selectedID == sid { selectedID = nil; detail = [:] }
+            let sid = text(v["session_id"])
+            let index = sessions.firstIndex { $0.id == sid } ?? 0
+            sessions.removeAll { $0.id == sid }
+            if selectedID == sid {
+                stopAudio(); detail = [:]; partials = [:]
+                selectedID = sessions.isEmpty ? nil : sessions[min(index,sessions.count-1)].id
+            }
+        case "conversation_renamed":
+            upsert(v["session"] as? Object ?? [:]); reloadSoon()
         case "partial":
             if text(v["session_id"]) == selectedID { partials[text(v["stream"])] = text((v["segment"] as? Object)?["text"]) }
         case "segment":
             if text(v["session_id"]) == selectedID { partials[text((v["segment"] as? Object)?["stream"])] = nil; reloadSoon() }
+        case "transcript_replaced":
+            if text(v["session_id"]) == selectedID { detail = [:]; partials = [:]; reloadSoon() }
         case "summary_started": summaryID = v["session_id"] as? String
         case "summary_ready", "summary_error": summaryID = nil; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
         case "markdown_export": saveExport(text(v["content"]))
@@ -283,16 +316,23 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             reloadSoon()
         case "people": people = objects(v["people"]); nextPeopleOffset = v["next_offset"] as? Int
         case "auto_call_ending": callEnding = true
-        case "error", "recording_error", "transcription_error", "rolling_notes_error", "audio_cleanup_error": message = text(v["message"]); reloadSoon()
+        case "error", "recording_error", "transcription_error", "rolling_notes_error", "audio_cleanup_error":
+            if kind == "transcription_error" { streamingProgress = [:] }
+            message = text(v["message"]); reloadSoon()
         case "reconnect_required": reconnect()
         case "invalidate": detail = [:]; partials = [:]; reloadSoon(); send(["action":"people_page"])
         default: if ["audio_state","notes","rolling_notes","recovery_complete","speakers_corrected"].contains(kind) { reloadSoon() }
         }
     }
     private func suggestCall() {
-        guard accepted, !busy, let row = objects(discovery["candidates"]).first(where: { $0.raw["selectable"] as? Bool == true }),
-              row.id != shownCandidate else { return }
-        shownCandidate = row.id; onCandidate?(row)
+        guard accepted, !busy, let row = objects(discovery["candidates"]).first(where: {
+            $0.raw["selectable"] as? Bool == true && !shownCandidates.contains($0.id)
+        }) else { return }
+        if shownCandidates.count >= 256 {
+            let current = Set(objects(discovery["candidates"]).map(\.id))
+            shownCandidates.formIntersection(current)
+        }
+        shownCandidates.insert(row.id); onCandidate?(row)
     }
     private func upsert(_ value: Object) {
         let row = Record(raw:value); guard !row.id.isEmpty else { return }
@@ -375,7 +415,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         output?.fileHandleForReading.readabilityHandler = nil; diagnostics?.fileHandleForReading.readabilityHandler = nil
         try? output?.fileHandleForReading.close(); try? diagnostics?.fileHandleForReading.close(); try? input?.fileHandleForWriting.close()
         input = nil; output = nil; diagnostics = nil; process = nil; state = "Stopped"; stopping = false
-        activeID = nil; summaryID = nil
+        activeID = nil; processingID = nil; summaryID = nil; streamingProgress = [:]
         let callback = completion; completion = nil; callback?()
     }
 }

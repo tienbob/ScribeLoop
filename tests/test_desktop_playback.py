@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.speakers.registry import SpeakerRegistry
+from scribeloop_core.storage.keys import KeyUnavailable
 from test_retained_audio import retained as retained_fixture
 
 
@@ -48,7 +49,7 @@ async def test_full_duration_seek_boundaries_mix_and_key_revocation(retained):
     with pytest.raises(ValueError):
         await retained.seek(sid,'mic',True)
     retained.audio.forget_session_key(sid)
-    with pytest.raises(ValueError):
+    with pytest.raises(KeyUnavailable):
         await retained.seek(sid,'mic',500)
 
 
@@ -65,6 +66,37 @@ async def test_seek_authenticates_footer_and_invalidates_changed_file(retained):
     with pytest.raises(ValueError):
         await retained.seek(sid,'mic',0)
     assert not retained.busy
+
+
+@pytest.mark.asyncio
+async def test_cached_audio_reuses_overlapping_seeks_without_cursor_reads(retained,monkeypatch):
+    sid=audio_session(retained)
+    await retained.seek(sid,'conversation',0)
+    await retained.seek(sid,'conversation',60000)
+    def forbidden(*a,**k): raise AssertionError('Warm seek must not decrypt audio again')
+    monkeypatch.setattr(retained.audio,'cursor',forbidden)
+    pcm=decode(await retained.seek(sid,'conversation',30000))
+    assert len(pcm)==60000*16 and np.allclose(pcm,.4,atol=.0001)
+    stats=retained.audio.memory_cache.stats()
+    assert stats['hits']>=4 and stats['used_bytes']<=256*1024*1024
+    retained.audio.forget_session_key(sid)
+    assert len(retained.audio.memory_cache.namespace('pcm'))==0
+    with pytest.raises(KeyUnavailable): await retained.seek(sid,'mic',30000)
+
+
+@pytest.mark.asyncio
+async def test_cached_pcm_does_not_hide_ciphertext_tampering(retained):
+    sid=audio_session(retained)
+    await retained.seek(sid,'mic',0)
+    assert len(retained.audio.memory_cache.namespace('pcm'))==1
+    path=retained.audio.path(sid,'mic')
+    with path.open('r+b') as file:
+        file.seek(-1,2)
+        value=file.read(1)
+        file.seek(-1,2)
+        file.write(bytes([value[0]^1]))
+    with pytest.raises(ValueError): await retained.seek(sid,'mic',0)
+    assert len(retained.audio.memory_cache.namespace('pcm'))==0
 
 
 def speakers(store):

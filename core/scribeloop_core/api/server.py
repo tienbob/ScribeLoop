@@ -359,13 +359,21 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
         from ..storage.encrypted import encrypted_database
 
-        manager = (encrypted_database(Path(database), key_store) if storage == 'encrypted'
+        workspace_keys = None
+        def unlock_audio(key, native_keys):
+            nonlocal workspace_keys
+            from ..storage.workspace_keys import WorkspaceAudioKeys
+            path = Path(database).resolve()
+            workspace_keys = WorkspaceAudioKeys(path.with_name(path.name + '.audio-keys'), key, native_keys)
+
+        manager = (encrypted_database(Path(database), key_store, on_unlock=unlock_audio) if storage == 'encrypted'
                    else close_connection(migrate(connect(database or ':memory:'))))
         # Keychain access occurs during startup, before any recording or UI work.
         with manager as conn:
             store = SessionStore(conn)
             store.recover()
             app.state.store = store
+            app.state.memory_cache = store.memory_cache
             app.state.desktop_database = Path(database).resolve() if database else None
             app.state.runner = ReplayRunner(store, backend_factory, publish)
             app.state.storage = storage
@@ -375,9 +383,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 from ..capture.macos_client import MacOSMeetingAudioSource
                 from ..pipeline.model_selection import CloudRecordingRouter
                 from ..storage.audio import SessionAudioStore
-                from ..storage.keys import NativeKeyStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
-                                          key_store if key_store is not None else NativeKeyStore())
+                                          workspace_keys,memory_cache=store.memory_cache)
                 app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
                     if recording_factory else CloudRecordingRouter(store,audio,(source_factory or MacOSMeetingAudioSource),publish,cloud_config=cloud_config))
                 from ..storage.retained_audio import RetainedAudio
@@ -418,9 +425,16 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await summary_task
                     await app.state.discovery.close()
                 finally:
-                    if app.state.recording is not None:
-                        await app.state.recording.close()
-                    await app.state.runner.close()
+                    try:
+                        if app.state.recording is not None:
+                            await app.state.recording.close()
+                        await app.state.runner.close()
+                    finally:
+                        if app.state.audio is not None:
+                            app.state.audio.audio.clear_unlocked_keys()
+                        store.memory_cache.clear()
+                        if workspace_keys is not None:
+                            workspace_keys.close()
 
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
@@ -578,6 +592,17 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await publish({'type':'invalidate','session_id':command['session_id']})
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
+                            if action == 'rename_conversation':
+                                sid=command.get('session_id')
+                                if (recording_busy() or summary_task is not None or auto_tasks or
+                                        set(command)!={'action','session_id','title'} or
+                                        not isinstance(sid,str) or len(sid)!=32 or
+                                        any(c not in '0123456789abcdef' for c in sid)):
+                                    raise ValueError('Select an idle saved conversation')
+                                session=store.rename_conversation(sid,command['title'])
+                                await publish({'type':'conversation_renamed','session':session})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                             if action == 'save_settings':
                                 if recording_busy() or summary_task is not None or auto_tasks or set(command)!={'action','settings'}:
                                     raise ValueError('Wait for all processing before changing providers')
@@ -690,6 +715,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if hasattr(recorder,'select_model'):
                                 recorder.select_model(request.model)
                             title = f"{source['name']} · {datetime.now().astimezone().strftime('%b %d, %H:%M')}"
+                            if desktop:
+                                source = {**source, 'microphone_processing':{
+                                    'gain_db':desktop.settings.value.microphone_gain_db,
+                                    'noise_filter':desktop.settings.value.microphone_noise_filter,
+                                    'noise_threshold_db':desktop.settings.value.microphone_noise_threshold_db}}
                             session = recorder.start(selection,{**source,'engine':request.model,
                                 'language':request.language,'duration_s':request.duration_s,'cloud_consent':True,'auto_workflow':True,
                                 'auto_title':True,'auto_summary':grant},title,consent_confirmed=True)
@@ -855,6 +885,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                    if summary_provider and summary_provider.public()['configured'] else None)
                             source = {**source,'auto_workflow':True,'auto_title':request.title.strip() in {'Meeting conversation','Meeting test'},'auto_summary':grant,'language':request.language,'duration_s':request.duration_s,'cloud_consent':request.cloud_consent,
                                       'asr_engine':request.model if hasattr(recorder,'select_model') else recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
+                            if desktop:
+                                source['microphone_processing'] = {
+                                    'gain_db':desktop.settings.value.microphone_gain_db,
+                                    'noise_filter':desktop.settings.value.microphone_noise_filter,
+                                    'noise_threshold_db':desktop.settings.value.microphone_noise_threshold_db}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
                             await publish({'type': 'session', 'session': session})
@@ -886,9 +921,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window'}:
+                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
-                                'message':('Could not play this audio. Check its availability or recover interrupted audio before trying again.'
+                                'message':('Could not rename this conversation. Choose a saved record, use a single-line name of 1–160 characters, and wait for processing to finish.'
+                                    if action=='rename_conversation' else
+                                    'Could not play this audio. Check its availability or recover interrupted audio before trying again.'
                                     if action in {'audio_info','audio_window'} else
                                     'Name was not saved. Reopen the current transcript and choose a speaker; no partial person was created.'
                                     if action=='name_speaker' else

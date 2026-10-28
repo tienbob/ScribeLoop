@@ -19,14 +19,15 @@ STREAMS = ('loopback', 'mic')
 
 def timeline_pcm(frames, start_ms=0, end_ms=None):
     """Keep native starts and gaps; never concatenate speech across a gap."""
+    from ..capture.source import sample_position
     if end_ms is None:
-        end_ms = max((f.t_ms + f.pcm.size / 16 for f in frames), default=start_ms)
+        end_ms = max(((sample_position(f)+f.pcm.size)/16 for f in frames), default=start_ms)
     size = max(0, round((end_ms-start_ms)*16))
     if size > 305*16000:
         raise ValueError('Timeline exceeds development bounds')
     pcm = np.zeros(size, dtype=np.float32)
     for frame in frames:
-        start = round((frame.t_ms-start_ms)*16)
+        start = sample_position(frame)-round(start_ms*16)
         lo, hi = max(0,start), min(size,start+frame.pcm.size)
         if hi > lo:
             pcm[lo:hi] = frame.pcm[lo-start:hi-start]

@@ -64,7 +64,8 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         if duration not in {300,3600,10800} or self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Invalid duration or busy recorder')
         self.cloud=(self.base_config if duration==300 else DeepgramConfig(api_key=self.base_config.api_key,
-            connector=self.base_config.connector,budget_usd=3 if duration==3600 else 8,
+            connector=self.base_config.connector,batch_transport=self.base_config.batch_transport,
+            budget_usd=3 if duration==3600 else 8,
             max_requests=1800 if duration==3600 else 4800))
         self.max_s=duration
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -25,8 +26,12 @@ class Settings(BaseModel):
     summary_endpoint: str = Field(default='https://api.openai.com/v1', max_length=500)
     summary_model: str = Field(default='gpt-5.4-mini', min_length=1, max_length=100)
     summary_provider: str = Field(default='OpenAI', min_length=1, max_length=80)
+    summary_instructions: str = Field(default='', max_length=2000)
     language: str = 'auto'
     duration_s: int = 3600
+    microphone_gain_db: float = Field(default=0., ge=-12, le=24, allow_inf_nan=False)
+    microphone_noise_filter: Literal['off','standard','strong'] = 'standard'
+    microphone_noise_threshold_db: float = Field(default=-40., ge=-65, le=-25, allow_inf_nan=False)
 
     @field_validator('language')
     @classmethod
@@ -53,10 +58,12 @@ class Settings(BaseModel):
     def summary(self):
         return SummaryProvider(settings={'SUMMARY_API_KEY': self.summary_key,
             'SUMMARY_BASE_URL': self.summary_endpoint, 'SUMMARY_MODEL': self.summary_model,
-            'SUMMARY_PROVIDER': self.summary_provider})
+            'SUMMARY_PROVIDER': self.summary_provider,'SUMMARY_INSTRUCTIONS':self.summary_instructions})
 
     def public(self):
         return {**self.model_dump(exclude={'summary_key'}),
+                'summary_key_preview': ((self.summary_key[:4] if len(self.summary_key)>4 else '')
+                                        +'********') if self.summary_key else '',
                 'summary_configured': self.summary().configured,
                 'summary_presets': SUMMARY_PRESETS}
 
@@ -73,7 +80,7 @@ class DesktopSettings:
     def load(self):
         try:
             raw = self.backend.get_password(SERVICE, ACCOUNT)
-            if raw is not None and len(raw) > 8192:
+            if raw is not None and len(raw.encode()) > 16384:
                 raise ValueError('Settings too large')
             value = json.loads(raw) if raw else {}
             if not isinstance(value,dict):
@@ -87,7 +94,7 @@ class DesktopSettings:
         return self._cloud
 
     def save(self, patch):
-        if not isinstance(patch, dict) or len(json.dumps(patch)) > 8192:
+        if not isinstance(patch, dict) or len(json.dumps(patch,ensure_ascii=False).encode()) > 12288:
             raise ValueError('Invalid settings')
         patch = dict(patch)
         provider = patch.get('summary_provider', self.value.summary_provider)

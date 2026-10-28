@@ -12,7 +12,7 @@ import httpx
 
 def summary_settings(path):
     """Literal .env assignments with environment overrides; never source a file."""
-    names = ('SUMMARY_BASE_URL','SUMMARY_MODEL','SUMMARY_API_KEY','SUMMARY_PROVIDER','OPENAI_API_KEY')
+    names = ('SUMMARY_BASE_URL','SUMMARY_MODEL','SUMMARY_API_KEY','SUMMARY_PROVIDER','SUMMARY_INSTRUCTIONS','OPENAI_API_KEY')
     values = {}
     if Path(path).is_file():
         for line in Path(path).read_text(encoding='utf-8').splitlines():
@@ -33,6 +33,9 @@ class SummaryProvider:
         self.openai = self.base_url == 'https://api.openai.com/v1'
         self.model = settings.get('SUMMARY_MODEL') or ('gpt-5.4-mini' if self.openai else '')
         self.provider = settings.get('SUMMARY_PROVIDER','') or ('OpenAI' if self.openai else 'OpenAI-compatible')
+        self.instructions = settings.get('SUMMARY_INSTRUCTIONS','')
+        if not isinstance(self.instructions,str) or len(self.instructions)>2000:
+            raise ValueError('Summary instructions must be at most 2000 characters')
         self._api_key = settings.get('SUMMARY_API_KEY') or (settings.get('OPENAI_API_KEY','') if self.openai else '')
         self._request = request
         self.cloud = True

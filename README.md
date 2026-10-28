@@ -3,7 +3,20 @@
 System-audio → speaker-separated transcript → LLM summary → (Phase 3) tool-using agent.
 Target platforms: **Linux + macOS**, local-first, privacy-preserving.
 
-📖 **Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first** — **Phase 0 local-development handoff is documented; signing, hardware validation, and release gates remain deferred** (see §8).
+Start with the [native macOS app instructions](packaging/macos/DESKTOP.md) and
+[current acceptance checklist](docs/CURRENT_STATUS.md). The working app is a
+SwiftUI desktop client with a bundled Python core. Signing, real-call acceptance,
+and public distribution remain open. [Architecture](ARCHITECTURE.md) also preserves
+historical experiments and the longer-term roadmap.
+
+## macOS app
+
+Open `dist/macos/ScribeLoop.app`. Configure notes in Preferences, accept the
+first-use agreement, and choose **New recording** or review a detected call.
+The app runs without a terminal server, browser, installed Python, or local speech
+models. Closing its window keeps the menu bar available; Quit stops the core.
+The current private-demo bundle uses ad-hoc signing and contains an operator
+transcription credential; it is not ready for public distribution.
 
 ## Repo layout
 
@@ -13,11 +26,11 @@ scribeloop/
 ├── core/scribeloop_core/  # Python package: capture, pipeline, llm, storage, agent, api
 ├── scripts/bakeoff.py     # Phase 0a ASR bake-off harness
 ├── tests/                 # unit tests (run anywhere; no audio hardware needed)
-├── shell/                 # deferred desktop shell; local v0 uses Python/browser
+├── shell/                 # native SwiftUI macOS app and fixture host
 └── audio/                 # runtime session recordings (gitignored)
 ```
 
-## Cloud development setup
+## Browser/core development setup
 
 Deepgram Nova-3 streaming with anonymous speaker labels is the only app ASR path.
 Install core/security dependencies without local ML packages, configure
@@ -41,7 +54,8 @@ section notes. Summaries default to OpenAI `gpt-5.4-mini`: set `OPENAI_API_KEY` 
 `.env`; explicit `SUMMARY_*` overrides remain supported. Named people can be linked
 across meetings manually; voice learning requires a configured cloud extractor and
 consented calibration. See [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md).
-See [Phase 1 closeout and launch instructions](docs/PHASE_1_CLOSEOUT.md).
+See [native launch instructions](packaging/macos/DESKTOP.md). The
+[Phase 1 closeout](docs/PHASE_1_CLOSEOUT.md) preserves historical development evidence.
 The [documentation index](docs/README.md) separates current instructions from historical evaluations.
 The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.
 Restart the server after updating. Add `--require-launch-key` to opt into token authentication.
@@ -74,7 +88,11 @@ and controlled-tone host capture pass after enabling Screen Recording permission
 Core Audio tap and Linux GStreamer source remain placeholders.
 `capture/native/` holds the Swift helper source.
 
-## Phase 0a tasks (from ARCHITECTURE.md §8)
+## Historical Phase 0a tasks (from ARCHITECTURE.md §8)
+
+These original research checklists are historical; use the
+[current acceptance checklist](docs/CURRENT_STATUS.md) for active work. Tauri,
+local-model bake-offs and embedded llama.cpp are not the current desktop stack.
 
 See the [Phase 0 local-development closeout](docs/PHASE_0_CLOSEOUT.md) for defaults,
 implementation decisions, and explicitly deferred gates.
@@ -121,4 +139,4 @@ Deepgram Nova-3 now streams microphone/output audio and returns anonymous indivi
 
 M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
 
-Encrypted cloud startup no longer needs a public WAV fixture. See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. The user deferred real-meeting tests and signing. Current browser UI is the local development host.
+Encrypted cloud startup no longer needs a public WAV fixture. See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. Real-call acceptance and signing remain open. The native SwiftUI app is the current macOS host; the browser UI remains a development/test client.

@@ -60,6 +60,7 @@ class DesktopContract:
         return {'type':'snapshot', 'agreement':app.state.store.agreement(),
             'settings':self.settings.value.public(), 'discovery':app.state.discovery.snapshot(),
             'active_id':active_id, 'summary_active_id':summary_id,
+            'processing_id':getattr(app.state.recording,'reprocess_id',None),
             'summary_provider':summary_provider.public(),
             'transcription':app.state.recording.cloud.public() if app.state.recording else {},
             'storage':'encrypted', 'database':str(app.state.desktop_database),
@@ -120,12 +121,15 @@ class DesktopContract:
         if action in {'audio_info','audio_window'}:
             fields={'action','session_id'} if action=='audio_info' else {'action','session_id','stream','start_ms'}
             sid=command.get('session_id')
+            recorder = app.state.recording
+            rerun_id = getattr(recorder,'reprocess_id',None)
             if (set(command)!=fields or not isinstance(sid,str) or not ID.fullmatch(sid) or
-                    not app.state.audio or active_id or (app.state.recording and app.state.recording.task and
-                    not app.state.recording.task.done())):
+                    not app.state.audio or active_id or (recorder and recorder.task and
+                    not recorder.task.done() and not rerun_id)):
                 raise ValueError('Saved audio is unavailable while recording or processing')
             session=app.state.store.get(sid)
-            if not session or session['status'] not in {'completed','failed','interrupted'}:
+            if not session or (session['status'] not in {'completed','failed','interrupted'}
+                               and not (sid==rerun_id and session['status']=='processing')):
                 raise ValueError('Select a saved meeting')
             if action=='audio_info':
                 return {'type':'audio_info','session_id':sid,**await app.state.audio.describe(sid)}

@@ -24,6 +24,21 @@ class Vault:
         self.value = value
 
 
+def test_microphone_preferences_persist_and_reject_invalid_values():
+    settings = DesktopSettings(Vault())
+    assert settings.value.microphone_gain_db == 0
+    assert settings.value.microphone_noise_filter == 'standard'
+    settings.save({'microphone_gain_db':6., 'microphone_noise_filter':'strong', 'microphone_noise_threshold_db':-44.})
+    reopened = DesktopSettings(settings.backend)
+    assert reopened.value.microphone_gain_db == 6.
+    assert reopened.value.public()['microphone_noise_filter'] == 'strong'
+    assert reopened.value.microphone_noise_threshold_db == -44.
+    for patch in ({'microphone_gain_db':25.}, {'microphone_gain_db':float('inf')},
+                  {'microphone_noise_filter':'invalid'}):
+        with pytest.raises(ValueError): settings.save(patch)
+    assert settings.value.microphone_gain_db == 6.
+
+
 def envelope(command, request=None):
     return {'protocol':2,'request_id':request or uuid4().hex,'command':command}
 
@@ -61,6 +76,19 @@ def test_locked_settings_fail_closed():
     vault.value='invalid'
     with pytest.raises(KeyUnavailable):
         DesktopSettings(vault)
+
+
+@pytest.mark.parametrize('key,preview', [('', ''),('abc','********'),('abcd','********'),
+    ('abcde','abcd********'),('sk-example-secret','sk-e********')])
+def test_saved_key_preview_is_masked_and_never_replaces_actual_key(key,preview):
+    settings=DesktopSettings(Vault())
+    public=settings.save({'summary_key':key})
+    assert public['summary_key_preview']==preview
+    assert 'summary_key' not in public
+    if len(key)>4:
+        assert key not in str(public)
+    settings.save({'summary_model':'updated-model'})
+    assert DesktopSettings(settings.backend).value.summary_key==key
 
 
 def test_private_production_bootstrap():
@@ -227,6 +255,9 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
                 if event['type']=='session' and event['session']['status']=='completed':
                     completed=event['session']; break
             assert completed and sources[0].closed
+            assert completed['capture']['microphone_processing'] == {
+                'gain_db':0., 'noise_filter':'standard', 'noise_threshold_db':-40.}
+            assert (tmp_path/'recordings'/sid/'mic.raw.slpa').is_file()
             assert len(sockets)==1, 'Stop finishes the existing streams; no full-audio second pass'
             ws.send_json(envelope({'action':'meeting_page','session_id':sid}))
             detail=receive(ws,'meeting_page')
@@ -285,3 +316,16 @@ def test_build_credential_is_literal_validated_and_explicit(tmp_path):
     assert read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'explicit-build-key-12345'},config)=='explicit-build-key-12345'
     with pytest.raises(SystemExit):
         read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'invalid key'},config)
+
+
+def test_summary_instructions_roundtrip_clear_and_unicode_bounds():
+    settings=DesktopSettings(Vault())
+    guide='Ưu tiên quyết định, người phụ trách và ngày đến hạn.'
+    public=settings.save({'summary_instructions':guide})
+    assert public['summary_instructions']==guide
+    assert DesktopSettings(settings.backend).value.summary().instructions==guide
+    settings.save({'summary_instructions':'😀'*2000})
+    assert DesktopSettings(settings.backend).value.summary_instructions=='😀'*2000
+    with pytest.raises(ValueError): settings.save({'summary_instructions':'x'*2001})
+    settings.save({'summary_instructions':''})
+    assert settings.value.summary().instructions==''

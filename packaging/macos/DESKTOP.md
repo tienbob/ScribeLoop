@@ -15,6 +15,9 @@ open 'dist/macos/ScribeLoop.app'
    its key. OpenAI / `gpt-5.4-mini` is the default. Summary keys are saved in macOS
    Keychain. Transcription is managed by the app operator at build time; users
    cannot configure its provider/key. Runtime never imports development `.env`.
+   Press **Done** to save edits; the sheet closes after the save is confirmed.
+   Saved summary keys show only their first four characters plus a fixed mask.
+   Enter a new key to replace it; unchanged fields keep the saved key.
 2. Choose Auto or a fixed conversation language and a 5-minute, 1-hour or 3-hour
    recording preset. Vietnamese requires its fixed choice. Saving settings makes
    no provider request; changes require idle capture/text processing.
@@ -47,16 +50,14 @@ uncertain actions before making another change.
 
 New workspaces use `~/Library/Application Support/ScribeLoop/meetings.sqlcipher`
 and adjacent encrypted `recordings/`. Transcripts/notes use SQLCipher; audio uses
-authenticated encrypted chunks. Keys use the existing storage Keychain namespace.
+authenticated encrypted chunks. The workspace key uses the existing storage Keychain namespace; audio keys use workspace-encrypted envelopes.
 Unarchived audio expires after 30 days while running/idle and the agreement is
 accepted. Archive keeps audio until unarchived or deleted. Notes/transcripts remain.
 
-To use development meetings, stop the development server and choose **Use an
-existing database** in Preferences. Select its `.sqlcipher` file in place. No
-copy/relocation or key remapping is performed. The original adjacent recordings
-and path-bound Keychain key remain authoritative. The selected database path is
-the only workspace reference persisted in UserDefaults; transcript/audio/provider
-keys are not stored there. Database schema downgrade is not supported.
+Preferences does not expose workspace management. Existing configured workspaces
+remain in use; this UI change does not relocate or decrypt data. The workspace
+reference is persisted in UserDefaults; transcript/audio/provider keys are not.
+Database schema downgrade is not supported.
 
 ## Build and validate
 
@@ -168,3 +169,177 @@ also checks full-duration metadata, 90-second seeking, person naming and generat
 silent playback through multiple windows, pause/resume, speed, superseded seeks,
 track changes and cleanup. Native UI inspection verified timeline seeking/play/pause,
 speed choices and selecting Person 3 → entering a name → saving to the transcript.
+
+### Avoiding chat-notification prompts
+
+Native discovery tracks microphone starts rather than waiting a fixed six seconds.
+A known input off→on transition needs two successive duplex observations; startup
+or recovery activity and browsers need three. Output-only notifications and output
+starting on an already-held microphone do not establish new calls. This remains an
+audio-process heuristic; use New recording for receive-only calls or missed starts.
+Existing call IDs survive muting and short silence. The independent call-end monitor
+continues using any-direction activity.
+
+Not now and the close button suppress the current episode. After fifteen seconds of
+healthy inactivity in both directions, a new observed microphone start can prompt
+again immediately after confirmation. Uncertain reappearances remain suppressed
+for five minutes. Registry/helper changes preserve dismissals, and the native client
+remembers shown candidate IDs rather than just the last one.
+
+### Browsing without audio-key prompts
+
+History and record details inspect retention metadata and encrypted-file presence,
+without fetching audio keys. The Audio tab loads and authenticates audio only after
+Play is pressed; the duration and seek bar populate then. A listed recording may
+still fail playback if its key is missing or access is denied. Metadata visibility
+never grants decryption access. Playback/rerun and deletion still use the native
+keystore. Ad-hoc rebuilds can separately require approval for database/provider
+credentials at startup; stable release signing remains deferred.
+
+### Retranscribing saved audio
+
+Transcribe again uses Deepgram's prerecorded HTTP endpoint: one whole-conversation
+WAV upload, with the recorded sources as separate channels and speaker separation
+enabled. The upload is generated in bounded memory without plaintext disk staging
+or realtime replay. Live calls and interrupted-live resume retain their streaming
+path. Existing transcript revision stays selected until the batch result succeeds;
+failures do not silently retry. The UI reports saved processing/upload/wait states,
+and retained audio remains playable during a saved rerun. Capture and audio recovery
+continue to exclude playback because they can modify the underlying files.
+
+### Visual design and icon
+
+The notebook keeps its sidebar and Notes / Transcript / Audio layout. Its native
+palette follows macOS appearance: warm neutral light surfaces, charcoal-green dark
+surfaces, a green accent, and explicit status badges. Notes use a single overview
+card and compact source buttons; transcript labels distinguish people from audio
+sources. Playback still loads only on Play. Recording review shows provider/model
+information without an unnecessary endpoint URL.
+
+The bundle's speech-loop/waveform icon is packaged as `ScribeLoop.icns`; editable
+SVG, PNG and regeneration instructions live in `shell/macos/Assets/`. No provider
+calls are needed to build or inspect the UI.
+
+### Simplified Preferences
+
+Done saves changed notes-provider, model, key, language and duration settings, then
+closes after the core accepts the save. An unchanged Done closes without writing to
+Keychain. Failed or uncertain saves keep the form and its edits visible. There is
+no separate Save button, key-removal switch or workspace-management section.
+Cancel, Escape, or clicking outside the Preferences sheet discards unsaved edits.
+Call-detection and login switches are staged until Done too. Cancellation is disabled
+while a save is being confirmed; OS permission buttons act immediately.
+
+The saved-key placeholder shows four leading characters followed by a fixed mask
+(short keys remain entirely masked). This is display metadata, never a replacement
+credential. A blank replacement field keeps the existing key for the same endpoint.
+Microphone and meeting-audio permissions have separate trailing actions; automatic
+call detection uses a switch. Permission grants still require the operating system.
+
+### Rename or delete a conversation
+
+Use the visible pencil and trash buttons on each sidebar conversation card, or
+right-click a conversation for **Rename conversation…** and
+**Delete conversation…**. Both actions are also in the selected record's Meeting
+menu. Renaming saves a custom title without transcribing or generating notes; later
+summaries keep that title. Empty, multiline and overlong names are rejected.
+
+Delete asks for confirmation and names the target conversation. Confirmation uses
+the existing key-first permanent deletion flow for its audio, transcript and notes.
+Deleting the selected record moves selection to an adjacent record. Cancel leaves
+all saved data intact. Actions are unavailable while recording/processing is active.
+
+On macOS, conversation deletion checks Keychain item identity without reading the
+audio secret, removes the key, verifies absence, then removes encrypted files.
+Deleting does not need to decrypt the recording. A locked Keychain or changed
+unsigned development identity can still require macOS authorization.
+
+Preferences → **Stop cloud processing…** revokes the first-use agreement and stops
+recording/pending processing after confirmation. Saved conversations remain; unsaved
+settings drafts are discarded. Already uploaded data cannot be recalled. This action
+is immediate and separate from Done.
+
+The preview builder now creates its fixture bundle directly, without rebuilding the
+production app or loading its operator key. It writes a separate preview manifest.
+
+### One workspace unlock
+
+The database key is retrieved from Keychain once when the core opens the workspace.
+A separate wrapping key is derived with HKDF-SHA256; each recording still uses a
+random 256-bit key. Those recording keys are stored as authenticated AES-256-GCM
+envelopes in `<database filename>.audio-keys/` beside the database, not as separate
+new Keychain items. Opening another recording or restarting the core after the
+workspace unlock needs no individual key authorization for migrated/new recordings.
+Raw keys are never written to disk. Include the envelope directory in encrypted
+workspace backups; copying the database alone does not preserve audio access.
+
+Existing recordings migrate on their first explicit audio access. macOS may ask
+once for each legacy recording key; successful migration persists and verifies an
+envelope without rewriting audio/transcripts or making provider requests. Failed
+migration preserves the original key and recording. Legacy Keychain originals stay
+until authorized recording deletion; deletion removes both copies before audio.
+The process cache is evicted on deletion and cleared on shutdown. Backups and
+forensic recovery of deleted envelope files are outside the deletion guarantee.
+
+The first-use agreement is separate from Keychain authorization. Startup can still
+need OS approval for workspace/provider credentials, especially after ad-hoc builds;
+stable release signing remains open. This change removes separate recording-key
+prompts after migration, rather than bypassing OS authorization.
+
+### Summary instructions
+
+Preferences → Conversation notes → **Summary instructions** accepts up to 2,000
+characters of optional guidance, such as “Prioritize decisions, commercial risks,
+owners and explicit deadlines.” Done saves it securely with the provider settings;
+Cancel/Escape/outside dismissal discards edits. Blank uses built-in guidance.
+Instructions apply to new section notes and final summaries, and changing them
+invalidates matching summary-job cache entries for the next generation. Existing
+saved notes are unchanged until Generate summary is requested. Required citations,
+JSON structure and factual-grounding rules remain enforced.
+
+The development API can also read `SUMMARY_INSTRUCTIONS` from its local configuration;
+the bundled desktop runtime uses saved Settings and does not read checkout `.env`.
+
+A reproducible fictional business demonstration can be generated with local macOS
+voices, then sent once to the configured cloud providers:
+
+```sh
+.venv/bin/python scripts/demo_business_meeting.py --allow-synthetic-upload \
+  --output data/demos/business-pilot-new
+```
+
+It writes audio, the original script, raw transcript, cited notes, measurements and
+an HTML report in an isolated workspace; it never opens the user's meeting DB or
+changes saved provider/settings. It uses SciPy and macOS voices in the development
+environment, not the shipped app. See `data/demos/business-pilot-20261027/demo.html`
+for the completed 4:16 example and `REVIEW.md` for its observed name/wording errors.
+
+When no custom instructions are saved, the editor displays the default editorial
+guidance as editable text. Existing custom instructions take precedence. Opening
+Preferences and pressing unchanged Done does not save or touch Keychain.
+
+### Microphone controls
+
+Preferences → **Microphone** adds input sensitivity (-12 to +24 dB), Off/Standard/Strong
+background filtering, an adjustable noise rejection threshold and Reset. Defaults
+are 0 dB, Standard and -40 dBFS. Changes apply to new recordings and their ASR; an
+encrypted original microphone track is retained when processing is enabled.
+See [behavior, limits and latest-recording analysis](../../docs/MICROPHONE_SETTINGS.md).
+
+### Streaming performance and status
+
+The sender reads bounded audio durations independently of native packet size, and
+provider writes have a cancellation-aware five-second deadline. The main window
+shows local catch-up versus pending confirmed text during streaming. Note/page
+refreshes reuse change-aware caches; source edits still invalidate cited notes.
+Schema 12 adds source-change tracking without rewriting recordings/transcripts.
+See the [fixes and re-audit](../../docs/STREAMING_PERFORMANCE_CLOSEOUT_2026-10-28.md)
+for measured improvements and cold-cache/real-network limitations.
+
+### Memory cache
+
+The core uses a shared **256 MiB** LRU cache for recent authenticated audio blocks,
+indexes, transcript pages, speaker rosters and validated notes/hash data. It fills
+on demand rather than reserving the budget at startup. File/source changes,
+deletion, forget-person and shutdown invalidate appropriate entries; stored audio
+stays encrypted. See [cache behavior and silent measurements](../../docs/MEMORY_CACHE_256MB.md).

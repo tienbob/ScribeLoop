@@ -1,8 +1,12 @@
 # Native meeting capture — M3 implementation
 
-**Update:** an opt-in encrypted five-minute Brave call test is now connected.
-See [current test instructions and limitations](BROWSER_CALL_TEST.md). Earlier
-M2/M3 verification below describes those increments before this integration.
+**Current status (2026-10-28):** native desktop recording, permission controls,
+encrypted recorder, live Deepgram and notes are implemented. Use the
+[current acceptance checklist](CURRENT_STATUS.md) and
+[controlled-call plan](BROWSER_CALL_TEST.md). The dated M2/M3 evidence below is
+historical; references to a future coordinator/M4, disabled Record, local-model
+selectors and host permission state describe that earlier checkpoint. Physical
+routing/alignment and real-call compatibility still require acceptance.
 
 Implemented **2026-10-22**: read-only microphone/running-app enumeration, native
 AVFoundation mic capture, SCK meeting output, common host-clock transport,

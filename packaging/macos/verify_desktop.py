@@ -12,6 +12,8 @@ def main():
     info=plistlib.loads((APP/'Contents/Info.plist').read_bytes())
     assert info['CFBundleIdentifier']=='ai.scribeloop.desktop'
     assert info['NSMicrophoneUsageDescription']
+    icon=APP/'Contents/Resources'/info['CFBundleIconFile']
+    assert icon.is_file() and icon.read_bytes()[:4]==b'icns'
     assert not info['NSAppTransportSecurity'].get('NSAllowsArbitraryLoads',False)
     config=json.loads((APP/'Contents/Resources/transcription.json').read_text())
     assert config['provider']=='deepgram' and 16<=len(config['api_key'])<=512

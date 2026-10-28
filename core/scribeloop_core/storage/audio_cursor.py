@@ -8,7 +8,7 @@ import time
 
 import numpy as np
 
-from ..capture.source import SAMPLE_RATE, AudioFrame
+from ..capture.source import SAMPLE_RATE, AudioFrame, aligned_sample
 from .audio import (
     FOOTER,
     FRAME,
@@ -46,6 +46,7 @@ class AudioCursor:
             self.boundary=stat.st_size
             self.sequence=self.samples=0
             self.end_ms=0.
+            self.aligned_end=None
             self.complete=False
             self.offset=len(self.header)
         except BaseException:
@@ -62,10 +63,12 @@ class AudioCursor:
         self.file.close()
         self.cipher=None
 
-    def read(self,*,max_frames=8,durable=False):
+    def read(self,*,max_frames=8,durable=False,max_samples=None):
         from cryptography.exceptions import InvalidTag
         if not 1<=max_frames<=64 or self.file.closed:
             raise ValueError('Invalid cursor read')
+        if max_samples is not None and (type(max_samples) is not int or not 1<=max_samples<=2*SAMPLE_RATE):
+            raise ValueError('Invalid cursor sample budget')
         stat=self.path.stat()
         if (stat.st_dev,stat.st_ino)!=self.identity or stat.st_size<self.boundary:
             raise AudioIntegrityError('SLPA replaced or truncated')
@@ -80,7 +83,8 @@ class AudioCursor:
         frames=[]
         caught_up=self.complete
         self.file.seek(self.offset)
-        while not self.complete and len(frames)<max_frames:
+        batch_samples=0
+        while not self.complete and len(frames)<max_frames and (max_samples is None or batch_samples<max_samples):
             start=self.file.tell()
             if boundary-start<RECORD.size:
                 caught_up=True
@@ -115,10 +119,14 @@ class AudioCursor:
                     raise AudioIntegrityError('Invalid SLPA timeline')
                 self.end_ms=end
                 self.samples+=count
+                batch_samples+=count
                 self.sequence+=1
-                frames.append(AudioFrame(pcm,self.stream,t,time.monotonic()))
+                sample_start=aligned_sample(t,self.aligned_end)
+                self.aligned_end=sample_start+count
+                frames.append(AudioFrame(pcm,self.stream,t,time.monotonic(),sample_start))
             self.offset=self.file.tell()
         if self.offset==boundary:
             caught_up=True
         return frames,{'complete':self.complete,'samples':self.samples,'end_ms':self.end_ms,
+            'timeline_end_samples':self.aligned_end or 0,
             'authenticated_bytes':self.offset,'tail_bytes':boundary-self.offset,'caught_up':caught_up}

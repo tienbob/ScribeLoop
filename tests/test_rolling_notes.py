@@ -68,6 +68,100 @@ async def test_hierarchical_notes_over_one_hundred_kb_cache_and_reuse(state):
 
 
 @pytest.mark.asyncio
+async def test_rolling_page_cache_survives_future_audio_but_invalidates_source_edits(state,monkeypatch):
+    store,sid=state
+    rows=add_rows(store,sid,count=2)
+    engine=RollingNotes(store,Provider())
+    await engine.run(sid,rows,revision=1)
+    first=engine.latest(sid)
+    assert first
+    original=store.segments
+    def forbidden(*a,**k): raise AssertionError('Warm page must not scan transcript')
+    monkeypatch.setattr(store,'segments',forbidden)
+    store.checkpoint(sid,'mic',recorded_ms=2000000)
+    store.append(sid,{'text':'New later section','start_ms':1800000,'end_ms':1801000,'is_final':True},stream='mic')
+    assert RollingNotes(store,Provider()).latest(sid)==first
+    monkeypatch.setattr(store,'segments',original)
+    with store.conn:
+        store.conn.execute('UPDATE segments SET text=? WHERE id=?',('Changed source',rows[0]['id']))
+    assert engine.latest(sid) is None
+    monkeypatch.setattr(store,'segments',forbidden)
+    assert engine.latest(sid) is None, 'Stale-note reads are cached without reviving invalid notes'
+
+
+@pytest.mark.asyncio
+async def test_grounded_hash_cache_ignores_audio_watermarks_and_detects_text_changes(state,monkeypatch):
+    store,sid=state
+    rows=add_rows(store,sid,count=2)
+    provider=Provider()
+    result=await RollingNotes(store,provider).run(sid,rows,revision=1)
+    _,fingerprint,_=store.summary_input(sid,1,build_messages=False)
+    store.save_grounded_summary(sid,1,fingerprint,result,provider=provider.provider,model=provider.model)
+    assert store.grounded_summary(sid)['stale'] is False
+    original=store.segments
+    def forbidden(*a,**k): raise AssertionError('Audio progress must not rehash transcript')
+    monkeypatch.setattr(store,'segments',forbidden)
+    store.checkpoint(sid,'mic',recorded_ms=10000)
+    assert store.grounded_summary(sid)['stale'] is False
+    extra=store.append(sid,{'text':'Later words','start_ms':11000,'end_ms':12000,'is_final':True},stream='mic')
+    assert store.grounded_summary(sid)['stale'] is True, 'An append changes the source count without a full rehash'
+    monkeypatch.setattr(store,'segments',original)
+    with store.conn:
+        store.conn.execute('DELETE FROM segments WHERE id=?',(extra['id'],))
+    assert store.grounded_summary(sid)['stale'] is False
+    with store.conn:
+        store.conn.execute('UPDATE segments SET text=? WHERE id=?',('Changed source',rows[0]['id']))
+    assert store.grounded_summary(sid)['stale'] is True
+
+
+@pytest.mark.asyncio
+async def test_note_read_caches_invalidate_and_restore_for_speaker_and_person_edits(state):
+    from uuid import uuid4
+    store,sid=state
+    source=store.append(sid,{'text':'Synthetic statement','start_ms':0,'end_ms':1000,
+        'is_final':True,'speaker_key':'deepgram:'+'b'*32+':mic:0'},stream='mic')
+    store.transition(sid,'completed')
+    rows=store.segments(sid)
+    engine=RollingNotes(store,Provider())
+    summary=await engine.run(sid,rows,revision=1)
+    _,fingerprint,_=store.summary_input(sid,1,build_messages=False)
+    store.save_grounded_summary(sid,1,fingerprint,summary,provider='Test',model='test-model')
+    assert engine.latest(sid) and not store.grounded_summary(sid)['stale']
+    speaker=source['local_speaker_id']
+    with store.conn:
+        store.conn.execute('UPDATE session_speakers SET local_label=? WHERE id=?',('Changed name',speaker))
+    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+
+
+    person=uuid4().hex
+    with store.conn:
+        store.conn.execute('INSERT INTO speakers(id,canonical_name) VALUES (?,?)',(person,'Different person'))
+        store.conn.execute('INSERT INTO person_links(session_id,revision,speaker_id,person_id) VALUES (?,1,?,?)',(sid,speaker,person))
+    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+    with store.conn:
+        store.conn.execute('UPDATE speakers SET canonical_name=? WHERE id=?',('Speaker 1',person))
+    assert engine.latest(sid) and not store.grounded_summary(sid)['stale']
+    with store.conn:
+        store.conn.execute('INSERT INTO revision_speaker_edits(session_id,revision,speaker_id,label) VALUES (?,1,?,?)',(sid,speaker,'Edited label'))
+        store.conn.execute('DELETE FROM person_links WHERE session_id=?',(sid,))
+    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+
+
+@pytest.mark.asyncio
+async def test_note_validation_works_when_shared_cache_is_disabled(state):
+    from scribeloop_core.storage.memory_cache import MemoryCache
+    store,sid=state
+    store.memory_cache=MemoryCache(0)
+    rows=add_rows(store,sid,count=2)
+    provider=Provider()
+    result=await RollingNotes(store,provider).run(sid,rows,revision=1)
+    _,fingerprint,_=store.summary_input(sid,1,build_messages=False)
+    store.save_grounded_summary(sid,1,fingerprint,result,provider='Test',model='test-model')
+    assert not store.grounded_summary(sid)['stale']
+    assert RollingNotes(store,provider).latest(sid)
+
+
+@pytest.mark.asyncio
 async def test_dispatch_failure_is_never_automatically_retried(state):
     store,sid=state
     rows=add_rows(store,sid,count=2)
@@ -154,3 +248,23 @@ async def test_v9_migration_preserves_spent_quota_and_is_idempotent(state):
     migrate(store.conn)
     budget=engine.public(sid)
     assert budget['requests']==3 and budget['input_bytes']==3*size
+
+
+@pytest.mark.asyncio
+async def test_editorial_instructions_apply_to_sections_reduction_and_cache(state):
+    store,sid=state
+    rows=add_rows(store,sid,count=80)
+    provider=Provider()
+    provider.instructions='Focus on commercial risks, owners and explicit deadlines.'
+    engine=RollingNotes(store,provider)
+    await engine.run(sid,rows,revision=1)
+    assert len(provider.calls)>1
+    assert all(json.loads(call[1]['content'])['summary_preferences']==provider.instructions for call in provider.calls)
+    assert any('untrusted_section_notes' in call[1]['content'] for call in provider.calls)
+    count=len(provider.calls)
+    await engine.run(sid,rows,revision=1)
+    assert len(provider.calls)==count
+    provider.instructions='Write detailed engineering handover notes.'
+    await engine.run(sid,rows,revision=1)
+    assert len(provider.calls)>count
+    assert all(json.loads(call[1]['content'])['summary_preferences']==provider.instructions for call in provider.calls[count:])

@@ -105,6 +105,10 @@ async def serve(request, *, app_factory=make_app, helpers=None):
 
 def main():
     try:
+        if sys.argv[1:] == ['--inspect-audio']:
+            from ..storage.audio_quality import main as inspect_audio
+            inspect_audio(json.loads(read_control(timeout=10)))
+            return
         request = bootstrap(read_control(timeout=10))
         asyncio.run(serve(request))
     except Exception:  # noqa: BLE001 - never leak keys, paths, provider bodies or transcript

@@ -1,6 +1,6 @@
 # ScribeLoop — Architecture Plan
 
-> **Current implementation (2026-10-26):** cloud-only Deepgram live ASR/diarization,
+> **Current implementation (2026-10-28):** cloud-only Deepgram live ASR/diarization,
 > encrypted per-stream capture and 30-day audio retention/archive, Record / Not now
 > after a versioned first-use agreement, five-minute/one-hour/three-hour presets,
 > bounded readers/playback, durable cited section/final notes, and manual named
@@ -10,7 +10,10 @@
 > Voice recognition remains gated on a configured cloud embedding backend and
 > consented calibration; no guessed thresholds or automatic naming are enabled.
 > [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md) is authoritative for shipped
-> behavior; packaging, real-call/physical validation and OS parity remain open.
+> core behavior. The native SwiftUI macOS app and bundled Python core are implemented;
+> see [desktop instructions](packaging/macos/DESKTOP.md) and the
+> [current acceptance checklist](docs/CURRENT_STATUS.md). Signed distribution,
+> real-call/physical validation and OS parity remain open.
 
 > System-audio → Speaker-separated transcript → LLM summary → (Phase 3) Tool-using agent.
 > Target: Linux + macOS. Local-first, privacy-preserving.
@@ -69,32 +72,41 @@ fixture inference is disabled; deterministic injected replay remains a test harn
 
 ## 2. Layered architecture
 
-| Layer                         | Responsibility                                               | Tech (recommended)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Capture**             | OS loopback / per-app audio capture, resample to 16 kHz mono | macOS: **Core Audio process taps** (macOS 14.2+, `NSAudioCaptureUsageDescription` — dedicated "system audio recording" permission, lighter than Screen Recording; per-process targeting) with `ScreenCaptureKit` (13+, Screen Recording permission, periodic re-prompt on macOS 15) as fallback. Linux: PipeWire `monitor` / per-stream capture, PulseAudio fallback. Unified behind an `AudioSource` protocol                                                                                                                                                                                                              |
-| **Pre-processing**      | Resampling, normalization, Voice Activity Detection          | `silero-vad` (ONNX), `ffmpeg`/`soxr`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Transcription**       | Speech → text, streaming + batch                            | Offline: `faster-whisper` (CTranslate2; **CPU/CUDA only — no Metal backend**; CPU-only on macOS) or `whisper.cpp` (Metal/Core ML) or `mlx-whisper` on Apple Silicon. Streaming: Whisper + LocalAgreement-style confirmation policy, or native streaming ASR (sherpa-onnx streaming Zipformer, Moonshine) — Phase 0 bake-off picks per OS                                                                                                                                                                                                                                                                                     |
-| **Diarization**         | "Who is speaking" per segment                                | Batch: `pyannote/speaker-diarization-community-1` (CC-BY-4.0, HF-gated download — see §9). Online, in fallback order: `diart` (compatibility with the pyannote 4 / community-1 stack unverified — Phase 0) → **near-online chunked offline diarization** (re-run the offline pipeline on 30–60 s overlapping chunks; labels arrive ~1 min late — simple, likely good enough for UX) → DIY sliding-window on community-1's segmentation + WeSpeaker embeddings (**one embedding space online and offline**). Note: "pyannote streaming" exists only as pyannoteAI's commercial cloud (Live-1), not an open component |
-| **Speaker registry**    | Stable identities across sessions                            | WeSpeaker embeddings (community-1's internal space) or SpeechBrain ECAPA — **one model online and offline**; Resemblyzer excluded (dormant)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **LLM / Summarization** | Rolling + final summaries, structured extraction             | Local default: **llama.cpp embedded in the GPU worker** (llama-cpp-python) — keeps a single GPU owner; **Ollama** supported as an *external* provider (own process/VRAM, budgeted separately); cloud optional. All behind an OpenAI-compatible client                                                                                                                                                                                                                                                                                                                                                                       |
-| **Event bus**           | Decoupled pipeline stages                                    | In-process `asyncio` queues first; Redis/NATS later if we split processes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| **Storage**             | Sessions, transcripts, speakers, summaries; semantic search  | SQLite (+ WAL, SQLCipher) + `sqlite-vec` (SQLCipher+sqlite-vec coexistence verified in Phase 0 — §6); Markdown export (plaintext by design)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **Agent (Phase 3)**     | Tool use: notes, calendar, todos                             | Function-calling loop + **MCP (Model Context Protocol)** servers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **App shell / UI**      | Settings, live transcript, summaries                         | Local v0: **FastAPI + browser UI**; Tauri shell/sidecar packaging deferred                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Layer | Current implementation |
+| --- | --- |
+| Capture | macOS Swift helper: ScreenCaptureKit output and AVFoundation microphone, separate encrypted tracks and common host clock. Core Audio taps and Linux PipeWire capture remain planned. |
+| Transcription and diarization | Deepgram Nova-3 live streaming, one connection per source. Explicit saved reruns use a prerecorded HTTP upload. Anonymous speaker labels are source/connection scoped. |
+| People | Manual names and cross-meeting links. Automatic voice recognition requires a real embedding provider and consented calibration; it is disabled. |
+| Notes | Bounded rolling/section/final cited summaries. OpenAI `gpt-5.4-mini` default; configurable Gemini, compatible APIs, Ollama and LM Studio. No embedded local LLM. |
+| Storage | SQLCipher metadata and authenticated encrypted SLPA audio, Keychain keys, 30-day audio expiry/archive, explicit Markdown export. Vector-index primitives exist; user-facing semantic search/chat is future work. |
+| App shell | SwiftUI macOS client with an app-managed frozen Python core and private authenticated connection. Browser UI remains a development/test client. |
+| Agent | Phase 3 placeholder; MCP actions and meeting chat are not delivered. |
 
 ### 2.1 Why this stack
 
-- **Python core** — every ML piece (whisper, pyannote, silero, embeddings) has first-class Python bindings.
-- **Local v0 host** — Python/FastAPI + browser UI; native Tauri menus/tray and managed-sidecar packaging are deferred. ML weights/runtime dominate installed size (see Phase 0 closeout).
-- **Local-first LLM** — transcripts stay on-device; Ollama/llama.cpp expose an OpenAI-compatible endpoint so the same code path works with cloud APIs later.
-- **Event-driven core** — each stage is a component publishing/subscribing typed events; each stage is testable with recorded audio, and movable to separate processes.
-- **Implementation languages** — Python core; local v0 uses FastAPI/browser (2026-10-22 Phase 0 development decision; Tauri deferred); **Swift capture helper on macOS**; GStreamer on Linux. See the [Phase 0 handoff](docs/PHASE_0_CLOSEOUT.md) for implementation and deferred distribution validation.
+- **Python core** owns meeting state, provider requests, encryption, retention and summaries.
+- **SwiftUI host** provides the native window, menu bar, Preferences and login controls while managing core lifetime.
+- **Swift helpers** isolate native capture and metadata observation from Python.
+- **Cloud processing** avoids loading local speech models. Audio and transcripts leave the device for configured cloud providers under the first-use agreement and explicit recording choice. Optional local notes servers are configurable.
 
-### 2.2 Simpler fallback for v0
+### 2.2 Packaging status
 
-**Selected for local v0 development (2026-10-22):** Python + FastAPI + small browser frontend. Frozen distribution with `briefcase`/`pyinstaller`, Linux packaging, and signing remain unvalidated. Existing Python environment is 1.3 GB plus approximately 1.8 GB MOSS weights; these are installed sizes, not installer measurements. Original packaging-spike rationale: a Tauri + Python-sidecar bundle with PyTorch and models is multi-GB, which undercuts the "tiny binary" argument — if packaging weight/complexity is unacceptable, ship pure Python.
+`dist/macos/ScribeLoop.app` runs without a repository checkout, installed Python or
+Homebrew libraries. The October 28 bundle check found 91 native binaries, no
+external library dependencies and no bundled recordings or model weights. It is
+ad-hoc signed, declares minimum macOS 27.2, and includes an operator transcription
+credential for the private demo. Developer ID signing/notarization, credential
+protection, clean-Mac/upgrade acceptance and older-OS testing remain open.
+See [build and validation](packaging/macos/DESKTOP.md).
 
-### 2.3 Compute & backpressure model
+The original Python/browser v0 decision and local ML packaging experiments are
+preserved in [Phase 0 closeout](docs/PHASE_0_CLOSEOUT.md).
+
+### 2.3 Historical local-model compute & backpressure design
+
+The GPU-worker, model-swap and local inference targets below are research/future
+design, not the current cloud desktop runtime. Current meetings use bounded
+capture transport, encrypted readers and provider spending reservations.
 
 - **Where things run**: a **native capture helper owns the OS realtime callback** — a Swift helper on macOS (taps deliver audio via an IOProc C callback on a realtime thread; Python's GIL/GC make that fragile, and pyobjc bindings for the 14.2 tap APIs may not exist), piping PCM to the Python core over a local pipe/socket. On Linux: GStreamer `pipewiresrc`/`pulsesrc` into an `appsink` **pulled** from a Python thread (no realtime-callback contract); `pw-cat` subprocess / sounddevice Pulse-monitor are experiments, not defaults. VAD, bus, storage, UI live in the main Python process.
 - **GPU ownership**: one **GPU worker process** owns ASR, diarization/embeddings, and an **embedded llama.cpp LLM** (llama-cpp-python bindings) — a single owner of GPU memory. `Ollama` is supported as an *external* provider with its own process and VRAM, budgeted separately; the default is the embedded llama.cpp so the single-owner rule holds.
@@ -109,6 +121,11 @@ fixture inference is disabled; deterministic injected replay remains a test harn
 ---
 
 ## 3. Process & data layout
+
+The schematic below preserves the original core design; comments about adapters
+are historical. Current capture uses `macos_meeting.py`/`multiplexed.py`; live and
+saved ASR use `deepgram_meeting.py`/`deepgram_batch.py`. The native host lives in
+`shell/macos/Desktop/`, with builders under `packaging/macos/`.
 
 ```
 scribeloop/
@@ -141,7 +158,7 @@ scribeloop/
 │   │   ├── loop.py            # tool-calling agent loop
 │   │   └── mcp_tools.py       # MCP client → notes/calendar tools
 │   └── api/                   # local WS/HTTP server: loopback-only + per-launch token (§6)
-└── data/                      # local artifacts; recorder integration still pending
+└── data/                      # local artifacts; encrypted recording is implemented
 ```
 
 ### 3.1 Core data model (SQLite)
@@ -234,7 +251,7 @@ CREATE TABLE events (
   level TEXT, type TEXT, payload_json TEXT);
 ```
 
-**Delete semantics**: deletion is hard — no soft-delete column; rows are `DELETE`d with `secure_delete=ON`. Because WAL retains deleted content until checkpoint, every purge finishes with `wal_checkpoint(TRUNCATE)`; a full `VACUUM` is reserved for bulk migrations (mostly redundant under `secure_delete` and expensive on large DBs). **Phase 0 check (verified 2026-10-21)**: deleting from `sqlite-vec` `vec0` tables with `secure_delete=ON` followed by `wal_checkpoint(TRUNCATE)` **does scrub** vector bytes from the raw DB file — verified by a byte-level scan for a distinctive float pattern after delete (`scripts/check_vec.py`, `tests/test_vectors.py`). The rebuild-into-fresh-table fallback is unnecessary. **Audio is crypto-shredded**: each session's SLPA streams share a per-session key from the keystore. Key deletion prevents new locked reads, subject to unlocked readers and backups; the explicit authorized deletion/retention workflow is implemented; unattended cleanup is deferred. See docs/SECURE_STORAGE.md.
+**Delete semantics**: deletion is hard — no soft-delete column; rows are `DELETE`d with `secure_delete=ON`. Because WAL retains deleted content until checkpoint, every purge finishes with `wal_checkpoint(TRUNCATE)`; a full `VACUUM` is reserved for bulk migrations (mostly redundant under `secure_delete` and expensive on large DBs). **Phase 0 check (verified 2026-10-21)**: deleting from `sqlite-vec` `vec0` tables with `secure_delete=ON` followed by `wal_checkpoint(TRUNCATE)` **does scrub** vector bytes from the raw DB file — verified by a byte-level scan for a distinctive float pattern after delete (`scripts/check_vec.py`, `tests/test_vectors.py`). The rebuild-into-fresh-table fallback is unnecessary. **Audio uses random per-session keys**: current encrypted workspaces wrap them under the unlocked workspace key, with one-time import from legacy Keychain entries. Authorized deletion removes both legacy/wrapped key copies before ciphertext; unlocked readers, backups and forensic recovery of deleted envelope files are outside that guarantee; the explicit authorized deletion/retention workflow is implemented; unattended cleanup is deferred. See docs/SECURE_STORAGE.md.
 
 "Forget this person" deletes their embeddings (via `source_session_id`), unlinks `session_speakers` rows, anonymizes their labels in retained transcripts (`[deleted speaker]`), scrubs their labels in `speaker_remaps`, redacts their mentions in `events.payload_json`, flags summaries for redaction review, purges their RAG chunk text, and reminds the user that Markdown exports are plaintext and may still contain their name (§6).
 
@@ -340,7 +357,7 @@ CREATE TABLE events (
 - **The UI is an attack surface**: transcripts and summaries are untrusted text rendered in a webview that holds the API token. Everything renders as **sanitized text — no raw HTML**; remote images and auto-fetched links are **blocked** in rendered Markdown (a classic exfiltration path); the current browser UI serves a **strict CSP**; a future Tauri shell must preserve it.
 - Agent MCP servers are local processes with scoped tool permissions; cloud egress only via explicitly enabled tools.
 
-**Current implementation (2026-10-23):** Deepgram Nova-3 streaming with v1 per-word diarization is the single default meeting provider. One connection per capture track; no automatic fallback or final second pass. Capture, SLPA/SQLCipher, authenticated recovery, checkpoints and explicit deletion/retention remain local. Uploads need provider-named consent; backend-only keys and durable ten-second audio reservations bound use. Word speaker changes split persisted transcript rows and restore in notes/history. Anonymous identities are scoped to a connection/source; unknown labels and overlap uncertainty stay explicit. Auto multilingual is default across Nova-3’s ten supported multilingual languages, with fixed choices including Vietnamese; no unsupported hint parameters or first-language-lock claim. See [speaker integration and the open real multi-person quality gate](docs/DEEPGRAM_STREAMING.md). The explicit [Local MOSS Q6_K option](docs/LOCAL_MOSS.md) runs English/Chinese transcription and speaker labels after Stop through a pinned native runtime, without cloud upload. UI selectors label Local versus Cloud for new and saved audio. Earlier local GPU/streaming diagrams are experimental/future architecture. Original quality, physical and real-call targets remain open.
+**Current implementation (2026-10-23):** Deepgram Nova-3 streaming with v1 per-word diarization is the single default meeting provider. One connection per capture track; no automatic fallback or final second pass. Capture, SLPA/SQLCipher, authenticated recovery, checkpoints and explicit deletion/retention remain local. Uploads need provider-named consent; backend-only keys and durable ten-second audio reservations bound use. Word speaker changes split persisted transcript rows and restore in notes/history. Anonymous identities are scoped to a connection/source; unknown labels and overlap uncertainty stay explicit. Auto multilingual is default across Nova-3’s ten supported multilingual languages, with fixed choices including Vietnamese; no unsupported hint parameters or first-language-lock claim. See [speaker integration and the open real multi-person quality gate](docs/DEEPGRAM_STREAMING.md). The historical [Local MOSS Q6_K evaluation](docs/LOCAL_MOSS.md) is not a current desktop app route; current new and saved audio use Deepgram. Earlier local GPU/streaming diagrams are experimental/future architecture. Original quality, physical and real-call targets remain open.
 
 ## 7. Evaluation plan
 
@@ -371,7 +388,7 @@ CREATE TABLE events (
 
 ## 8. Phased roadmap
 
-**Phase 1 macOS development closed (2026-10-23):** selected output + microphone feed encrypted recording, Deepgram streaming and anonymous person labels, Auto/fixed languages, history/notes and explicit recovery/resume/deletion. One provider per meeting, no automatic fallback or final second pass. Encrypted startup no longer needs replay assets. Full MVP/quality acceptance remains open: real calls were deferred, speaker quality and representative WER/latency are not signed off, physical/app coverage is unverified, Linux is not delivered, and packaged desktop/signing remain deferred. See [authoritative closeout](docs/PHASE_1_CLOSEOUT.md). Earlier replay/local-model increments are historical.
+**Phase 1 macOS development closed (2026-10-23):** selected output + microphone feed encrypted recording, Deepgram streaming and anonymous person labels, Auto/fixed languages, history/notes and explicit recovery/resume/deletion. One provider per meeting, no automatic fallback or final second pass. Encrypted startup no longer needs replay assets. Full MVP/quality acceptance remains open: real calls were deferred, speaker quality and representative WER/latency are not signed off, physical/app coverage is unverified, Linux is not delivered, and signed distribution remains open; native desktop development packaging is implemented. See [authoritative closeout](docs/PHASE_1_CLOSEOUT.md). Earlier replay/local-model increments are historical.
 
 **2026-10-22 local-development handoff:** native ScreenCaptureKit fallback compiles,
 framed transport and health diagnostics are implemented, and 62 tests pass. Basic

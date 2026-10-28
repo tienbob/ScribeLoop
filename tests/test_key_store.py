@@ -60,3 +60,45 @@ def test_write_and_delete_must_be_verified():
 def test_unsupported_platform_has_no_plugin_or_plaintext_fallback(monkeypatch):
     monkeypatch.setattr('scribeloop_core.storage.keys.sys.platform','unsupported')
     with pytest.raises(KeyUnavailable): NativeKeyStore()
+
+
+def test_macos_delete_checks_metadata_without_reading_secret():
+    class MetadataAPI:
+        class error:
+            item_not_found = -25300
+        class Error:
+            @staticmethod
+            def raise_for_status(status):
+                if status:
+                    raise RuntimeError('private metadata failure')
+        def k_(self, name): return name
+        def create_query(self, **query):
+            assert query == {'kSecClass':'kSecClassGenericPassword',
+                             'kSecAttrService':SERVICE, 'kSecAttrAccount':'test'}
+            return query
+        def SecItemCopyMatching(self, query, result):
+            assert result is None
+            return 0 if (SERVICE,'test') in backend.items else -25300
+    class NoSecretReads(Backend):
+        def get_password(self, *args):
+            raise AssertionError('Deletion must not read secrets')
+    backend = NoSecretReads()
+    backend.items[SERVICE,'test'] = 'never-read'
+    store = vault(backend)
+    store._macos_api = MetadataAPI()
+    store.delete_if_present('test')
+    assert not backend.items
+    store.delete_if_present('test')
+    with pytest.raises(KeyUnavailable): store.delete('test')
+    backend.items[SERVICE,'test'] = 'never-read'
+    store._macos_api.SecItemCopyMatching = lambda *args: -25293
+    with pytest.raises(KeyUnavailable): store.delete_if_present('test')
+    assert backend.items
+
+
+def test_macos_delete_still_verifies_removal_without_secret_reads():
+    backend = Backend()
+    store = vault(backend)
+    store._exists = lambda account: True
+    backend.delete_password = lambda *args: None
+    with pytest.raises(KeyUnavailable): store.delete_if_present('test')

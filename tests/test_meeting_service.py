@@ -46,6 +46,8 @@ async def setup_service():
     service = DiscoveryService(publish, observer=observer, apps_provider=lambda: tuple(apps),
                                clock=clock, poll_s=3600)
     await service.refresh()
+    clock.now = 1.5
+    await service.refresh()
     clock.now = 3.0
     await service.refresh()
     return service, clock, observer, apps, events
@@ -221,3 +223,22 @@ async def test_app_registry_failure_does_not_leave_old_device_permission():
     clock.now = 5.0
     await service.refresh()
     assert service.snapshot()['permission'] == 'denied'
+
+
+async def test_registry_churn_keeps_candidate_identity_and_dismissal():
+    service,clock,_observer,apps,_events=await setup_service()
+    original=service.snapshot()['candidates'][0]['id']
+    other=AppIdentity(app_id='example.other',name='Other',kind='meeting',bundle_ids=('example.other',))
+    apps.insert(0,other)
+    clock.now=4.0
+    await service.refresh()
+    assert service.snapshot()['candidates'][0]['id']==original
+    await service.dismiss(original)
+    apps.reverse()
+    # An installed helper appearing/disappearing must not forget Not now either.
+    apps[0]=APP.model_copy(update={'bundle_ids':(*APP.bundle_ids,'example.teams.extra')})
+    clock.now=5.0
+    await service.refresh()
+    assert service.snapshot()['candidates']==[]
+    assert not service._detector._episodes[APP.app_id].candidate is None
+    assert service._detector._episodes[APP.app_id].dismissed

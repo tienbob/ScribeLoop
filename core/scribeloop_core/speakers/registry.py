@@ -119,6 +119,7 @@ class SpeakerRegistry:
                               (row[0],person))
             self.conn.execute('DELETE FROM speakers WHERE id=?',(person,))
             for sid in sessions:
+                self.store.memory_cache.invalidate(sid)
                 self.store._write_transcript_notes(sid)
                 self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
                     (sid,self.store._now(),'info','summary_redaction_review','{"reason":"Person forgotten; derived notes removed. Exports/backups may remain."}'))
