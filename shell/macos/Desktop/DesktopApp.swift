@@ -135,6 +135,7 @@ struct Notebook: View {
     @ObservedObject var core: DesktopClient
     @State private var recording = false
     @State private var candidate: Record?
+    @State private var retryCapture: Object?
     @State private var showPreferences = false
     @State private var showPeople = false
     @State private var tab = "Notes"
@@ -153,7 +154,7 @@ struct Notebook: View {
                     }
                     Spacer(minLength:0)
                 }.padding(.bottom,6)
-                Button { candidate = nil; recording = true } label: { Label("New recording",systemImage:"plus").frame(maxWidth:.infinity).padding(.vertical,5) }.buttonStyle(.borderedProminent).tint(ScribeTheme.action)
+                Button { candidate = nil; retryCapture = nil; recording = true } label: { Label("New recording",systemImage:"plus").frame(maxWidth:.infinity).padding(.vertical,5) }.buttonStyle(.borderedProminent).tint(ScribeTheme.action)
                     .disabled(!core.accepted || !core.connected || core.busy)
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
@@ -214,7 +215,7 @@ struct Notebook: View {
                 else if let current = candidates.first, core.activeID == nil {
                     HStack { Label("Possible call in \(current.text("name"))",systemImage:"phone.arrow.up.right"); Spacer()
                         Button("Not now") { core.send(["action":"dismiss_candidate","candidate_id":current.id]) }
-                        Button("Review recording") { candidate = current; recording = true }.buttonStyle(.borderedProminent).disabled(core.busy)
+                        Button("Review recording") { candidate = current; retryCapture = nil; recording = true }.buttonStyle(.borderedProminent).disabled(core.busy)
                     }.padding(18).background(Color.green.opacity(0.08))
                 }
                 if let activeID = core.activeID {
@@ -247,6 +248,9 @@ struct Notebook: View {
                                    !text(failure["message"]).isEmpty {
                                     Label(text(failure["message"]),systemImage:"exclamationmark.triangle")
                                         .font(.callout).foregroundStyle(ScribeTheme.warning)
+                                    Button("Review and retry recording") {
+                                        candidate = nil; retryCapture = selected.raw["capture"] as? Object; recording = true
+                                    }.disabled(core.busy || !core.connected)
                                 }
                             }
                             Spacer(minLength:0)
@@ -277,7 +281,7 @@ struct Notebook: View {
         .tint(ScribeTheme.accent)
         .background(InteractiveWindowActivation())
         .onChange(of:core.selectedID) { value in if let value { core.select(value) } }
-        .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate) }
+        .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate,initialCapture:retryCapture) }
         .sheet(isPresented:$showPreferences) { Preferences(core:core).frame(width:650,height:720) }
         .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
         .sheet(item:$renaming) { row in RenameConversation(core:core,conversation:row) }
@@ -357,11 +361,14 @@ struct Notebook: View {
 struct RecordingReview: View {
     @ObservedObject var core: DesktopClient
     var candidate: Record?
+    var initialCapture: Object? = nil
     var onClose: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var scope = "microphone"
     @State private var app = ""
     @State private var microphone = "default"
+    @State private var pendingRecord: String?
+    @State private var recordError: String?
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
             Text(candidate == nil ? "A new conversation" : "Take notes for this call?").font(.system(size:30,design:.serif))
@@ -378,16 +385,38 @@ struct RecordingReview: View {
             }.font(.callout).notebookCard()
             let duration = core.settings["duration_s"] as? Int ?? 3600
             Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Language: \(text(core.settings["language"]))").font(.callout)
-            Text(candidate == nil ? "Press Stop to end a manual recording. Notes follow automatically." : "Recording stops after 60 seconds of known call inactivity. Unknown activity keeps recording; Stop always remains available.").font(.caption).foregroundStyle(.secondary)
+            Text(candidate == nil && scope != "application" ? "Press Stop to end this recording. Notes follow automatically." : (core.settings["stop_on_microphone_release"] as? Bool == true ? "Recording stops after 60 seconds of known app inactivity or after the app releases its microphone. Muted calls may also trigger the countdown; choose Keep recording to continue. Stop is always available." : "Recording stops after 60 seconds of known app inactivity. Other browser tabs can keep audio active; press Stop if the call has ended. Unknown activity keeps recording.")).font(.caption).foregroundStyle(.secondary)
             if core.transcription["configured"] as? Bool != true { Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange) }
+            if let recordError { Label(recordError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning) }
             HStack {
                 Button("Not now") { if let candidate { core.send(["action":"dismiss_candidate","candidate_id":candidate.id]) }; closeReview() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Record & take notes") { core.record(scope:scope,app:app.isEmpty ? nil : app,microphone:microphone,candidate:candidate); closeReview() }
+                Button(pendingRecord == nil ? "Record & take notes" : "Starting…") {
+                    recordError = nil
+                    pendingRecord = core.record(scope:scope,app:app.isEmpty ? nil : app,microphone:microphone,candidate:candidate)
+                    if pendingRecord == nil { recordError = core.message ?? "Recording could not be requested. Reconnect and try again." }
+                }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(!core.accepted || !core.connected || core.busy || core.transcription["configured"] as? Bool != true || (candidate == nil && scope == "application" && app.isEmpty))
+                    .disabled(pendingRecord != nil || !core.accepted || !core.connected || core.busy || core.transcription["configured"] as? Bool != true || (candidate == nil && scope == "application" && app.isEmpty))
             }
         }.padding(32).frame(width:580)
+        .onAppear {
+            if let initialCapture {
+                scope = text(initialCapture["scope"])
+                if scope.isEmpty { scope = "microphone" }
+                app = text(initialCapture["app_id"])
+                microphone = text(initialCapture["microphone_id"])
+                if microphone.isEmpty { microphone = "default" }
+            }
+        }
+        .onChange(of:core.requests[pendingRecord ?? ""]) { status in
+            guard pendingRecord != nil else { return }
+            if status == "accepted" { pendingRecord = nil; closeReview() }
+            else if status == "rejected" || status == "unknown" {
+                pendingRecord = nil
+                recordError = "Recording did not start. Review the source and current app error, then retry or choose New recording."
+            }
+        }
     }
     private func closeReview() { onClose?(); dismiss() }
 }

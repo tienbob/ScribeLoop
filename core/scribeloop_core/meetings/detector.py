@@ -18,6 +18,7 @@ class _Episode:
     strong_start: bool = False
     startup_allowed: bool = False
     confirmations: int = 0
+    retry_on_next_input: bool = False
 
 
 class MeetingDetector:
@@ -65,6 +66,7 @@ class MeetingDetector:
         self._generation = 0
         self.available = False
         self.activity = {}
+        self.input_activity = {}
 
     @property
     def candidates(self) -> tuple[MeetingCandidate, ...]:
@@ -81,6 +83,13 @@ class MeetingDetector:
                 self._dismissed_until[app_id] = (self._previous or 0) + self.dismiss_cooldown_s
                 return True
         return False
+
+    def recording_failed(self, app_id: str):
+        episode = self._episodes.get(app_id)
+        if episode and episode.dismissed:
+            # Do not prompt repeatedly during the failed call. A later healthy
+            # microphone off→on transition can represent a fresh call/retry.
+            episode.retry_on_next_input = True
 
     def reconfigure(self, apps):
         replacement = MeetingDetector(
@@ -100,6 +109,7 @@ class MeetingDetector:
         self._baselines = {i: e for i, e in self._baselines.items() if i in unchanged}
         self.apps, self._bundles = replacement.apps, replacement._bundles
         self.activity = {i: state for i, state in self.activity.items() if i in self.apps}
+        self.input_activity = {i: state for i, state in self.input_activity.items() if i in self.apps}
 
     def update(self, snapshot: ActivitySnapshot) -> tuple[MeetingCandidate, ...]:
         now = snapshot.observed_at
@@ -115,6 +125,7 @@ class MeetingDetector:
         self._healthy = self.available
         if not self.available:
             self.activity = {}
+            self.input_activity = {}
             self._baselines.clear()
             return self.candidates
         if not continuous:
@@ -143,6 +154,10 @@ class MeetingDetector:
             i: ("active" if active.get(i) else "unknown" if i in unknown else "inactive")
             for i in self.apps
         }
+        self.input_activity = {
+            i: ('active' if 'input_active' in active.get(i,set()) else
+                'unknown' if i in unknown else 'inactive') for i in self.apps
+        }
         for app_id, app in self.apps.items():
             evidence = active.get(app_id, set())
             episode = self._episodes.get(app_id)
@@ -163,6 +178,14 @@ class MeetingDetector:
             )
             duplex = evidence == {"input_active", "output_active"}
             self._baselines[app_id] = evidence.copy()
+            if (episode is not None and episode.dismissed and rising_input and continuous
+                    and (episode.retry_on_next_input or
+                         (episode.inactive_since is not None and now-episode.inactive_since >= 2))):
+                # A quick redial can occur before the ordinary 15-second end
+                # grace expires. Re-confirm the new input edge after known full
+                # inactivity instead of reusing its dismissed candidate ID.
+                del self._episodes[app_id]
+                episode = None
             if not evidence:
                 if episode:
                     episode.confirmations = 0

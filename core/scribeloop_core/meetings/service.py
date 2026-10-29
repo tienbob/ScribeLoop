@@ -148,6 +148,7 @@ class DiscoveryService:
             ),
             "recording_enabled": False,
             "activity": dict(self._detector.activity) if available else {},
+            "input_activity": dict(self._detector.input_activity) if available else {},
             "activity_observed_at": self._observed_at,
             "permission": self._devices.permission,
             "devices_available": self._devices.available,
@@ -203,6 +204,10 @@ class DiscoveryService:
                 raise ValueError("Suggestion expired")
             self._detector.dismiss(candidate_id[len(self._incarnation) + 1 :])
             await self._broadcast()
+
+    async def recording_failed(self, app_id):
+        async with self._lock:
+            self._detector.recording_failed(app_id)
 
     async def select(self, *, scope, app_id, microphone_id, candidate_id=None):
         async with self._lock:

@@ -252,3 +252,35 @@ def test_direction_loss_does_not_mark_a_running_call_inactive():
     detector.update(sample(3,process()))
     detector.update(sample(4,process(mic=False)))
     assert detector.activity['teams']=='active'
+
+
+def test_failed_browser_recording_rearms_next_input_edge_with_other_tab_audio():
+    detector = MeetingDetector(APPS)
+    for now in range(3):
+        rows = detector.update(sample(now,process('example.browser')))
+    original = rows[0]
+    detector.dismiss(original.id)
+    detector.recording_failed('browser')
+    for now in range(3,8):
+        assert not detector.update(sample(now,process('example.browser'))), 'No repeated prompt in the same failed call'
+    assert not detector.update(sample(8,process('example.browser',mic=False)))
+    assert not detector.update(sample(9,process('example.browser')))
+    assert not detector.update(sample(10,process('example.browser')))
+    fresh, = detector.update(sample(11,process('example.browser')))
+    assert fresh.id != original.id
+
+
+def test_not_now_survives_mute_but_quick_redial_after_full_idle_rearms():
+    detector = MeetingDetector(APPS)
+    for now in range(3):
+        rows=detector.update(sample(now,process()))
+    original=rows[0]
+    detector.dismiss(original.id)
+    detector.update(sample(3,process(mic=False)))
+    for now in range(4,7):
+        assert not detector.update(sample(now,process())), 'Ordinary mute/unmute must retain Not now'
+    detector.update(sample(7))
+    detector.update(sample(8))
+    assert not detector.update(sample(9,process()))
+    fresh, = detector.update(sample(10,process()))
+    assert fresh.id != original.id

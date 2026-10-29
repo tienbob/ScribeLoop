@@ -11,6 +11,7 @@ import numpy as np
 
 from ..capture.source import SAMPLE_RATE, sample_position
 from .deepgram_meeting import STREAMS, DeepgramError, speaker_rows
+from .languages import deepgram_language_options
 
 
 def _frames(cursor, cancelled):
@@ -80,7 +81,7 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language):
             raise InterruptedError('Batch transcription cancelled')
         budget.reserve('multichannel',emit,cancelled,seconds=samples/SAMPLE_RATE*len(streams))
         emit({'type':'transcription_progress','mode':'batch_upload','stream':'all'})
-        params = {'model':'nova-3','language':language,'multichannel':'true',
+        params = {'model':'nova-3',**deepgram_language_options(language),'multichannel':'true',
                   'diarize_model':'v1','smart_format':'true','mip_opt_out':'true'}
         headers = {'Authorization':'Token '+config.api_key,'Content-Type':'audio/wav',
                    'Content-Length':str(44+samples*len(streams)*2)}

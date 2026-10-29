@@ -205,6 +205,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             else:
                 queue.put_nowait(event)
         session = event.get('session',{}) if event.get('type') == 'session' else {}
+        if (session.get('source') == 'meeting' and session.get('status') == 'failed'
+                and session.get('capture',{}).get('auto_workflow')):
+            retry = getattr(getattr(app.state,'discovery',None),'recording_failed',None)
+            if retry is not None:
+                await retry(session['capture'].get('app_id'))
         if (session.get('source') == 'meeting' and session.get('status') in {'completed','failed','interrupted'}
                 and app.state.audio):
             await publish({'type':'audio_state','session_id':session['id'],'audio':app.state.audio.status(session['id'])})
@@ -589,6 +594,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             desktop.receipt(dispatch_id,'dispatching')
+                            if action == 'check_capture_access':
+                                if recording_busy() or set(command)!={'action'}:
+                                    raise ValueError('Wait for capture to finish')
+                                from ..capture.devices import check_capture_access
+                                result = await asyncio.to_thread(check_capture_access,desktop.helper)
+                                await queue.put({'type':'capture_access',**result})
+                                await app.state.discovery.refresh()
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                             if action == 'name_speaker':
                                 if (recording_busy() or summary_task is not None or
                                         set(command) not in ({'action','session_id','revision','speaker_id','name'},
@@ -750,7 +764,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             session = recorder.start(selection,{**source,'engine':request.model,
                                 'language':request.language,'duration_s':request.duration_s,'cloud_consent':True,'auto_workflow':True,
                                 'auto_title':True,'auto_summary':grant},title,consent_confirmed=True)
-                            auto_monitor.track(session['id'],request.app_id)
+                            auto_monitor.track(session['id'],request.app_id,
+                                stop_on_input_release=desktop.settings.value.stop_on_microphone_release if desktop else False,
+                                input_was_active=True)
                             with contextlib.suppress(ValueError):
                                 await app.state.discovery.dismiss(request.candidate_id)
                             await publish({'type':'session','session':session})
@@ -919,6 +935,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     'noise_threshold_db':desktop.settings.value.microphone_noise_threshold_db}
                             session = recorder.start(selection, source, request.title,
                                 consent_confirmed=request.consent_confirmed)
+                            if request.scope == 'application':
+                                state = app.state.discovery.snapshot()
+                                auto_monitor.track(session['id'],request.app_id,
+                                    stop_on_input_release=desktop.settings.value.stop_on_microphone_release if desktop else False,
+                                    input_was_active=state.get('input_activity',{}).get(request.app_id)=='active')
                             await publish({'type': 'session', 'session': session})
                         elif command.get('action') == 'select_source':
                             request = SelectSource.model_validate(command)

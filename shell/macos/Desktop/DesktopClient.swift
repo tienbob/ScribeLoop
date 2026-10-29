@@ -48,6 +48,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     @Published var callEnding = false
     @Published var callStatus: String?
     @Published var captureStopping = false
+    @Published var captureAccessMessage: String?
     @Published var nextCursor: [Any]?
     @Published var database: String
     var onCandidate: ((Record) -> Void)?
@@ -211,7 +212,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window"]
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access"]
         if !reads.contains(action) && !["stop","stop_recording","revoke_agreement"].contains(action) && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
@@ -319,6 +320,12 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             reloadSoon()
         case "people": people = objects(v["people"]); nextPeopleOffset = v["next_offset"] as? Int
         case "auto_call_status": applyCallStatus(v)
+        case "capture_access":
+            if v["ok"] as? Bool == true {
+                captureAccessMessage = "Meeting-audio access: \(v["output_access"] as? Bool == true ? "allowed" : "unavailable"). Microphone: \(text(v["microphone"])). Display: \(v["display_available"] as? Bool == true ? "available" : "unavailable"). No audio was recorded."
+            } else {
+                captureAccessMessage = text((v["diagnostic"] as? Object)?["message"])
+            }
         case "recording_state":
             activeID = v["active_id"] as? String; processingID = v["processing_id"] as? String
             captureStopping = v["stopping"] as? Bool ?? false
@@ -375,7 +382,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         switch text(value["state"]) {
         case "ending":
             callEnding = true
-            callStatus = "Call audio activity ended · stopping in \(value["remaining_s"] as? Int ?? 60) seconds."
+            let reason = text(value["reason"]) == "microphone_released" ? "Meeting app released its microphone; the call may have ended or been muted" : "Call audio activity ended"
+            callStatus = "\(reason) · stopping in \(value["remaining_s"] as? Int ?? 60) seconds."
         case "unknown":
             callEnding = false
             callStatus = "Call-end detection is unavailable. Press Stop recording when finished."
@@ -384,7 +392,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         }
     }
     func stopRecording() { send(["action":"stop_recording"]) }
-    func record(scope: String, app: String?, microphone: String, candidate: Record? = nil) {
+    @discardableResult func record(scope: String, app: String?, microphone: String, candidate: Record? = nil) -> String? {
         var command: Object
         if let candidate {
             command = ["action":"accept_call","candidate_id":candidate.id,"app_id":candidate.text("app_id"),
@@ -397,7 +405,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         }
         command["microphone_id"] = microphone; command["model"] = "deepgram"
         command["language"] = settings["language"] ?? "auto"; command["duration_s"] = settings["duration_s"] ?? 3600
-        command["consent_confirmed"] = true; send(command)
+        command["consent_confirmed"] = true; return send(command)
     }
     func stopAudio() { playback.close(); player?.stop(); player = nil; playing = false }
     func saveExport(_ content: String) {

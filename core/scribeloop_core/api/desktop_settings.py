@@ -30,6 +30,7 @@ class Settings(BaseModel):
     summary_instructions: str = Field(default='', max_length=2000)
     language: str = 'auto'
     duration_s: int = 3600
+    stop_on_microphone_release: bool = False
     microphone_gain_db: float = Field(default=0., ge=-12, le=24, allow_inf_nan=False)
     microphone_noise_filter: Literal['off','standard','strong'] = 'standard'
     microphone_noise_threshold_db: float = Field(default=-40., ge=-65, le=-25, allow_inf_nan=False)
@@ -94,6 +95,9 @@ class DesktopSettings:
             value = json.loads(raw) if raw else {}
             if not isinstance(value,dict):
                 raise TypeError('Invalid settings')
+            from ..pipeline.languages import LEGACY_DESKTOP_LANGUAGES
+            if value.get('language') in LEGACY_DESKTOP_LANGUAGES:
+                value['language'] = 'auto'
             return Settings.model_validate(value)
         except Exception:  # noqa: BLE001 - native errors can include secret data
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None

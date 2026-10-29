@@ -254,6 +254,20 @@ struct MeetingCapture {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         if args == ["--version"] { print("scribeloop-meeting 1; SLC2/SLP2; host ns; 16000 Hz mono Float32LE"); return }
+        if args == ["--check-capture-access"] {
+            // Read-only permission/source check: no SCStream, AVCaptureSession,
+            // PacketWriter, microphone request or audio device is opened.
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let result: [String:Any] = ["microphone":permission(),"output_access":true,"display_available":!content.displays.isEmpty]
+                print(String(data:try JSONSerialization.data(withJSONObject:result),encoding:.utf8)!)
+            } catch {
+                let native = error as NSError
+                let domain = native.domain == SCStreamErrorDomain ? "screen" : "other"
+                fail("Native capture startup failed: output_enumeration:\(domain):\(native.code)")
+            }
+            return
+        }
         if args == ["--devices"] {
             let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
             let data: [String: Any] = ["version": 1, "permission": permission(),
@@ -314,6 +328,7 @@ struct MeetingCapture {
         let devices = microphones()
         guard let device = microphone == "default" ? AVCaptureDevice.default(for: .audio) :
                 devices.first(where: { $0.uniqueID == microphone }) else { fail("Selected microphone is unavailable") }
+        var captureStage = "microphone_setup"
         do {
             let session = AVCaptureSession()
             session.beginConfiguration()
@@ -344,6 +359,7 @@ struct MeetingCapture {
                 object: session, queue: nil) { _ in fail("Microphone capture interrupted") }
             var loopback: SCStream?
             if !micOnly {
+                captureStage = "output_enumeration"
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard let display = content.displays.first else { fail("No display for output capture") }
                 let filter: SCContentFilter
@@ -361,10 +377,12 @@ struct MeetingCapture {
                 config.minimumFrameInterval = CMTime(seconds: 1, preferredTimescale: 1)
                 let stream = SCStream(filter: filter, configuration: config, delegate: output)
                 try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
+                captureStage = "output_start"
                 try await stream.startCapture()
                 loopback = stream
             }
             // Keep blocking microphone startup away from the main actor.
+            captureStage = "microphone_start"
             await withCheckedContinuation { continuation in
                 DispatchQueue.global().async { session.startRunning(); continuation.resume() }
             }
@@ -388,7 +406,13 @@ struct MeetingCapture {
                 for (track, converter) in output.converters { converter.finish(writer: writer, stream: track) }
                 writer.finish()
             }
-        } catch { fail("Meeting capture failed; verify permissions, app, and microphone") }
+        } catch {
+            let native = error as NSError
+            let domain = native.domain == SCStreamErrorDomain ? "screen" : native.domain == AVFoundationErrorDomain ? "microphone" : "other"
+            // Fixed domains/stages and numeric codes only; no paths, app content
+            // or arbitrary localized OS/provider error strings cross the pipe.
+            fail("Native capture startup failed: \(captureStage):\(domain):\(native.code)")
+        }
     }
 
     static func selfTest(seconds: Int = 300) {

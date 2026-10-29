@@ -1,5 +1,23 @@
 # Current status and acceptance checklist
 
+**API-key input update:** build 0.1.5 (6) clears password AutoFill content hints
+on the Deepgram and summary-provider secure fields and disables autocorrection.
+Keys remain masked, and their Keychain persistence is unchanged. This is an
+app-field change, not a system-wide Passwords setting change.
+The macOS 13-targeted rebuild and bundle audit passed. Native Preferences showed
+the focused Deepgram field without the Passwords suggestion, retained saved-key
+indicators, and reported capture access allowed. Version 0.1.5's internal DMG
+was generated. No saved API key was edited by this verification.
+
+**Failed-call retry update:** build 0.1.4 (5) adds quick-redial rearming after
+capture failure, explicit retry review and native startup/access diagnostics.
+547 tests passed. The host access check initially returned ScreenCaptureKit
+`-3801` despite the recording toggle being on. An off/on refresh did not resolve
+it; replacing only ScribeLoop's old entry with the exact current app bundle and
+relaunching did. The in-app check now reports output allowed, microphone
+authorized and display available, without recording. Successful physical capture
+is not yet established. See [retry/access investigation](FAILED_CALL_RETRY_2026-10-29.md).
+
 **Recording Stop update:** internal build 0.1.3 (4) fixes late Stop falling into
 the replay handler, reconciles current capture state, shows the actual call-end
 countdown/unknown state, and displays saved failure diagnostics. 539 tests and

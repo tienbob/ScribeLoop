@@ -9,6 +9,10 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [English and Vietnamese transcription](EN_VI_TRANSCRIPTION.md)
+
+- [Failed-call retry and capture authorization — October 29](FAILED_CALL_RETRY_2026-10-29.md)
+
 - [Recording Stop and call-end status fix — October 29](RECORDING_STOP_FIX_2026-10-29.md)
 
 - [Internal Mac distribution and installation](INTERNAL_MAC_DISTRIBUTION.md)

@@ -78,6 +78,24 @@ def test_locked_settings_fail_closed():
         DesktopSettings(vault)
 
 
+def test_desktop_language_scope_is_english_vietnamese_with_legacy_migration():
+    import json
+
+    from scribeloop_core.pipeline.languages import deepgram_language_options, word_language
+    vault = Vault()
+    vault.value = json.dumps({'language':'fr'})
+    settings = DesktopSettings(vault)
+    assert settings.value.language == 'auto'
+    assert set(settings.cloud().public()['languages']) == {'auto','en','vi'}
+    for language in ('auto','en','vi'):
+        settings.save({'language':language})
+        assert DesktopSettings(vault).value.language == language
+    with pytest.raises(ValueError): settings.save({'language':'fr'})
+    assert deepgram_language_options('auto') == {'language':'multi','language_hint':['en','vi']}
+    assert deepgram_language_options('vi') == {'language':'vi'}
+    assert word_language('vi-VN') == 'vi'
+
+
 @pytest.mark.parametrize('key,preview', [('', ''),('abc','********'),('abcd','********'),
     ('abcde','abcd********'),('sk-example-secret','sk-e********')])
 def test_saved_key_preview_is_masked_and_never_replaces_actual_key(key,preview):

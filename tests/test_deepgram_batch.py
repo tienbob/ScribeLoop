@@ -49,7 +49,7 @@ def execute(service,sid,handler,*,language='auto',budget_usd=.15):
     return events
 
 
-@pytest.mark.parametrize('language,expected',[('auto','multi'),('en','en')])
+@pytest.mark.parametrize('language,expected',[('auto','multi'),('en','en'),('vi','vi')])
 def test_one_whole_multichannel_wav_preserves_gaps_sources_and_speakers(retained,language,expected):
     sid=saved(retained)
     calls=[]
@@ -57,6 +57,7 @@ def test_one_whole_multichannel_wav_preserves_gaps_sources_and_speakers(retained
         calls.append(request)
         assert request.method=='POST' and request.url.path=='/v1/listen'
         assert request.url.params['language']==expected
+        assert request.url.params.get_list('language_hint')==(['en','vi'] if language=='auto' else [])
         assert request.url.params['multichannel']=='true'
         assert request.url.params['diarize_model']=='v1'
         assert int(request.headers['content-length'])==len(request.content)

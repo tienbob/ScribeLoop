@@ -24,6 +24,7 @@ struct Preferences: View {
     @State private var microphoneGain = 0.0
     @State private var microphoneFilter = "standard"
     @State private var microphoneThreshold = -40.0
+    @State private var stopOnMicrophoneRelease = false
     @State private var initialValues = ""
     @State private var pendingSave: String?
     @State private var applying = false
@@ -37,7 +38,7 @@ struct Preferences: View {
     @State private var revokeConfirmation = false
     private var presets: [String:String] { core.settings["summary_presets"] as? [String:String] ?? [:] }
     private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
-    private var valuesSignature: String { [endpoint,model,provider,language,String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded()))].joined(separator:"\u{001f}") }
+    private var valuesSignature: String { [endpoint,model,provider,language,String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != initialDetection || login != initialLogin }
     private var keyPreview: String {
@@ -67,7 +68,7 @@ struct Preferences: View {
                         }
                     }
                     SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["transcription_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
-                        .textFieldStyle(.roundedBorder).textContentType(.password)
+                        .textFieldStyle(.roundedBorder).textContentType(nil).autocorrectionDisabled(true)
                         .focused($focusedField,equals:.transcriptionKey)
                         .accessibilityLabel("Deepgram API key")
                         .disabled(removeTranscriptionKey)
@@ -103,7 +104,7 @@ struct Preferences: View {
                             if !keyPreview.isEmpty { Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent) }
                         }
                         SecureField("API key",text:$summaryKey,prompt:Text(keyPreview.isEmpty ? "Enter your API key" : keyPreview))
-                            .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(.password)
+                            .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(nil).autocorrectionDisabled(true)
                             .focused($focusedField,equals:.apiKey)
                             .accessibilityLabel(keyPreview.isEmpty ? "API key" : "Replace saved API key")
                     }.padding(.vertical,4)
@@ -153,9 +154,9 @@ struct Preferences: View {
                 Section("Recording preset") {
                     Picker("Maximum duration",selection:$duration) { Text("5 minutes · $0.25 audio cap").tag(300); Text("1 hour · $3 audio cap").tag(3600); Text("3 hours · $8 audio cap").tag(10800) }
                     Picker("Conversation language",selection:$language) {
-                        ForEach([("auto","Auto · multilingual"),("en","English"),("vi","Tiếng Việt"),("es","Spanish"),("fr","French"),("de","German"),("hi","Hindi"),("ru","Russian"),("pt","Portuguese"),("ja","Japanese"),("it","Italian"),("nl","Dutch")],id:\.0) { code, name in Text(name).tag(code) }
+                        ForEach([("auto","English + Tiếng Việt"),("en","English only"),("vi","Tiếng Việt only")],id:\.0) { code, name in Text(name).tag(code) }
                     }
-                    Text("Auto follows the supported conversation languages. Choose a fixed language for Vietnamese. Changes apply to new work after processing finishes.").font(.caption).foregroundStyle(.secondary)
+                    Text("English + Tiếng Việt supports switching between both languages and sends those hints to Deepgram. Choose a single language when the whole call uses it. Hints guide recognition; they do not guarantee accuracy. Applies to new work after processing finishes.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Permissions and call detection") {
                     HStack(spacing:12) {
@@ -177,9 +178,17 @@ struct Preferences: View {
                         Spacer()
                         Button("Open settings") { if let url = URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) } }
                     }.padding(.vertical,5)
+                    Button("Check capture access without recording") {
+                        core.captureAccessMessage = "Checking access without recording…"
+                        if core.send(["action":"check_capture_access"]) == nil { core.captureAccessMessage = core.message }
+                    }
+                        .disabled(!core.connected || core.busy)
+                    if let result = core.captureAccessMessage { Text(result).font(.caption).foregroundStyle(.secondary) }
                     Toggle(isOn:$detectionDraft) {
                         Label("Detect calls automatically",systemImage:"phone.badge.waveform")
                     }.toggleStyle(.switch).disabled(!core.connected || core.busy)
+                    Toggle("Stop after meeting app releases microphone",isOn:$stopOnMicrophoneRelease)
+                    Text("After 60 seconds without the meeting app's microphone activity, stop even if browser audio continues. The countdown offers Keep recording. A muted or receive-only call can also release its microphone; leave off to wait until all selected-app audio is inactive. Applies to meeting-app recordings, not microphone-only or all-system recordings.").font(.caption).foregroundStyle(.secondary)
                     Toggle("Open ScribeLoop at login",isOn:$login)
                     if !loginStatus.isEmpty { Text(loginStatus).font(.caption) }
                 }
@@ -210,6 +219,7 @@ struct Preferences: View {
             microphoneFilter = text(core.settings["microphone_noise_filter"])
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
             microphoneThreshold = (core.settings["microphone_noise_threshold_db"] as? NSNumber)?.doubleValue ?? -40
+            stopOnMicrophoneRelease = core.settings["stop_on_microphone_release"] as? Bool ?? false
             initialValues = valuesSignature
             initialDetection = core.detection; detectionDraft = initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
@@ -253,6 +263,7 @@ struct Preferences: View {
         if providerChanged {
             var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":language,"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
             if !summaryKey.isEmpty { value["summary_key"] = summaryKey }
+            value["stop_on_microphone_release"] = stopOnMicrophoneRelease
             if removeTranscriptionKey { value["deepgram_key"] = "" }
             else if !transcriptionKey.isEmpty { value["deepgram_key"] = transcriptionKey }
             saveCommands.append(["action":"save_settings","settings":value])

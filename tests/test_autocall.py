@@ -46,6 +46,52 @@ def test_end_requires_continuous_known_inactivity_and_keep_resets_countdown():
         monitor.keep_recording('another')
 
 
+def test_opt_in_microphone_release_ends_despite_other_browser_audio_and_keep_overrides():
+    clock=[0.]
+    monitor=AutoCallMonitor(clock=lambda:clock[0],end_grace_s=3)
+    def observe(microphone,activity='active',healthy=True):
+        return monitor.observe({'status':'available' if healthy else 'unavailable',
+            'activity_observed_at':clock[0],'activity':{'browser':activity},
+            'input_activity':{'browser':microphone}})
+    monitor.track('sid','browser',stop_on_input_release=True)
+    for tick in range(5):
+        clock[0]=float(tick)
+        assert not observe('inactive')[1], 'No microphone-release inference before input was observed'
+    observe('active')
+    clock[0]=5
+    status,ended=observe('inactive')
+    assert status['reason']=='microphone_released' and status['remaining_s']==3 and not ended
+    clock[0]=6
+    monitor.keep_recording('sid')
+    for tick in range(6,20):
+        clock[0]=float(tick)
+        assert observe('inactive')[0]['state']=='recording', 'Keep recording preserves receive-only listening'
+    observe('active')
+    clock[0]=20
+    assert observe('inactive')[0]['remaining_s']==3
+    clock[0]=21
+    assert observe('inactive',healthy=False)[0]['state']=='unknown'
+    clock[0]=22
+    assert observe('inactive')[0]['remaining_s']==3
+    clock[0]=23
+    assert observe('inactive',activity='inactive')[0]['remaining_s']==2, 'Full inactivity must not restart the grace'
+    clock[0]=24
+    assert not observe('inactive')[1]
+    clock[0]=25
+    assert observe('inactive')[1]
+
+
+def test_default_policy_preserves_muted_receive_only_calls_with_output_activity():
+    clock=[0.]
+    monitor=AutoCallMonitor(clock=lambda:clock[0],end_grace_s=3)
+    monitor.track('sid','browser',input_was_active=True)
+    for tick in range(15):
+        clock[0]=float(tick)
+        state,ended=monitor.observe({'status':'available','activity_observed_at':clock[0],
+            'activity':{'browser':'active'},'input_activity':{'browser':'inactive'}})
+        assert state['state']=='recording' and not ended
+
+
 def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sqlcipher):
     state = {'activity':'active','dismissed':False,'calls':0,'summaries':0}
     class Discovery:

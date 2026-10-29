@@ -1,6 +1,6 @@
 # Internal Mac distribution
 
-Updated October 29, 2026. Internal build **0.1.3 (4)** targets **Apple Silicon
+Updated October 29, 2026. Internal build **0.1.5 (6)** targets **Apple Silicon
 (M1 and newer), macOS 13 Ventura or later**. This is the build deployment target,
 verified against native dependency metadata. Runtime acceptance on an actual
 Ventura Mac remains required; the development host runs macOS 27.2.
@@ -71,7 +71,7 @@ artifact containing the operator credential.
 .venv/bin/python packaging/macos/package_internal.py --unsigned-internal
 ```
 
-Output: `dist/macos/internal/ScribeLoop-0.1.3-4-arm64-internal-unsigned.dmg`, plus
+Output: `dist/macos/internal/ScribeLoop-0.1.5-6-arm64-internal-unsigned.dmg`, plus
 JSON metadata and `.sha256`. The filename and included instructions explicitly
 identify this as an ad-hoc, unnotarized test build. This command does not upload
 anything. It packages a copy and never changes the source app or user data.
@@ -132,6 +132,11 @@ claim follows from generated tests. See [current status](CURRENT_STATUS.md).
 
 ## Verification on the development Mac — October 29
 
+Version 0.1.5 removes password AutoFill hints from API-key fields while retaining
+masked entry and Keychain storage. Version 0.1.4 adds [failed-call retry and capture-access diagnostics](FAILED_CALL_RETRY_2026-10-29.md).
+The host enumeration-authorization issue was resolved by replacing the stale
+permission entry with the current bundle; physical capture and signed update
+continuity remain rollout acceptance checks. Ad-hoc rebuilds can invalidate grants.
 Version 0.1.3 adds the [recording Stop fix](RECORDING_STOP_FIX_2026-10-29.md)
 and supersedes the 0.1.2 installer. The compatibility measurements below describe
 the macOS 13 runtime transition in 0.1.2; 0.1.3 repeats the build and bundle checks.

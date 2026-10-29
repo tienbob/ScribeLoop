@@ -22,7 +22,13 @@ from websockets.sync.client import connect
 
 from ..capture.source import sample_position
 from .cloud_meeting import CloudRecordingRunner, pcm_window
-from .languages import AUTO_LANGUAGES, LANGUAGE_CHOICES, LANGUAGE_NAMES, word_language
+from .languages import (
+    AUTO_LANGUAGES,
+    LANGUAGE_CHOICES,
+    LANGUAGE_NAMES,
+    deepgram_language_options,
+    word_language,
+)
 
 STREAMS = ('loopback', 'mic')
 
@@ -74,9 +80,10 @@ class DeepgramConfig:
     def public(self):
         return {'provider':self.provider, 'model':self.model, 'cloud':True,
             'configured':bool(self.api_key), 'speaker_labels':True, 'streaming':True,
-            'languages':{'auto':'Auto · multilingual',**{k:v for k,v in LANGUAGE_NAMES.items() if k in LANGUAGE_CHOICES}},
+            'languages':{'auto':'English + Tiếng Việt',**{k:v for k,v in LANGUAGE_NAMES.items() if k in LANGUAGE_CHOICES}},
             'default_language':'auto', 'auto_language':True,
-            'auto_languages':list(AUTO_LANGUAGES), 'language_hints':False,
+            'auto_languages':list(AUTO_LANGUAGES), 'language_hints':True,
+            'language_hints_restrict':False,
             'budget_usd':self.budget_usd, 'max_requests':self.max_requests,
             'nominal_usd_per_audio_hour':self.rate, 'updates':'streaming provisional and confirmed text'}
 
@@ -252,9 +259,9 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
         return
     budget.reserve(stream,emit,cancelled)
     reserved_until = sent+10000
-    params = {'model':'nova-3','language':language,'encoding':'linear16','sample_rate':16000,
+    params = {'model':'nova-3',**deepgram_language_options(language),'encoding':'linear16','sample_rate':16000,
         'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1'}
-    url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params)
+    url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params,doseq=True)
     # No redirect following: authorization must only reach this fixed host.
     from websockets.exceptions import SecurityError
     try:
