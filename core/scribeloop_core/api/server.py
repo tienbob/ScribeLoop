@@ -23,10 +23,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from ..llm.rolling import RollingNotes
+from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
-from ..pipeline.languages import LanguageChoice
+from ..pipeline.languages import LanguageChoice, LanguageHints
+from ..pipeline.recording import automatic_notes_eligible
 from ..pipeline.replay import ReplayRunner
 from ..speakers.registry import SpeakerRegistry
 from ..storage.db import DATABASE_ERRORS, connect, migrate
@@ -37,6 +38,8 @@ from .auth import check_first_message, host_allowed, new_token, origin_allowed
 STATIC = Path(__file__).parent / 'static'
 AUTH_TIMEOUT_S = 5
 SEND_TIMEOUT_S = 5
+AUTO_REASONS = {'app_inactive':'auto_app_inactive',
+                'microphone_released':'auto_microphone_released'}
 
 
 class StartReplay(BaseModel):
@@ -69,6 +72,7 @@ class StartRecording(SelectSource):
     action: Literal['record']
     title: str = Field(default='Meeting test', min_length=1, max_length=160)
     language: LanguageChoice = 'auto'
+    language_hints: LanguageHints | None = None
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
     model: Literal['deepgram'] = 'deepgram'
@@ -89,6 +93,7 @@ class ReprocessRecording(BaseModel):
     cloud_consent: bool = False
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
+    language_hints: LanguageHints | None = None
     model: Literal['deepgram'] = 'deepgram'
 
 
@@ -97,6 +102,7 @@ class SavedMeeting(BaseModel):
     action: Literal['recover', 'resume', 'delete']
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
+    language_hints: LanguageHints | None = None
     confirmed: bool = False
     cloud_consent: bool = False
     model: Literal['deepgram'] = 'deepgram'
@@ -138,6 +144,7 @@ class AcceptCall(BaseModel):
     model: Literal['deepgram'] = 'deepgram'
     duration_s: Literal[300,3600,10800] = 300
     language: LanguageChoice = 'auto'
+    language_hints: LanguageHints | None = None
     consent_confirmed: bool
     automatic_summary: bool = False
     summary_provider: str | None = None
@@ -178,6 +185,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     auto_tasks = set()
     closing = False
     automatic_scheduled = set()
+    automatic_summary_lock = asyncio.Lock()
     rolling_signatures = {}
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
@@ -216,17 +224,29 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         if (not closing and session.get('status') == 'completed' and
                 session.get('capture',{}).get('auto_workflow') and session['id'] not in automatic_scheduled):
             automatic_scheduled.add(session['id'])
-            task = asyncio.create_task(automatic_notes(session['id']))
+            recorder_task = getattr(app.state.recording,'task',None)
+            task = asyncio.create_task(automatic_notes(session['id'],expected_task=recorder_task))
             auto_tasks.add(task)
             task.add_done_callback(auto_tasks.discard)
 
     async def automatic_notes(session_id, *, grant_override=None, expected_task=None, previous_revision=None):
+        async with automatic_summary_lock:
+            await _automatic_notes(session_id,grant_override=grant_override,
+                expected_task=expected_task,previous_revision=previous_revision)
+
+    async def _automatic_notes(session_id, *, grant_override=None, expected_task=None, previous_revision=None):
         nonlocal summary_task
         recorder = app.state.recording
         if expected_task is not None:
             await asyncio.shield(expected_task)
         elif recorder and recorder.task:
             await asyncio.shield(recorder.task)
+        # A busy notes request queues this job; it must not consume the sole
+        # automatic scheduling opportunity and force a later manual Generate.
+        while summary_task is not None:
+            pending = summary_task
+            with contextlib.suppress(Exception):
+                await asyncio.shield(pending)
         if closing or not app.state.store.agreement()['accepted']:
             return
         store = app.state.store
@@ -237,8 +257,16 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         grant = grant_override or session.get('capture',{}).get('auto_summary')
         if not grant:
             return
-        if summary_task is not None and getattr(summary_task,'rolling',False) and getattr(summary_task,'session_id',None)==session_id:
-            await asyncio.shield(summary_task)
+        if not grant_override:
+            count = store.conn.execute('SELECT COUNT(*) FROM segments WHERE session_id=? AND revision>=1',
+                                       (session_id,)).fetchone()[0]
+            if not automatic_notes_eligible(session_id,session.get('audio_duration_ms'),count):
+                with store.conn:
+                    store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                        "VALUES (?,?,?,'automatic_notes_skipped',?)",(session_id,store._now(),'info',
+                        json.dumps({'message':'Call ended early — nothing to summarize'})))
+                await publish({'type':'session','session':store.get(session_id)})
+                return
         try:
             attempt = 'manual_rerun_summary_attempt' if grant_override else 'automatic_summary_attempt'
             previous = store.conn.execute('SELECT payload_json FROM events WHERE session_id=? AND type=?',
@@ -254,10 +282,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
                     (session_id,store._now(),'info',attempt,json.dumps({**grant,'input_hash':fingerprint,
                         'revision':session['transcript_revision']})))
-            summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,messages))
+            summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,messages,automatic=True))
             summary_task.session_id = session_id
             await publish({'type':'summary_started','session_id':session_id})
         except (ValueError,*DATABASE_ERRORS):
+            with contextlib.suppress(*DATABASE_ERRORS):
+                store.record_summary_outcome(session_id,'summary_setup_invalid')
             await publish({'type':'summary_error','session_id':session_id,
                 'message':'Recording saved. Automatic notes are unavailable; open Meeting notes to generate them manually.'})
 
@@ -278,7 +308,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 previous = current
                 await publish(current)
             if ended:
-                recorder.stop(sid)
+                recorder.stop(sid,reason=AUTO_REASONS.get(state.get('reason'),'auto_app_inactive'))
                 auto_monitor.clear()
 
     def recording_busy():
@@ -346,22 +376,27 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         finally:
             summary_task=None
 
-    async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False):
+    async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False, automatic=False):
         nonlocal summary_task
         try:
             async with asyncio.timeout(3600):
                 engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
-                value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,retry=retry)
+                value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,
+                    retry=retry,repair_invalid=automatic)
             saved = app.state.store.save_grounded_summary(session_id,revision,fingerprint,value,
                 provider=summary_provider.provider,model=summary_provider.model)
+            app.state.store.record_summary_outcome(session_id)
             await publish({'type':'summary_ready','session_id':session_id,'summary':saved,
                 'session':app.state.store.get(session_id),'budget':engine.public(session_id)})
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - provider boundary preserves prior data and redacts failures
+        except Exception as exc:  # noqa: BLE001 - redact provider bodies and transcript
             # Never expose provider bodies, transcript snippets, keys or raw exceptions.
+            code=summary_failure_code(exc)
+            with contextlib.suppress(*DATABASE_ERRORS):
+                app.state.store.record_summary_outcome(session_id,code)
             await publish({'type':'summary_error','session_id':session_id,
-                'message':'Summary failed or transcript changed. Previous notes are preserved; no retry was made.'})
+                'message':f'Notes could not finish. Recording and transcript are saved. Diagnostic: {code}. Generate notes can retry.'})
         finally:
             summary_task = None
 
@@ -762,7 +797,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     'noise_filter':desktop.settings.value.microphone_noise_filter,
                                     'noise_threshold_db':desktop.settings.value.microphone_noise_threshold_db}}
                             session = recorder.start(selection,{**source,'engine':request.model,
-                                'language':request.language,'duration_s':request.duration_s,'cloud_consent':True,'auto_workflow':True,
+                                'language':request.language,'language_hints':request.language_hints,'duration_s':request.duration_s,'cloud_consent':True,'auto_workflow':True,
                                 'auto_title':True,'auto_summary':grant},title,consent_confirmed=True)
                             auto_monitor.track(session['id'],request.app_id,
                                 stop_on_input_release=desktop.settings.value.stop_on_microphone_release if desktop else False,
@@ -849,6 +884,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 app.state.recording.select_model(request.model)
                             previous_revision = store.get(request.session_id)['transcript_revision']
                             app.state.recording.reprocess(request.session_id, language=request.language,
+                                **({'language_hints':request.language_hints} if request.language_hints is not None else {}),
                                 **({'cloud_consent':request.cloud_consent} if hasattr(app.state.recording,'cloud') else {}))
                             automatic_scheduled.add(request.session_id)
                             if summary_provider and summary_provider.public()['configured']:
@@ -868,6 +904,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 if hasattr(recorder,'select_model'):
                                     recorder.select_model(request.model)
                                 recorder.resume(request.session_id, language=request.language,
+                                    **({'language_hints':request.language_hints} if request.language_hints is not None else {}),
                                     **({'cloud_consent':request.cloud_consent} if hasattr(recorder,'cloud') else {}))
                             else:
                                 if not request.confirmed:
@@ -926,7 +963,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 recorder.select_model(request.model)
                             grant=({key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
                                    if summary_provider and summary_provider.public()['configured'] else None)
-                            source = {**source,'auto_workflow':True,'auto_title':request.title.strip() in {'Meeting conversation','Meeting test'},'auto_summary':grant,'language':request.language,'duration_s':request.duration_s,'cloud_consent':request.cloud_consent,
+                            source = {**source,'auto_workflow':True,'auto_title':request.title.strip() in {'Meeting conversation','Meeting test'},'auto_summary':grant,'language':request.language,'language_hints':request.language_hints,'duration_s':request.duration_s,'cloud_consent':request.cloud_consent,
                                       'asr_engine':request.model if hasattr(recorder,'select_model') else recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
                             if desktop:
                                 source['microphone_processing'] = {

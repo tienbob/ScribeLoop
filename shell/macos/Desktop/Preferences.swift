@@ -19,7 +19,8 @@ struct Preferences: View {
 
     Use only facts supported by the transcript and cite the relevant sources. Keep proposals separate from approved decisions. Preserve disagreements and uncertainty. Include owners and due dates only when explicitly stated; otherwise leave them unassigned. Do not infer dates from relative phrases or invent missing details. Omit unsupported items.
     """
-    @State private var language = "auto"
+    @State private var selectedLanguages: Set<String> = ["en","vi"]
+    @State private var languageSearch = ""
     @State private var duration = 3600
     @State private var microphoneGain = 0.0
     @State private var microphoneFilter = "standard"
@@ -38,7 +39,17 @@ struct Preferences: View {
     @State private var revokeConfirmation = false
     private var presets: [String:String] { core.settings["summary_presets"] as? [String:String] ?? [:] }
     private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
-    private var valuesSignature: String { [endpoint,model,provider,language,String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease)].joined(separator:"\u{001f}") }
+    private var languageChoices: [(String,String)] {
+        let names = core.settings["supported_language_hints"] as? [String:String] ?? ["en":"English","vi":"Tiếng Việt"]
+        return names.map { ($0.key,$0.value) }.filter {
+            languageSearch.isEmpty || ($0.0 + " " + $0.1 + ($0.0 == "vi" ? " Vietnamese" : "")).localizedCaseInsensitiveContains(languageSearch)
+        }.sorted {
+            let left = $0.0 == "en" ? 0 : $0.0 == "vi" ? 1 : 2
+            let right = $1.0 == "en" ? 0 : $1.0 == "vi" ? 1 : 2
+            return left == right ? $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending : left < right
+        }
+    }
+    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != initialDetection || login != initialLogin }
     private var keyPreview: String {
@@ -153,10 +164,32 @@ struct Preferences: View {
                 }
                 Section("Recording preset") {
                     Picker("Maximum duration",selection:$duration) { Text("5 minutes · $0.25 audio cap").tag(300); Text("1 hour · $3 audio cap").tag(3600); Text("3 hours · $8 audio cap").tag(10800) }
-                    Picker("Conversation language",selection:$language) {
-                        ForEach([("auto","English + Tiếng Việt"),("en","English only"),("vi","Tiếng Việt only")],id:\.0) { code, name in Text(name).tag(code) }
+                    VStack(alignment:.leading,spacing:10) {
+                        HStack {
+                            Text("Conversation languages").font(.callout.weight(.medium))
+                            Spacer()
+                            Text("\(selectedLanguages.count) selected").font(.caption).foregroundStyle(.secondary)
+                        }
+                        TextField("Search languages",text:$languageSearch).textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Search conversation languages")
+                        ScrollView {
+                            LazyVGrid(columns:[GridItem(.flexible(),alignment:.leading),GridItem(.flexible(),alignment:.leading)],alignment:.leading,spacing:10) {
+                                ForEach(languageChoices,id:\.0) { code, name in
+                                    Toggle(name,isOn:Binding(
+                                        get:{ selectedLanguages.contains(code) },
+                                        set:{ selected in
+                                            if selected { selectedLanguages.insert(code) }
+                                            else if selectedLanguages.count > 1 { selectedLanguages.remove(code) }
+                                        }))
+                                        .toggleStyle(.checkbox)
+                                        .disabled(selectedLanguages.count == 1 && selectedLanguages.contains(code))
+                                }
+                            }.padding(.vertical,4)
+                        }.frame(height:210)
+                        if languageChoices.isEmpty { Text("No matching languages").font(.caption).foregroundStyle(.secondary) }
+                        Button("Reset to English and Vietnamese") { selectedLanguages = ["en","vi"]; languageSearch = "" }
                     }
-                    Text("English + Tiếng Việt supports switching between both languages and sends those hints to Deepgram. Choose a single language when the whole call uses it. Hints guide recognition; they do not guarantee accuracy. Applies to new work after processing finishes.").font(.caption).foregroundStyle(.secondary)
+                    Text("Select the languages you expect to hear. Keep at least one selected. Deepgram uses your selection as hints and supports switching languages. Hints guide recognition; accuracy can vary. Applies to new recordings and manual transcription reruns.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Permissions and call detection") {
                     HStack(spacing:12) {
@@ -212,8 +245,9 @@ struct Preferences: View {
             if model.isEmpty { model = "gpt-5.4-mini" }
             if provider.isEmpty { provider = "OpenAI" }
             if presets[provider]?.trimmingCharacters(in:CharacterSet(charactersIn:"/")) != endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) { provider = "Custom" }
-            language = text(core.settings["language"])
-            if language.isEmpty { language = "auto" }
+            selectedLanguages = Set(core.settings["language_hints"] as? [String] ?? ["en","vi"])
+            if selectedLanguages.isEmpty { selectedLanguages = ["en","vi"] }
+            languageSearch = ""
             duration = core.settings["duration_s"] as? Int ?? 3600
             microphoneGain = (core.settings["microphone_gain_db"] as? NSNumber)?.doubleValue ?? 0
             microphoneFilter = text(core.settings["microphone_noise_filter"])
@@ -261,7 +295,7 @@ struct Preferences: View {
         guard core.connected, !core.busy else { saveError = "Reconnect and wait for processing to finish before saving."; return }
         saveError = nil; saveCommands = []
         if providerChanged {
-            var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":language,"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
+            var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":"auto","language_hints":selectedLanguages.sorted(),"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
             if !summaryKey.isEmpty { value["summary_key"] = summaryKey }
             value["stop_on_microphone_release"] = stopOnMicrophoneRelease
             if removeTranscriptionKey { value["deepgram_key"] = "" }
@@ -324,7 +358,7 @@ struct AudioView: View {
         }
         .onDisappear { core.stopAudio() }
         .confirmationDialog("Upload this saved audio and transcribe again?",isPresented:$rerun,titleVisibility:.visible) {
-            Button("Upload and transcribe") { core.stopAudio(); if let id = core.selectedID { core.send(["action":"reprocess","session_id":id,"language":core.settings["language"] ?? "auto"]) } }
+            Button("Upload and transcribe") { core.stopAudio(); if let id = core.selectedID { core.send(["action":"reprocess","session_id":id,"language":core.settings["language"] ?? "auto","language_hints":core.settings["language_hints"] ?? ["en","vi"]]) } }
         }
     }
 }

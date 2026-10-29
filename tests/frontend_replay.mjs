@@ -513,3 +513,10 @@ demoEvent({type:'session_deleted',session_id:sid});
 assert.equal(demoGet('saved-audio').hidden,true);
 assert.equal(demoGet('rolling-section').hidden,true);
 console.log('Revision pagination and stale/deleted rolling-note cleanup passed');
+demoEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v3'},fixtures:[],
+ sessions:[{id:sid,source:'meeting',status:'completed',title:'Ended',started_at:1,
+ end_reason:'selected_app_exited',notes_status:'Call ended early — nothing to summarize'}],
+ active_id:null,segments:{},notes:{}});
+assert.equal(demoGet('recording-end-status').textContent,'Stopped because the meeting app quit');
+assert.equal(demoGet('automatic-notes-status').textContent,'Call ended early — nothing to summarize');
+console.log('Persisted recording end reason and short-call notice restore passed');

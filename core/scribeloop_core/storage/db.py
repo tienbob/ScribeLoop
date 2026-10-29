@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 DDL = """
 CREATE TABLE sessions (
@@ -261,9 +261,17 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
             AFTER UPDATE ON speakers BEGIN
             UPDATE summary_source_versions SET generation=generation+1 WHERE session_id IN
               (SELECT session_id FROM person_links WHERE person_id=OLD.id OR person_id=NEW.id); END;''')
-    if version < SCHEMA_VERSION:
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        conn.commit()
+    if version < 13:
+        # No executescript here: it commits pending transactions implicitly.
+        # Explicit BEGIN also makes the DDL transactional when entering from v12.
+        with conn:
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            conn.execute("DELETE FROM events WHERE type='recording_end' AND id NOT IN "
+                         "(SELECT MIN(id) FROM events WHERE type='recording_end' GROUP BY session_id)")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_recording_end "
+                         "ON events(session_id) WHERE type='recording_end'")
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
 
 

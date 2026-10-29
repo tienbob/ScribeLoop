@@ -51,7 +51,7 @@ def test_v10_missing_stream_provenance_is_repaired_idempotently(tmp_path,require
         assert store.segments(sid)==before
         revision=store.revisions(sid)[0]
         assert revision['origin']=='confirmed' and revision['provider']=='deepgram'
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==12
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==13
         migrate(conn)
         assert len(store.revisions(sid))==1
         assert_naming_and_summary(store,sid)

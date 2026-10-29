@@ -314,7 +314,8 @@ def test_wrong_provider_configuration_is_rejected_before_key_dispatch(state):
 
 
 @pytest.mark.asyncio
-async def test_automatic_multilingual_keeps_word_languages_and_speaker_separation(state):
+@pytest.mark.parametrize('hints',[None,['en','fr','ja'],['zh-HK']])
+async def test_automatic_multilingual_keeps_word_languages_and_speaker_separation(state,hints):
     from urllib.parse import parse_qs, urlsplit
     store,audio,_,publish=state
     urls=[]
@@ -331,13 +332,13 @@ async def test_automatic_multilingual_keeps_word_languages_and_speaker_separatio
         query=parse_qs(urlsplit(url).query)
         assert query['language']==['multi'] and query['diarize_model']==['v1']
         assert 'detect_language' not in query
-        assert query['language_hint']==['en','vi']
+        assert query['language_hint']==(hints or ['en','vi'])
         urls.append(url)
         return MultilingualSocket()
     source=ControlledSource()
     runner=DeepgramRecordingRunner(store,audio,lambda *a,**k:source,publish,
         config=DeepgramConfig(api_key='test-key',connector=connector))
-    sid=runner.start(None,{'cloud_consent':True,'language':'auto'},'Multilingual',consent_confirmed=True)['id']
+    sid=runner.start(None,{'cloud_consent':True,'language':'auto','language_hints':hints},'Multilingual',consent_confirmed=True)['id']
     await wait_for(lambda:len(store.segments(sid))>=4)
     runner.stop(sid)
     await runner.task

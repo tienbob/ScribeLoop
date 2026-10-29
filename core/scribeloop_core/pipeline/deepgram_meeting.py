@@ -27,6 +27,7 @@ from .languages import (
     LANGUAGE_CHOICES,
     LANGUAGE_NAMES,
     deepgram_language_options,
+    validate_language_hints,
     word_language,
 )
 
@@ -225,7 +226,7 @@ def stream_track(audio, sid, stream, emit, cancelled, done, **kwargs):
         return _stream_cursor(cursor,sid,stream,emit,cancelled,done,**kwargs)
 
 
-def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint):
+def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint, language_hints=None):
     sent = confirmed = base = checkpoint
     epoch = uuid4().hex
     frames=[]
@@ -259,7 +260,7 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
         return
     budget.reserve(stream,emit,cancelled)
     reserved_until = sent+10000
-    params = {'model':'nova-3',**deepgram_language_options(language),'encoding':'linear16','sample_rate':16000,
+    params = {'model':'nova-3',**deepgram_language_options(language,language_hints),'encoding':'linear16','sample_rate':16000,
         'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1'}
     url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params,doseq=True)
     # No redirect following: authorization must only reach this fixed host.
@@ -363,7 +364,7 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
         raise DeepgramError('Deepgram connection security check failed') from None
 
 
-def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto',checkpoints=None,**_):
+def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto',checkpoints=None,language_hints=None,**_):
     if language not in LANGUAGE_CHOICES or not config.api_key:
         raise DeepgramError('Choose Auto or a supported language and configure Deepgram locally')
     if done.is_set():
@@ -375,7 +376,9 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
                 return
             if not report['complete'] or type(checkpoint) is not int or not 0<=checkpoint<=available_audio_ms(report):
                 raise DeepgramError('Recover incomplete audio or invalid saved checkpoints before resume')
-    automatic = language == 'auto'
+    if language_hints is not None:
+        language_hints = validate_language_hints(language_hints)
+    automatic = language == 'auto' or language_hints is not None
     language = 'multi' if automatic else language
     emit({'type':'language_locked','language':language,'mode':'multilingual' if automatic else 'manual',
           'confidence':None,'sample_s':0})
@@ -389,7 +392,8 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
     def track(stream):
         try:
             stream_track(audio,sid,stream,emit,Cancel(),done,config=config,budget=budget,
-                language=language,checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0))
+                language=language,language_hints=language_hints,
+                checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0))
         except Exception:
             failed.set()
             raise
@@ -407,6 +411,7 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             raise TypeError('The streaming app requires a Deepgram configuration')
         super().__init__(*args,config=config,**kwargs)
         self.budget = StreamingBudget(config,{})
+        self.language_hints = None
 
     def _authorize(self,confirmed):
         if confirmed is not True:
@@ -420,8 +425,12 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             raise ValueError('Select Auto or a supported conversation language')
         self.budget = StreamingBudget(self.cloud,{})
         from .recording import RecordingRunner
-        return RecordingRunner.start(self,selection,{**metadata,'provider':'deepgram','model':'nova-3',
+        hints = metadata.get('language_hints')
+        hints = validate_language_hints(hints) if hints is not None else None
+        result = RecordingRunner.start(self,selection,{**metadata,'provider':'deepgram','model':'nova-3',
             'cloud_budget_usd':self.cloud.budget_usd},title,consent_confirmed=consent_confirmed)
+        self.language_hints = hints
+        return result
 
     def _saved_authorization(self,sid,cloud_consent):
         self._saved(sid)
@@ -429,23 +438,30 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         self.store.grant_cloud(sid,'nova-3',provider='deepgram')
         self.budget = StreamingBudget(self.cloud,self.store.cloud_usage(sid))
 
-    def resume(self,sid, *, language='auto',cloud_consent=False):
+    def resume(self,sid, *, language='auto',cloud_consent=False,language_hints=None):
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         self._saved(sid)
         if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,'deepgram'}:
             raise ValueError('Saved transcript uses another provider; explicitly replace it instead of mixing backends')
-        return super().resume(sid,language=language,cloud_consent=cloud_consent)
+        hints = validate_language_hints(language_hints) if language_hints is not None else None
+        result = super().resume(sid,language=language,cloud_consent=cloud_consent)
+        self.language_hints = hints
+        return result
 
-    def reprocess(self,sid, *, language,cloud_consent=False):
+    def reprocess(self,sid, *, language,cloud_consent=False,language_hints=None):
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
-        return super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        hints = validate_language_hints(language_hints) if language_hints is not None else None
+        result = super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        self.language_hints = hints
+        return result
 
     def _live(self,audio,sid,emit,cancelled,done,**kwargs):
-        return run_streaming(audio,sid,emit,cancelled,done,config=self.cloud,budget=self.budget,**kwargs)
+        return run_streaming(audio,sid,emit,cancelled,done,config=self.cloud,budget=self.budget,
+                             language_hints=self.language_hints,**kwargs)
 
     def _batch(self,audio,sid,emit,cancelled):
         from .deepgram_batch import run_batch
         return run_batch(audio,sid,emit,cancelled,config=self.cloud,budget=self.budget,
-                         language=self.language)
+                         language=self.language,language_hints=self.language_hints)

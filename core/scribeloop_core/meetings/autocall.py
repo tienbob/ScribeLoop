@@ -43,7 +43,7 @@ class AutoCallMonitor:
         if healthy and microphone == 'active':
             self.input_seen = True
             self.ignore_input_release = False
-        released = (healthy and activity == 'active' and self.stop_on_input_release and
+        released = (healthy and activity != 'inactive' and self.stop_on_input_release and
                     self.input_seen and not self.ignore_input_release and microphone == 'inactive')
         ending = activity == 'inactive' or released
         reason = 'microphone_released' if released else 'app_inactive' if ending else None
@@ -52,7 +52,7 @@ class AutoCallMonitor:
             self.inactive_since = None
         self.last_reason = reason
         self.last_observed = observed if healthy else None
-        if not healthy or activity == 'unknown':
+        if not healthy or (activity == 'unknown' and not released):
             return {'state':'unknown','remaining_s':None},False
         if not ending:
             return {'state':'recording','remaining_s':None},False

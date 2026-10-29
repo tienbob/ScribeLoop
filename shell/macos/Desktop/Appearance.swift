@@ -68,6 +68,19 @@ struct MeetingStatus: View {
     }
 }
 
+func recordingEndLabel(_ reason:String) -> String? {
+    switch reason {
+    case "manual_stop": return "Stopped by you"
+    case "auto_app_inactive": return "Stopped after call activity ended"
+    case "auto_microphone_released": return "Stopped after microphone release"
+    case "selected_app_exited": return "Stopped because the meeting app quit"
+    case "duration_limit": return "Recording limit reached"
+    case "app_shutdown": return "Stopped when ScribeLoop closed"
+    case "interrupted": return "Interrupted by a restart"
+    default: return nil // Capture failures already have an actionable diagnostic.
+    }
+}
+
 extension View {
     func notebookCard() -> some View {
         self.padding(20).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:16))

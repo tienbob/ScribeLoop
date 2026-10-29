@@ -1,0 +1,7 @@
+/probe_liveness
+/probe2
+/LivenessTarget.app/
+/*.slc
+
+/liveness-trace.txt
+/helper-confirmation.txt

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..llm.summary_provider import SummaryProvider
 from ..pipeline.deepgram_meeting import DeepgramConfig
+from ..pipeline.languages import AUTO_LANGUAGES, HINT_LANGUAGE_NAMES, LanguageHints
 from ..storage.keys import KeyUnavailable
 
 SERVICE = 'ai.scribeloop.providers.v1'
@@ -29,8 +30,9 @@ class Settings(BaseModel):
     summary_provider: str = Field(default='OpenAI', min_length=1, max_length=80)
     summary_instructions: str = Field(default='', max_length=2000)
     language: str = 'auto'
+    language_hints: LanguageHints | None = None
     duration_s: int = 3600
-    stop_on_microphone_release: bool = False
+    stop_on_microphone_release: bool = True
     microphone_gain_db: float = Field(default=0., ge=-12, le=24, allow_inf_nan=False)
     microphone_noise_filter: Literal['off','standard','strong'] = 'standard'
     microphone_noise_threshold_db: float = Field(default=-40., ge=-65, le=-25, allow_inf_nan=False)
@@ -71,6 +73,8 @@ class Settings(BaseModel):
 
     def public(self):
         return {**self.model_dump(exclude={'summary_key','deepgram_key'}),
+                'language_hints':self.language_hints or (list(AUTO_LANGUAGES) if self.language=='auto' else [self.language]),
+                'supported_language_hints':HINT_LANGUAGE_NAMES,
                 'transcription_configured': bool(self.deepgram_key),
                 'summary_key_preview': ((self.summary_key[:4] if len(self.summary_key)>4 else '')
                                         +'********') if self.summary_key else '',
@@ -112,6 +116,8 @@ class DesktopSettings:
         if not isinstance(patch, dict) or len(json.dumps(patch,ensure_ascii=False).encode()) > 12288:
             raise ValueError('Invalid settings')
         patch = dict(patch)
+        if 'language' in patch and 'language_hints' not in patch:
+            patch['language_hints'] = None
         provider = patch.get('summary_provider', self.value.summary_provider)
         if isinstance(provider,str) and provider in SUMMARY_PRESETS and 'summary_provider' in patch:
             patch['summary_endpoint'] = SUMMARY_PRESETS[provider]

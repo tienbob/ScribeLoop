@@ -35,7 +35,7 @@ def response():
         {'word':'again','start':1.2,'end':1.3,'speaker':1}]}]} for _ in range(2)]}}
 
 
-def execute(service,sid,handler,*,language='auto',budget_usd=.15):
+def execute(service,sid,handler,*,language='auto',budget_usd=.15,language_hints=None):
     events=[]
     def emit(event):
         events.append(event)
@@ -45,8 +45,22 @@ def execute(service,sid,handler,*,language='auto',budget_usd=.15):
                           connector=lambda *a,**k:pytest.fail('Saved rerun opened a websocket'),
                           budget_usd=budget_usd)
     run_batch(service.audio,sid,emit,threading.Event(),config=config,
-              budget=StreamingBudget(config,{}),language=language)
+              budget=StreamingBudget(config,{}),language=language,language_hints=language_hints)
     return events
+
+
+@pytest.mark.parametrize('hints',[['en','fr','ja'],['ko'],['zh-HK','zh']])
+def test_custom_language_hints_on_actual_batch_request(retained,hints):
+    sid=saved(retained)
+    def handler(request):
+        assert request.url.params.get('language') == 'multi'
+        assert request.url.params.get_list('language_hint') == hints
+        value=response()
+        for channel in value['results']['channels']:
+            for word in channel['alternatives'][0]['words']: word['language']='fr'
+        return httpx.Response(200,json=value)
+    events=execute(retained,sid,handler,language_hints=hints)
+    assert {row['language'] for row in events if 'text' in row} == {'fr'}
 
 
 @pytest.mark.parametrize('language,expected',[('auto','multi'),('en','en'),('vi','vi')])

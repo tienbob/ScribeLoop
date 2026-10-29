@@ -47,6 +47,31 @@ def add_rows(store,sid,count=1000):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('fault',['once','always','network'])
+async def test_automatic_repairs_only_one_received_invalid_summary(state,fault):
+    store,sid=state
+    rows=add_rows(store,sid,count=2)
+    class RepairProvider(Provider):
+        async def generate(self,messages):
+            if fault=='network':
+                self.calls.append(messages)
+                raise RuntimeError('Unknown delivery')
+            self.bad=fault=='always' or not self.calls
+            return await super().generate(messages)
+    provider=RepairProvider()
+    engine=RollingNotes(store,provider)
+    if fault=='once':
+        assert await engine.run(sid,rows,revision=1,repair_invalid=True)
+    else:
+        with pytest.raises((RuntimeError,ValueError)):
+            await engine.run(sid,rows,revision=1,repair_invalid=True)
+    assert len(provider.calls)==(1 if fault=='network' else 2)
+    job=store.conn.execute('SELECT state,attempts FROM summary_jobs WHERE session_id=?',(sid,)).fetchone()
+    assert job['state']==('completed' if fault=='once' else 'failed')
+    assert job['attempts']==len(provider.calls)
+
+
+@pytest.mark.asyncio
 async def test_hierarchical_notes_over_one_hundred_kb_cache_and_reuse(state):
     store,sid=state
     rows=add_rows(store,sid)

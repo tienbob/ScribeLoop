@@ -29,6 +29,16 @@ def sample(now, *processes, available=True, complete=True):
                             complete=complete, processes=processes)
 
 
+def test_known_microphone_release_is_not_hidden_by_unknown_output():
+    detector=MeetingDetector(APPS)
+    detector.update(sample(0,process(mic=True,output=True)))
+    detector.update(sample(1,process(mic=False,output=None)))
+    assert detector.activity['teams']=='unknown'
+    assert detector.input_activity['teams']=='inactive'
+    detector.update(sample(2,process(mic=None,output=True)))
+    assert detector.input_activity['teams']=='unknown'
+
+
 def test_idle_apps_and_unknown_processes_never_prompt():
     detector = MeetingDetector(APPS)
     for now in range(10):

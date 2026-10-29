@@ -139,6 +139,7 @@ class MeetingDetector:
                     episode.first_seen = now
         active: dict[str, set[str]] = {}
         unknown = set()
+        input_unknown = set()
         for process in snapshot.processes:
             app_id = self._bundles.get(process.bundle_id)
             if app_id is None:
@@ -150,13 +151,15 @@ class MeetingDetector:
                 evidence.add("output_active")
             if process.input_running is None or process.output_running is None:
                 unknown.add(app_id)
+            if process.input_running is None:
+                input_unknown.add(app_id)
         self.activity = {
             i: ("active" if active.get(i) else "unknown" if i in unknown else "inactive")
             for i in self.apps
         }
         self.input_activity = {
             i: ('active' if 'input_active' in active.get(i,set()) else
-                'unknown' if i in unknown else 'inactive') for i in self.apps
+                'unknown' if i in input_unknown else 'inactive') for i in self.apps
         }
         for app_id, app in self.apps.items():
             evidence = active.get(app_id, set())

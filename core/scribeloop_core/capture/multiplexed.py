@@ -72,6 +72,7 @@ class MultiplexedPCMSource(PCMProcessSource):
                         raise TimeoutError('Native helper did not finish shutdown') from None
                     if status != 0:
                         raise RuntimeError('Native helper failed during shutdown')
+                    self.end_reason = self._source_end_reason()
                     return
                 stream = STREAMS.get(tag)
                 if (magic != b'SLP2' or reserved != b'\0\0\0'

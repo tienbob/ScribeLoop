@@ -244,6 +244,16 @@ struct Notebook: View {
                                     Text(Date(timeIntervalSince1970:Double(selected.int("started_at"))/1000),style:.date)
                                     Text("· \(core.total) \(core.total == 1 ? "segment" : "segments")")
                                 }.font(.caption).foregroundStyle(.secondary)
+                                if let reason = recordingEndLabel(selected.text("end_reason")) {
+                                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                                }
+                                if !selected.text("notes_status").isEmpty {
+                                    Text(selected.text("notes_status")).font(.callout).foregroundStyle(.secondary)
+                                }
+                                if let failure = selected.raw["summary_failure"] as? Object {
+                                    Label(text(failure["message"]),systemImage:"exclamationmark.triangle")
+                                        .font(.callout).foregroundStyle(ScribeTheme.warning)
+                                }
                                 if let failure = selected.raw["failure"] as? Object,
                                    !text(failure["message"]).isEmpty {
                                     Label(text(failure["message"]),systemImage:"exclamationmark.triangle")
@@ -307,7 +317,7 @@ struct Notebook: View {
         Button("People…") { core.send(["action":"people_page"]); showPeople = true }
         Divider()
         Button("Recover interrupted audio") { core.send(["action":"recover","session_id":row.id]) }.disabled(core.busy || !["failed","interrupted"].contains(row.text("status")))
-        Button("Resume transcription") { core.send(["action":"resume","session_id":row.id,"language":core.settings["language"] ?? "auto"]) }.disabled(core.busy || !core.accepted || !["failed","interrupted"].contains(row.text("status")))
+        Button("Resume transcription") { core.send(["action":"resume","session_id":row.id,"language":core.settings["language"] ?? "auto","language_hints":core.settings["language_hints"] ?? ["en","vi"]]) }.disabled(core.busy || !core.accepted || !["failed","interrupted"].contains(row.text("status")))
         Button("Delete conversation…",systemImage:"trash",role:.destructive) { confirmed = row.id }.disabled(core.busy)
     }
     private func summarize(_ row: Record) {
@@ -384,7 +394,7 @@ struct RecordingReview: View {
                 Label("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"])) notes",systemImage:"note.text")
             }.font(.callout).notebookCard()
             let duration = core.settings["duration_s"] as? Int ?? 3600
-            Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Language: \(text(core.settings["language"]))").font(.callout)
+            Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Languages: \(core.transcriptionLanguageLabel)").font(.callout)
             Text(candidate == nil && scope != "application" ? "Press Stop to end this recording. Notes follow automatically." : (core.settings["stop_on_microphone_release"] as? Bool == true ? "Recording stops after 60 seconds of known app inactivity or after the app releases its microphone. Muted calls may also trigger the countdown; choose Keep recording to continue. Stop is always available." : "Recording stops after 60 seconds of known app inactivity. Other browser tabs can keep audio active; press Stop if the call has ended. Unknown activity keeps recording.")).font(.caption).foregroundStyle(.secondary)
             if core.transcription["configured"] as? Bool != true { Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange) }
             if let recordError { Label(recordError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning) }

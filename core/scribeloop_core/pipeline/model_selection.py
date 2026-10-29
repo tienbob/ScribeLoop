@@ -82,12 +82,12 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         return super().start(selection,{**metadata,'engine':'deepgram'},title,
                              consent_confirmed=consent_confirmed)
 
-    def resume(self,sid,*,language='auto',cloud_consent=False):
+    def resume(self,sid,*,language='auto',cloud_consent=False,language_hints=None):
         self._saved_duration(sid)
         if self.store.segments(sid) and self.store.transcript_provider(sid) != 'deepgram':
             raise ValueError('Use Transcribe again to replace a historical local transcript')
-        return super().resume(sid,language=language,cloud_consent=cloud_consent)
+        return super().resume(sid,language=language,cloud_consent=cloud_consent,language_hints=language_hints)
 
-    def reprocess(self,sid,*,language,cloud_consent=False):
+    def reprocess(self,sid,*,language,cloud_consent=False,language_hints=None):
         self._saved_duration(sid)
-        return super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        return super().reprocess(sid,language=language,cloud_consent=cloud_consent,language_hints=language_hints)

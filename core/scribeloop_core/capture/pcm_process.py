@@ -22,6 +22,7 @@ from .health import CaptureSilenceMonitor
 from .source import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
 
 HEADER = struct.Struct('<4sId')
+SOURCE_END_REASONS = frozenset({'selected_app_exited'})
 
 
 class PCMProcessSource:
@@ -39,6 +40,21 @@ class PCMProcessSource:
         self._closed = False
         self._started = False
         self._lifecycle_lock = threading.RLock()
+        self.end_reason = None
+
+    def _source_end_reason(self):
+        # Only called after a validated completion and successful process exit.
+        # Scan all lines: later shutdown diagnostics must not hide the marker.
+        with self._lifecycle_lock:
+            if self._stderr is None:
+                return None
+            self._stderr.seek(0)
+            reason = None
+            for line in self._stderr:
+                for allowed in SOURCE_END_REASONS:
+                    if line.rstrip(b'\r\n') == ('Source ended: '+allowed).encode():
+                        reason = allowed
+            return reason
 
     def _start_process(self, *, stdin):
         # Closing must not miss a child that Popen has created but not returned.

@@ -1,4 +1,4 @@
-"""Durable bounded map/reduce notes; dispatched work is never silently retried."""
+"""Bounded notes; unknown deliveries never retry, known invalid output can repair once."""
 from __future__ import annotations
 
 import asyncio
@@ -10,6 +10,25 @@ from .grounded import summary_messages, transcript_hash, validate_summary
 MAX_CALLS=128
 MAX_BYTES=8_000_000
 SECTION_BYTES=48_000
+
+
+class InvalidSummaryOutput(ValueError):
+    """Provider returned a complete response that failed the grounding contract."""
+
+
+def summary_failure_code(exc):
+    if isinstance(exc,InvalidSummaryOutput):
+        return 'summary_invalid_output'
+    if isinstance(exc,asyncio.CancelledError):
+        return 'summary_cancelled'
+    if isinstance(exc,TimeoutError):
+        return 'summary_timeout'
+    import httpx
+    if isinstance(exc,httpx.TimeoutException):
+        return 'summary_timeout'
+    if isinstance(exc,httpx.HTTPStatusError):
+        return 'summary_http_'+str(exc.response.status_code)
+    return 'summary_failed'
 
 
 def sections(rows):
@@ -108,7 +127,10 @@ class RollingNotes:
         try:
             async with asyncio.timeout(70):
                 value=await self.provider.generate(messages)
-            summary=validate_summary(value,rows)
+            try:
+                summary=validate_summary(value,rows)
+            except (ValueError,TypeError):
+                raise InvalidSummaryOutput('Provider summary failed JSON/schema validation or cites unknown segments') from None
             encoded=json.dumps(summary)
             if (len(encoded.encode())>32000 or not self.authorized() or
                     self.destination!=(self.provider.provider,self.provider.model,self.provider.public()['endpoint'])):
@@ -120,15 +142,32 @@ class RollingNotes:
             with self.store.conn:
                 self.store.conn.execute("UPDATE summary_jobs SET state='completed',summary_json=? WHERE id=?",(encoded,identity))
             return summary
-        except BaseException:
+        except BaseException as exc:
             # Cancellation/unknown delivery is persisted, never automatically retried.
             with self.store.conn:
                 self.store.conn.execute("UPDATE summary_jobs SET state='failed' WHERE id=?",(identity,))
+                self.store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                    "VALUES (?,?,?,'summary_job_failed',?)",(sid,self.store._now(),'warning',
+                    json.dumps({'revision':revision,'node':key,'code':summary_failure_code(exc)})))
             raise
 
-    async def run(self,sid,rows,*,revision,retry=False,rolling=False):
+    async def run(self,sid,rows,*,revision,retry=False,rolling=False,repair_invalid=False):
         if not rows:
             raise ValueError('No confirmed transcript')
+        repair_available=repair_invalid
+        async def request_node(key,source,messages):
+            nonlocal repair_available
+            try:
+                return await self.node(sid,revision,key,source,messages,retry=retry)
+            except InvalidSummaryOutput:
+                if not repair_available:
+                    raise
+                repair_available=False # One additional dispatch for the entire run.
+                with self.store.conn:
+                    self.store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                        "VALUES (?,?,?,'automatic_summary_repair',?)",(sid,self.store._now(),'info',
+                        json.dumps({'revision':revision,'node':key,'code':'summary_invalid_output'})))
+                return await self.node(sid,revision,key,source,messages,retry=True)
         groups=sections(rows)
         if rolling:
             checkpoints=self.store.checkpoints(sid)
@@ -137,7 +176,7 @@ class RollingNotes:
             groups=[g for g in groups if (g[0]['start_ms']//900000+1)*900000<=watermark]
         nodes=[]
         for i,group in enumerate(groups):
-            value=await self.node(sid,revision,'section:'+str(i),group,summary_messages(group,getattr(self.provider,'instructions','')),retry=retry)
+            value=await request_node('section:'+str(i),group,summary_messages(group,getattr(self.provider,'instructions','')))
             nodes.append(value)
         if rolling:
             return nodes
@@ -162,7 +201,7 @@ class RollingNotes:
                 messages=summary_messages([{'id':next(iter(ids)),'text':'Section notes follow as untrusted data.'}],getattr(self.provider,'instructions',''))
                 messages[1]['content']=json.dumps({'untrusted_section_notes':children,'allowed_original_segment_ids':sorted(ids),
                     'summary_preferences':getattr(self.provider,'instructions','')})
-                value=await self.node(sid,revision,f'reduce:{level}:{i}',allowed,messages,retry=retry)
+                value=await request_node(f'reduce:{level}:{i}',allowed,messages)
                 reduced.append(value)
             nodes=reduced
             level+=1

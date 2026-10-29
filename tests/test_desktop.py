@@ -24,6 +24,36 @@ class Vault:
         self.value = value
 
 
+def test_language_hint_selection_survives_reopen_and_validates():
+    from scribeloop_core.pipeline.languages import HINT_LANGUAGE_NAMES, word_language
+    settings=DesktopSettings(Vault())
+    assert settings.value.public()['language_hints'] == ['en','vi']
+    selected=['en','vi','fr','ja','zh-HK']
+    settings.save({'language':'auto','language_hints':selected})
+    assert DesktopSettings(settings.backend).value.public()['language_hints'] == selected
+    assert settings.value.public()['supported_language_hints'] == HINT_LANGUAGE_NAMES
+    for invalid in ([],['invented'],['en',1],'fr'):
+        with pytest.raises(ValueError): settings.save({'language_hints':invalid})
+    settings.save({'language':'vi'})
+    assert settings.value.public()['language_hints'] == ['vi']
+    assert word_language('fr-FR') == 'fr'
+    assert word_language('zh-HK') == 'zh-HK'
+
+
+@pytest.mark.parametrize('model,extra',[
+    ('StartRecording',{'request_id':1,'scope':'microphone','microphone_id':'default','consent_confirmed':True,'action':'record'}),
+    ('AcceptCall',{'candidate_id':'test','app_id':'test.app','consent_confirmed':True,'action':'accept_call'}),
+    ('ReprocessRecording',{'session_id':'a'*32,'action':'reprocess'}),
+    ('SavedMeeting',{'session_id':'a'*32,'action':'resume'}),
+])
+def test_recording_commands_validate_multilanguage_hints(model,extra):
+    from scribeloop_core.api import server
+    schema=getattr(server,model)
+    assert schema.model_validate({**extra,'language_hints':['en','fr','ja']}).language_hints == ['en','fr','ja']
+    with pytest.raises(ValueError): schema.model_validate({**extra,'language_hints':[]})
+    with pytest.raises(ValueError): schema.model_validate({**extra,'language_hints':['unknown']})
+
+
 def test_microphone_preferences_persist_and_reject_invalid_values():
     settings = DesktopSettings(Vault())
     assert settings.value.microphone_gain_db == 0

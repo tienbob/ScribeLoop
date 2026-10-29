@@ -9,7 +9,9 @@ capture/release acceptance gates.
 
 ## Current development
 
-- [English and Vietnamese transcription](EN_VI_TRANSCRIPTION.md)
+- [Transcription languages and hints](EN_VI_TRANSCRIPTION.md)
+- [Latest-call transcription quality review — October 29](TRANSCRIPTION_QUALITY_REVIEW_2026-10-29.md)
+- [Call stop and automatic notes repair — October 29](CALL_WORKFLOW_FIX_2026-10-29.md)
 
 - [Failed-call retry and capture authorization — October 29](FAILED_CALL_RETRY_2026-10-29.md)
 

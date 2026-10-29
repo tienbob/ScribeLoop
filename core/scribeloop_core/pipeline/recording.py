@@ -18,6 +18,22 @@ from .failures import failure_diagnostic
 from .language import LanguageDetectionError
 
 log = logging.getLogger(__name__)
+STOP_REASONS = frozenset({'manual_stop','auto_app_inactive','auto_microphone_released'})
+STOP_REASON_WINS = frozenset({'duration_limit','auto_app_inactive','auto_microphone_released','app_shutdown'})
+
+
+def resolve_end_reason(stop_reason, capture_end_reason):
+    if stop_reason in STOP_REASON_WINS:
+        return stop_reason
+    return capture_end_reason or stop_reason or 'unknown'
+
+
+def automatic_notes_eligible(session_id, duration_ms, confirmed_segments):
+    if confirmed_segments or (duration_ms or 0) >= 30000:
+        return True
+    log.warning('Automatic notes skipped for session %s: duration_ms=%s confirmed_segments=%s',
+                session_id,duration_ms or 0,confirmed_segments)
+    return False
 
 
 class RecordingRunner:
@@ -46,6 +62,9 @@ class RecordingRunner:
         self.closed = False
         self.stop_requested = threading.Event()
         self.cancel_processing = threading.Event()
+        self._reason_lock = threading.Lock()
+        self._stop_reason = None
+        self._capture_end_reason = None
 
     def start(self, selection, source_metadata, title, *, consent_confirmed):
         if consent_confirmed is not True:
@@ -61,6 +80,9 @@ class RecordingRunner:
         session = self.store.create_recording(title, source_metadata)
         self.store.set_audio_paths(session['id'], self.audio)
         self.active_id = session['id']
+        with self._reason_lock:
+            self._stop_reason = None
+            self._capture_end_reason = None
         self.stop_requested.clear()
         self.cancel_processing.clear()
         self.capture_done.clear()
@@ -68,15 +90,23 @@ class RecordingRunner:
         self.task = asyncio.create_task(self._run(session['id'], selection))
         return session
 
-    def stop(self, session_id):
+    def _request_stop(self, reason):
+        with self._reason_lock:
+            if self._stop_reason is None:
+                self._stop_reason = reason
+            self.stop_requested.set()
+
+    def stop(self, session_id, *, reason='manual_stop'):
+        if reason not in STOP_REASONS:
+            raise ValueError('Invalid recording stop reason')
         if self.active_id != session_id:
             raise ValueError('That recording is not active')
-        self.stop_requested.set()
+        self._request_stop(reason)
 
     async def close(self):
         self.closed = True
         self.cancel_processing.set()
-        self.stop_requested.set()
+        self._request_stop('app_shutdown')
         if self.task:
             await self.task
 
@@ -136,7 +166,7 @@ class RecordingRunner:
             while producer.is_alive() or not frames.empty():
                 now = time.monotonic()
                 if now - started >= self.max_s:
-                    self.stop_requested.set()
+                    self._request_stop('duration_limit')
                 if self.stop_requested.is_set():
                     if stop_at is None:
                         stop_at = now
@@ -170,6 +200,8 @@ class RecordingRunner:
             producer.join()
             if outcome:
                 raise outcome[0]
+            with self._reason_lock:
+                self._capture_end_reason = getattr(source,'end_reason',None)
             if not all(samples[stream] for stream in selected_streams) and not self.stop_requested.is_set():
                 raise RuntimeError('A selected capture stream produced no audio')
             for stream, writer in writers.items():
@@ -249,6 +281,9 @@ class RecordingRunner:
             stage = 'transcription'
             persist_progress()
             self.store.record_audio_duration(session_id, samples)
+            with self._reason_lock:
+                end_reason = resolve_end_reason(self._stop_reason,self._capture_end_reason)
+            self.store.record_end(session_id,end_reason)
             self.capture_done.set()
             self.active_id = None
             self.processing_id = session_id
@@ -272,6 +307,8 @@ class RecordingRunner:
             with contextlib.suppress(*DATABASE_ERRORS):
                 self.active_id = None  # Capture has drained before publishing failure.
                 self.store.record_failure(session_id,diagnostic)
+                if stage == 'capture':
+                    self.store.record_end(session_id,'capture_failed:'+diagnostic['code'])
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
                 'diagnostic':diagnostic,

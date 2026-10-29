@@ -56,8 +56,9 @@ def _wav(cursors, samples, cancelled):
         yield np.stack(parts,axis=1).astype('<i2',copy=False).tobytes()
 
 
-def run_batch(audio,sid,emit,cancelled,*,config,budget,language):
-    language = 'multi' if language == 'auto' else language
+def run_batch(audio,sid,emit,cancelled,*,config,budget,language,language_hints=None):
+    options = deepgram_language_options(language,language_hints)
+    language = options['language']
     streams = [s for s in STREAMS if audio.path(sid,s).is_file()]
     if not streams:
         raise DeepgramError('No retained audio to transcribe')
@@ -81,7 +82,7 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language):
             raise InterruptedError('Batch transcription cancelled')
         budget.reserve('multichannel',emit,cancelled,seconds=samples/SAMPLE_RATE*len(streams))
         emit({'type':'transcription_progress','mode':'batch_upload','stream':'all'})
-        params = {'model':'nova-3',**deepgram_language_options(language),'multichannel':'true',
+        params = {'model':'nova-3',**options,'multichannel':'true',
                   'diarize_model':'v1','smart_format':'true','mip_opt_out':'true'}
         headers = {'Authorization':'Token '+config.api_key,'Content-Type':'audio/wav',
                    'Content-Length':str(44+samples*len(streams)*2)}

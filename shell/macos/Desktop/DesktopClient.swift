@@ -392,6 +392,13 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         }
     }
     func stopRecording() { send(["action":"stop_recording"]) }
+    var transcriptionLanguageLabel: String {
+        let names = settings["supported_language_hints"] as? [String:String] ?? ["en":"English","vi":"Tiếng Việt"]
+        let codes = settings["language_hints"] as? [String] ?? ["en","vi"]
+        let selected = codes.map { names[$0] ?? $0 }
+        let label = selected.prefix(3).joined(separator:", ")
+        return selected.count > 3 ? "\(label) + \(selected.count - 3) more" : label
+    }
     @discardableResult func record(scope: String, app: String?, microphone: String, candidate: Record? = nil) -> String? {
         var command: Object
         if let candidate {
@@ -405,6 +412,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         }
         command["microphone_id"] = microphone; command["model"] = "deepgram"
         command["language"] = settings["language"] ?? "auto"; command["duration_s"] = settings["duration_s"] ?? 3600
+        command["language_hints"] = settings["language_hints"] ?? ["en","vi"]
         command["consent_confirmed"] = true; return send(command)
     }
     func stopAudio() { playback.close(); player?.stop(); player = nil; playing = false }

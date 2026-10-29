@@ -66,6 +66,27 @@ async def wait_for(predicate):
 
 
 @pytest.mark.asyncio
+async def test_capture_end_reason_reset_and_manual_stop_persist(setup):
+    store,audio,events,publish = setup
+    sources = []
+    def factory(*args,**kwargs):
+        source = Source(); sources.append(source)
+        if len(sources) == 1:
+            source.end_reason = 'selected_app_exited'
+        return source
+    runner = RecordingRunner(store,audio,factory,publish,transcriber=lambda *args:None)
+    for expected in ('selected_app_exited','manual_stop'):
+        sid = runner.start(None,{},'Fixture',consent_confirmed=True)['id']
+        assert runner._capture_end_reason is None and runner._stop_reason is None
+        await wait_for(lambda: any(e.get('session',{}).get('id')==sid and
+            e.get('session',{}).get('status')=='recording' for e in events))
+        runner.stop(sid)
+        await asyncio.wait_for(runner.task,3)
+        assert store.get(sid)['end_reason'] == expected
+    await runner.close()
+
+
+@pytest.mark.asyncio
 async def test_encrypted_record_stop_then_stream_labelled_notes(setup):
     store, audio, events, publish = setup
     source = Source()
