@@ -1,0 +1,27 @@
+ScribeLoop — internal testing
+
+INSTALL
+1. Check the macOS requirement below. This package supports Apple Silicon (M1 and newer), not Intel.
+2. Drag ScribeLoop.app onto Applications. Eject this disk image.
+3. Open ScribeLoop from Applications. No Python, Homebrew or terminal setup is needed.
+4. In Preferences, enter your own Deepgram API key for transcription. Configure a notes provider and model: your own cloud API key, or an already-running compatible Ollama/LM Studio server.
+5. Save with Done. Keys are kept in this Mac's Keychain; provider usage is billed to your account.
+6. When ready to record, approve microphone access. Meeting-app audio also needs macOS Screen Recording permission. Accept the processing agreement and choose Record explicitly.
+
+On macOS 13 through 14.1, start meetings manually with New recording. Automatic call detection requires macOS 14.2 or later. Microphone and meeting-app audio capture are built for macOS 13 or later; an actual Ventura Mac still needs acceptance testing.
+
+This test build uses Deepgram cloud ASR. Fully self-hosted ASR is not included.
+Opening the app does not start recording or play saved audio. Do not use Play if sound output must remain off. A microphone-only test does not require playing any sound.
+Capture of a selected browser includes its other tabs. Get permission from everyone whose audio you capture.
+
+UNSIGNED TEST BUILDS
+A package marked internal-unsigned is ad-hoc signed and not notarized. macOS may block it. Only use a package from your trusted internal distributor. Apple documents the app-specific exception under System Settings > Privacy & Security > Open Anyway; this is a manual decision for the tester or IT. Managed Macs may prohibit exceptions. Do not disable Gatekeeper or remove quarantine protections to install it. Prefer a signed/notarized package for wider rollout.
+Apple instructions: https://support.apple.com/102445
+
+UPDATES
+Quit ScribeLoop (closing the window leaves the menu-bar app running), then replace the app in Applications. Do not run old and new copies together. Back up important work before testing an upgrade. Database downgrades are not supported. Signed upgrade and Keychain continuity testing is still required.
+
+DATA
+Each Mac creates its own encrypted workspace at ~/Library/Application Support/ScribeLoop/. Copying the app does not copy anyone else's recordings, keys or provider settings. Back up workspace data and the applicable macOS Keychain together; copying encrypted files alone is not a supported restore procedure. No account sync or workspace transfer tool is included.
+
+Report startup failures, missing permission prompts, interrupted recordings or upgrade problems to the person who provided this package. Never attach API keys or private recordings to a bug report.

@@ -218,7 +218,7 @@ struct Notebook: View {
                     }.padding(18).background(Color.green.opacity(0.08))
                 }
                 if let activeID = core.activeID {
-                    HStack { Image(systemName:"record.circle.fill").foregroundStyle(.red); Text("Recording · Cloud / Deepgram")
+                    HStack { Image(systemName:"record.circle.fill").foregroundStyle(.red); Text(core.captureStopping ? "Stopping capture…" : "Recording · Cloud / Deepgram")
                         if let row = core.sessions.first(where: { $0.id == activeID }) { TimelineView(.periodic(from:.now,by:1)) { _ in Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),style:.timer).monospacedDigit() } }
                         Spacer(); Button("Stop recording",role:.destructive) { core.stopRecording() }.keyboardShortcut(".",modifiers:.command)
                     }.padding(18)
@@ -227,8 +227,8 @@ struct Notebook: View {
                     HStack { Image(systemName:"text.bubble"); Text(streamingLabel); Spacer() }
                         .font(.caption).foregroundStyle(.secondary).padding(.horizontal,18).padding(.bottom,10)
                 }
-                if core.callEnding, let activeID = core.activeID {
-                    HStack { Text("Call activity ended. Recording will stop after the inactivity grace period."); Button("Keep recording") { core.send(["action":"keep_recording","session_id":activeID]); core.callEnding = false } }.padding()
+                if let callStatus = core.callStatus, let activeID = core.activeID {
+                    HStack { Text(callStatus); if core.callEnding { Button("Keep recording") { core.send(["action":"keep_recording","session_id":activeID]); core.callEnding = false; core.callStatus = nil } } }.padding()
                 }
                 if core.processingID != nil {
                     HStack { ProgressView().controlSize(.small); Text(core.processingLabel); Spacer(); Text("Your saved transcript stays available.").foregroundStyle(.secondary) }.font(.callout).padding(18).background(ScribeTheme.subtle)
@@ -243,6 +243,11 @@ struct Notebook: View {
                                     Text(Date(timeIntervalSince1970:Double(selected.int("started_at"))/1000),style:.date)
                                     Text("· \(core.total) \(core.total == 1 ? "segment" : "segments")")
                                 }.font(.caption).foregroundStyle(.secondary)
+                                if let failure = selected.raw["failure"] as? Object,
+                                   !text(failure["message"]).isEmpty {
+                                    Label(text(failure["message"]),systemImage:"exclamationmark.triangle")
+                                        .font(.callout).foregroundStyle(ScribeTheme.warning)
+                                }
                             }
                             Spacer(minLength:0)
                             HStack(spacing:8) {
@@ -271,7 +276,7 @@ struct Notebook: View {
         .foregroundStyle(.primary)
         .tint(ScribeTheme.accent)
         .background(InteractiveWindowActivation())
-        .onChange(of:core.selectedID) { _, value in if let value { core.select(value) } }
+        .onChange(of:core.selectedID) { value in if let value { core.select(value) } }
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate) }
         .sheet(isPresented:$showPreferences) { Preferences(core:core).frame(width:650,height:720) }
         .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
@@ -323,7 +328,7 @@ struct Notebook: View {
                         if core.rows.isEmpty { Text("Confirmed speech appears here while recording. Speaker labels are anonymous until you name them.").foregroundStyle(.secondary) }
                     }.padding(28)
                 }
-                .onChange(of:core.pageSerial) { _, _ in if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) } else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) } }
+                .onChange(of:core.pageSerial) { _ in if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) } else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) } }
             }
         }
     }
@@ -374,7 +379,7 @@ struct RecordingReview: View {
             let duration = core.settings["duration_s"] as? Int ?? 3600
             Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Language: \(text(core.settings["language"]))").font(.callout)
             Text(candidate == nil ? "Press Stop to end a manual recording. Notes follow automatically." : "Recording stops after 60 seconds of known call inactivity. Unknown activity keeps recording; Stop always remains available.").font(.caption).foregroundStyle(.secondary)
-            if core.transcription["configured"] as? Bool != true { Label("App transcription is unavailable. Contact your administrator.",systemImage:"key").foregroundStyle(.orange) }
+            if core.transcription["configured"] as? Bool != true { Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange) }
             HStack {
                 Button("Not now") { if let candidate { core.send(["action":"dismiss_candidate","candidate_id":candidate.id]) }; closeReview() }.keyboardShortcut(.cancelAction)
                 Spacer()

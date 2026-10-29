@@ -42,13 +42,7 @@ def make_app(request, helpers, *, settings=None, key_store=None, discovery_facto
     from ..meetings.service import DiscoveryService
 
     if settings is None:
-        config = helpers.parent/'Resources/transcription.json'
-        value = json.loads(config.read_text(encoding='utf-8'))
-        key = value.get('api_key') if isinstance(value,dict) else None
-        if (not isinstance(key,str) or not 16<=len(key)<=512 or not key.isascii()
-                or any(c.isspace() for c in key)):
-            raise ValueError('Operator transcription configuration is missing')
-        settings = DesktopSettings(transcription_key=key)
+        settings = DesktopSettings()
     contract = DesktopContract(settings, helpers/'scribeloop-meeting')
     def discovery(publish):
         return DiscoveryService(publish,

@@ -1,7 +1,7 @@
 # ScribeLoop native desktop app
 
 The full local development app is `dist/macos/ScribeLoop.app`. It runs the
-cloud-only meeting core as its own bundled child; no terminal server, browser,
+meeting core as its own bundled child; no terminal server, browser,
 local speech model, installed Python or Homebrew library is needed to **run** it.
 Building still requires Xcode and the separate packaging environment.
 
@@ -12,9 +12,10 @@ open 'dist/macos/ScribeLoop.app'
 ```
 
 1. Open Preferences using the gear button. Configure your summary provider and
-   its key. OpenAI / `gpt-5.4-mini` is the default. Summary keys are saved in macOS
-   Keychain. Transcription is managed by the app operator at build time; users
-   cannot configure its provider/key. Runtime never imports development `.env`.
+   its key. OpenAI / `gpt-5.4-mini` is the default. Enter your own Deepgram
+   transcription key in its separate section. Provider keys are saved in macOS
+   Keychain; the app contains no operator key or included AI credits. Runtime never
+   imports development `.env`. Leave a key field unchanged to retain the saved key.
    Press **Done** to save edits; the sheet closes after the save is confirmed.
    Saved summary keys show only their first four characters plus a fixed mask.
    Enter a new key to replace it; unchanged fields keep the saved key.
@@ -62,11 +63,10 @@ Database schema downgrade is not supported.
 ## Build and validate
 
 Prepare the isolated environment as described in [M0 build instructions](README.md),
-then supply `SCRIBELOOP_BUILD_DEEPGRAM_API_KEY` in the build environment, or set
-`DEEPGRAM_API_KEY` in the ignored checkout `.env`, and run:
+then run (no provider credential is needed to build):
 
 ```sh
-build/macos/venv/bin/python packaging/macos/build_desktop.py
+build/macos/venv13/bin/python packaging/macos/build_desktop.py
 .venv/bin/python packaging/macos/verify_desktop.py
 .venv/bin/pytest -q
 node tests/frontend_replay.mjs
@@ -76,7 +76,9 @@ Build scripts select the installed Xcode per command and never change global
 xcode-select. Dependencies are resolved in the separate cloud-only environment;
 `build/macos/requirements-resolved.txt`, `desktop-manifest.json` and
 `desktop-audit.json` describe the actual local build. The build is ad-hoc signed,
-with a conservatively host-only minimum OS. `verify_desktop.py` scans native
+with an explicit arm64/macOS 13 deployment target. See the
+[portable runtime/dependency setup](../../docs/INTERNAL_MAC_DISTRIBUTION.md#build-and-inspect)
+before building. `verify_desktop.py` scans native
 libraries/rpaths, signatures and prohibited bundled recordings/ML weights.
 
 The separate preview app exercises the **same** SwiftUI client and production
@@ -84,7 +86,7 @@ protocol using generated encrypted data, fake Keychain and disabled external
 network/capture. It never opens your real workspace:
 
 ```sh
-build/macos/venv/bin/python packaging/macos/build_preview.py
+build/macos/venv13/bin/python packaging/macos/build_preview.py
 'build/macos/ScribeLoop Preview.app/Contents/MacOS/ScribeLoop' --desktop-smoke
 ```
 
@@ -123,21 +125,23 @@ Endpoint references: [Gemini compatibility](https://ai.google.dev/gemini-api/doc
 [LM Studio compatibility](https://lmstudio.ai/docs/developer/openai-compat).
 
 
-### Operator-managed transcription
+### Customer-managed transcription
 
-The build requires a valid operator Deepgram credential and embeds only that
-credential in `Contents/Resources/transcription.json` before ad-hoc signing.
-Missing/invalid configuration fails the build; it never ships a user-key fallback.
-The runtime reads this bundle configuration, not environment variables or legacy
-user Deepgram keys. User settings reject transcription credential changes; language
-and duration remain user choices. The synthetic preview removes the credential
-resource and injects empty test configuration. Audit output explicitly reports the
-operator credential's presence without printing it.
+Version 0.1.1 removes `Contents/Resources/transcription.json` and all build-time
+provider-key loading. Each user enters their own Deepgram key in Preferences.
+The key is stored in macOS Keychain, excluded from public settings/diagnostics,
+and can be replaced or removed. Leaving the field unchanged preserves it.
+Saving requires idle processing and makes no API request. The new key applies to
+subsequent recording, resume and explicit transcription reruns.
 
-A bundled credential can be extracted from a distributed desktop app. This locks
-normal app configuration; it is not a secrecy boundary. Shared service credentials
-should move behind an operator backend before public distribution. Do not commit or
-publish generated app artifacts containing this development key.
+An upgrade does not import the old bundle's shared operator key. Existing notes,
+recordings and summary-provider settings remain available; transcription needs a
+customer key before new work. Valid older customer-owned `deepgram_key` settings
+are retained. Fully self-hosted ASR remains future work; Ollama and LM Studio notes
+endpoints are already configurable.
+
+See [internal Mac distribution](../../docs/INTERNAL_MAC_DISTRIBUTION.md) for the
+DMG, signing/notarization commands and tester instructions.
 
 ### Audio player and naming transcript people
 

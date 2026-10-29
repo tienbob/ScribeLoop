@@ -1,5 +1,27 @@
 # Current status and acceptance checklist
 
+**Recording Stop update:** internal build 0.1.3 (4) fixes late Stop falling into
+the replay handler, reconciles current capture state, shows the actual call-end
+countdown/unknown state, and displays saved failure diagnostics. 539 tests and
+native status/bundle checks passed; successful physical call acceptance remains
+open. See [Stop fix details](RECORDING_STOP_FIX_2026-10-29.md).
+
+**Internal Mac packaging update:** version 0.1.2 (3) removes bundled operator
+credentials and adds customer-owned Deepgram keys in Preferences/Keychain.
+Apple Silicon DMG packaging and a Developer ID/notarization pipeline are added.
+No Developer ID identity is installed; signed/notarized acceptance remains open.
+The new deployment target is macOS 13 Ventura on Apple Silicon. Every native
+dependency must pass the minimum-OS audit; actual Ventura runtime acceptance
+remains open. Automatic detection needs macOS 14.2; earlier versions use manual
+New recording. See [internal distribution](INTERNAL_MAC_DISTRIBUTION.md).
+Earlier descriptions of a bundled transcription credential below are historical.
+Version 0.1.2's rebuilt bundle passes the native compatibility audit: 34 binaries
+require macOS 11 and four require macOS 13; no external library paths remain.
+The final DMG mounted successfully and all 114 app files matched the built app.
+539 development tests passed; portable-runtime tests passed 536 with the optional
+local diarization module skipped. This confirms the build target, not physical
+Ventura acceptance. No speaker output or provider request was used.
+
 **Streaming performance fixes shipped:** duration-bounded reads, cancellable
 provider writes, bounded recurring note/page work and native lag feedback are
 implemented and re-audited. See the
@@ -51,8 +73,10 @@ only; no real-call acceptance was attempted.
 - [ ] Consented physical capture: intended source scope, microphone/output separation and alignment, device removal/change, interruptions, sleep/wake, network faults and multi-hour use. Do not enable speaker output for this work under the user's current constraint.
 - [ ] Representative WER/speaker accuracy, streaming latency and human-reviewed summary quality/cost. Public AMI evidence is limited, not target sign-off. Gemini has successful real notes evidence; OpenAI live summary acceptance remains unresolved after the recorded HTTP 429, with no current retry.
 - [ ] Native VoiceOver and complete keyboard-only acceptance; physical summary-instruction edit/save/clear and fresh generated-title refresh. Existing matching titles do not prove live refresh. Real permanent-deletion/Keychain prompt behavior has not been exercised on user records.
-- [ ] Stable Developer ID signing, hardened runtime, notarization/stapling and installer; clean-Mac install, login approval, signed upgrades, TCC/Keychain continuity, cold-start/resource measurements and tested minimum OS. Current 27.2 deployment metadata is not an older-OS compatibility claim.
-- [ ] Replace extractable bundled shared transcription credentials with authenticated server-side controls or provider-issued short-lived credentials before public distribution. Local caps cannot enforce operator-wide spend.
+- [ ] Stable Developer ID signing, hardened runtime, notarization/stapling and installer; clean-Mac install, login approval, signed upgrades, TCC/Keychain continuity, cold-start/resource measurements and tested minimum OS. The macOS 13 build/dependency target does not establish physical Ventura acceptance.
+- [x] Remove extractable shared transcription credentials: internal builds now use
+  customer-owned Deepgram keys, with direct provider billing. No shared AI service
+  or ScribeLoop-operated billing backend is included.
 
 ## Future scope
 

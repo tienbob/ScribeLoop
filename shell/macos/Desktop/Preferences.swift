@@ -6,7 +6,9 @@ struct Preferences: View {
     @ObservedObject var core: DesktopClient
     @Environment(\.dismiss) private var dismiss
     @State private var summaryKey = ""
-    private enum Field: Hashable { case endpoint, model, apiKey, instructions }
+    @State private var transcriptionKey = ""
+    @State private var removeTranscriptionKey = false
+    private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey }
     @FocusState private var focusedField: Field?
     @State private var endpoint = "https://api.openai.com/v1"
     @State private var model = "gpt-5.4-mini"
@@ -36,7 +38,7 @@ struct Preferences: View {
     private var presets: [String:String] { core.settings["summary_presets"] as? [String:String] ?? [:] }
     private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
     private var valuesSignature: String { [endpoint,model,provider,language,String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded()))].joined(separator:"\u{001f}") }
-    private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty }
+    private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != initialDetection || login != initialLogin }
     private var keyPreview: String {
         guard endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) == text(core.settings["summary_endpoint"]).trimmingCharacters(in:CharacterSet(charactersIn:"/")) else { return "" }
@@ -56,6 +58,24 @@ struct Preferences: View {
             if let saveError { Label(saveError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning).padding(.horizontal,24) }
             if changed && core.busy { Text("Finish current processing before saving these changes.").font(.caption).foregroundStyle(.secondary).padding(.horizontal,24) }
             Form {
+                Section("Transcription · Deepgram") {
+                    HStack {
+                        Text("Your Deepgram API key")
+                        Spacer()
+                        if core.settings["transcription_configured"] as? Bool == true && !removeTranscriptionKey {
+                            Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
+                        }
+                    }
+                    SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["transcription_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
+                        .textFieldStyle(.roundedBorder).textContentType(.password)
+                        .focused($focusedField,equals:.transcriptionKey)
+                        .accessibilityLabel("Deepgram API key")
+                        .disabled(removeTranscriptionKey)
+                    if core.settings["transcription_configured"] as? Bool == true {
+                        Toggle("Remove saved transcription key",isOn:$removeTranscriptionKey)
+                    }
+                    Text("Stored in this Mac's Keychain. Leave unchanged to keep it. Audio is sent to Deepgram when you record or rerun transcription; your provider bills your account directly. This build does not include transcription credits or self-hosted ASR.").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Conversation notes") {
                     Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
                         Text("OpenAI · Cloud").tag("OpenAI")
@@ -193,9 +213,9 @@ struct Preferences: View {
             initialValues = valuesSignature
             initialDetection = core.detection; detectionDraft = initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
-            summaryKey = ""; saveError = nil; pendingSave = nil; applying = false; saveCommands = []
+            summaryKey = ""; transcriptionKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; applying = false; saveCommands = []
             loginStatus = SMAppService.mainApp.status == .requiresApproval ? "Approve ScribeLoop in Login Items settings." : ""
-        }.onChange(of:core.requests[pendingSave ?? ""]) { _, status in
+        }.onChange(of:core.requests[pendingSave ?? ""]) { status in
             guard pendingSave != nil else { return }
             if status == "accepted" { pendingSave = nil; saveNext() }
             else if status == "rejected" || status == "unknown" {
@@ -207,8 +227,8 @@ struct Preferences: View {
             Button("Cancel",role:.cancel) {}
             Button("Stop processing",role:.destructive) { core.send(["action":"revoke_agreement"]) }
         } message: { Text("Recording and pending notes will stop. Data already sent to providers cannot be recalled. Unsaved settings will be discarded; saved conversations remain.") }
-        .onChange(of:core.accepted) { _, accepted in if !accepted { cancel() } }
-        .onDisappear { summaryKey = "" }
+        .onChange(of:core.accepted) { accepted in if !accepted { cancel() } }
+        .onDisappear { summaryKey = ""; transcriptionKey = "" }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
@@ -220,7 +240,7 @@ struct Preferences: View {
     }
     private func cancel() {
         guard !applying else { return }
-        focusedField = nil; summaryKey = ""; dismiss()
+        focusedField = nil; summaryKey = ""; transcriptionKey = ""; dismiss()
     }
     private func finish() {
         focusedField = nil
@@ -233,6 +253,8 @@ struct Preferences: View {
         if providerChanged {
             var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":language,"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
             if !summaryKey.isEmpty { value["summary_key"] = summaryKey }
+            if removeTranscriptionKey { value["deepgram_key"] = "" }
+            else if !transcriptionKey.isEmpty { value["deepgram_key"] = transcriptionKey }
             saveCommands.append(["action":"save_settings","settings":value])
         }
         if detectionDraft != initialDetection { saveCommands.append(["action":"set_detection","enabled":detectionDraft]) }
@@ -254,12 +276,12 @@ struct Preferences: View {
             } catch {
                 applying = false
                 initialValues = valuesSignature; initialDetection = detectionDraft
-                summaryKey = ""
+                summaryKey = ""; transcriptionKey = ""; removeTranscriptionKey = false
                 saveError = "Other settings were saved, but the login setting could not be changed. Check System Settings → Login Items."
                 return
             }
         }
-        applying = false; summaryKey = ""; dismiss()
+        applying = false; summaryKey = ""; transcriptionKey = ""; dismiss()
     }
 }
 
@@ -336,7 +358,7 @@ struct PlaybackBar: View {
             if let failure = playback.failure { Label(failure,systemImage:"exclamationmark.triangle").foregroundStyle(.orange).font(.callout) }
             Text(playback.duration > 0 ? "Drag the timeline to any moment. Playback continues through the whole recording; audio stays on this Mac." : "Press Play to load this recording. Browsing your meetings does not unlock audio.").font(.caption).foregroundStyle(.secondary)
         }.notebookCard()
-        .onChange(of:playback.position) { _, value in if !scrubbing { cursor = value } }
+        .onChange(of:playback.position) { value in if !scrubbing { cursor = value } }
     }
     private func stamp(_ seconds: Double) -> String {
         let s = max(0,Int(seconds))
@@ -433,8 +455,8 @@ struct PeopleView: View {
             }
         }.padding(28).background(InteractiveWindowActivation())
         .onAppear { speaker = initialSpeaker ?? core.speakerRoster.first?.id ?? ""; core.send(["action":"people_page"]) }
-        .onChange(of:speaker) { _, _ in name = ""; existing = ""; saved = false }
-        .onChange(of:core.requests[pending ?? ""]) { _, status in
+        .onChange(of:speaker) { _ in name = ""; existing = ""; saved = false }
+        .onChange(of:core.requests[pending ?? ""]) { status in
             if status == "accepted" { pending = nil; name = ""; saved = true }
             else if status == "rejected" || status == "unknown" { pending = nil; saved = false }
         }
@@ -479,7 +501,7 @@ struct RenameConversation: View {
         }.padding(28).frame(width:520).background(ScribeTheme.canvas)
         .background(InteractiveWindowActivation()).interactiveDismissDisabled(pending != nil)
         .onAppear { title = conversation.text("title"); focused = true }
-        .onChange(of:core.requests[pending ?? ""]) { _, status in
+        .onChange(of:core.requests[pending ?? ""]) { status in
             guard pending != nil else { return }
             if status == "accepted" { pending = nil; dismiss() }
             else if status == "rejected" || status == "unknown" {

@@ -34,8 +34,9 @@ apply to the customer's chosen setup.
 This document defines the intended commercial model; it is not a claim that all
 three modes are available in the current app.
 
-- Remove the bundled operator transcription credential from public builds.
-- Add customer-owned ASR API-key configuration alongside LLM configuration.
+- Done for internal build 0.1.1: remove the bundled operator transcription
+  credential and add customer-owned Deepgram API-key configuration alongside LLM
+  configuration. Other ASR providers and self-hosted ASR remain future work.
 - Add and validate supported self-hosted ASR and LLM connections, including
   endpoint configuration and any required authentication.
 - Allow ASR and LLM choices to be configured independently for mixed use.

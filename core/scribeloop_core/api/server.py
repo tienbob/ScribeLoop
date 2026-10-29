@@ -281,6 +281,14 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         return bool(app.state.runner.active_id or (recorder and (recorder.active_id or
                     (recorder.task and not recorder.task.done()))))
 
+    def recording_state():
+        recorder = app.state.recording
+        sid = recorder.active_id if recorder else None
+        return {'type':'recording_state','active_id':sid,
+            'stopping':bool(sid and recorder.stop_requested.is_set()),
+            'processing_id':(getattr(recorder,'reprocess_id',None) or
+                             getattr(recorder,'processing_id',None)) if recorder else None}
+
     async def maintain_audio():
         while True:
             retained = app.state.audio
@@ -682,12 +690,31 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             session = app.state.runner.start(request.fixture, request.title,
                                                               fixtures[request.fixture])
                             await publish({'type': 'session', 'session': session})
+                        elif action == 'stop_recording':
+                            if not desktop or set(command) != {'action'}:
+                                raise ValueError('Invalid recording Stop command')
+                            recorder = app.state.recording
+                            if recorder and recorder.active_id:
+                                recorder.stop(recorder.active_id)
+                            auto_monitor.clear()
+                            await queue.put(recording_state())
                         elif command.get('action') == 'stop':
+                            if set(command) != {'action','session_id'} or not isinstance(command.get('session_id'),str):
+                                raise ValueError('Invalid Stop command')
                             recorder = app.state.recording
                             if recorder and recorder.active_id == command.get('session_id'):
                                 recorder.stop(command.get('session_id'))
-                            else:
+                                auto_monitor.clear()
+                            elif app.state.runner.active_id == command.get('session_id'):
                                 app.state.runner.stop(command.get('session_id'))
+                            else:
+                                saved = store.get(command['session_id'])
+                                if not saved or saved['source'] != 'meeting':
+                                    raise ValueError('Unknown recording')
+                                # A late/repeated Stop is harmless after capture finishes.
+                                # Never route a saved meeting to the replay runner.
+                            if desktop:
+                                await queue.put(recording_state())
                         elif command.get('action') == 'microphone_permission':
                             if set(command) != {'action'} or app.state.recording is None:
                                 raise ValueError('Permission request unavailable')
@@ -921,9 +948,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation'}:
+                        if desktop and action in {'stop','stop_recording','save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
-                                'message':('Could not rename this conversation. Choose a saved record, use a single-line name of 1–160 characters, and wait for processing to finish.'
+                                'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
+                                    if action in {'stop','stop_recording'} else
+                                    'Could not rename this conversation. Choose a saved record, use a single-line name of 1–160 characters, and wait for processing to finish.'
                                     if action=='rename_conversation' else
                                     'Could not play this audio. Check its availability or recover interrupted audio before trying again.'
                                     if action in {'audio_info','audio_window'} else

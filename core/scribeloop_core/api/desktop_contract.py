@@ -60,7 +60,8 @@ class DesktopContract:
         return {'type':'snapshot', 'agreement':app.state.store.agreement(),
             'settings':self.settings.value.public(), 'discovery':app.state.discovery.snapshot(),
             'active_id':active_id, 'summary_active_id':summary_id,
-            'processing_id':getattr(app.state.recording,'reprocess_id',None),
+            'processing_id':(getattr(app.state.recording,'reprocess_id',None) or
+                             getattr(app.state.recording,'processing_id',None)),
             'summary_provider':summary_provider.public(),
             'transcription':app.state.recording.cloud.public() if app.state.recording else {},
             'storage':'encrypted', 'database':str(app.state.desktop_database),

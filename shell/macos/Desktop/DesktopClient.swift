@@ -46,6 +46,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     @Published var requests: [String:String] = [:]
     @Published var playing = false
     @Published var callEnding = false
+    @Published var callStatus: String?
+    @Published var captureStopping = false
     @Published var nextCursor: [Any]?
     @Published var database: String
     var onCandidate: ((Record) -> Void)?
@@ -210,7 +212,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
         let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window"]
-        if !reads.contains(action) && !["stop","revoke_agreement"].contains(action) && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
+        if !reads.contains(action) && !["stop","stop_recording","revoke_agreement"].contains(action) && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
         if requests.count >= 256 { requests = requests.filter { !["accepted","rejected"].contains($0.value) } }
@@ -240,6 +242,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             transcription = v["transcription"] as? Object ?? [:]; discovery = v["discovery"] as? Object ?? [:]
             agreement = v["agreement"] as? Object ?? [:]; sessions = objects(v["sessions"]); nextCursor = v["next_cursor"] as? [Any]
             activeID = v["active_id"] as? String; summaryID = v["summary_active_id"] as? String
+            captureStopping = false; callStatus = nil; callEnding = false
             processingID = v["processing_id"] as? String
             partials = [:]; detail = [:]; streamingProgress = [:]
             suggestCall()
@@ -274,8 +277,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             let row = v["session"] as? Object ?? [:]; upsert(row)
             let status = text(row["status"]), sid = text(row["id"])
             let wasRecording = activeID == sid
-            if ["preparing","recording","transcribing"].contains(status) { stopAudio(); activeID = sid; if selectedID != sid { select(sid) } }
-            else if activeID == sid { activeID = nil; partials = [:]; callEnding = false }
+            if ["preparing","recording","stopping"].contains(status) { stopAudio(); activeID = sid; captureStopping = status == "stopping"; if selectedID != sid { select(sid) } }
+            else if activeID == sid { activeID = nil; partials = [:]; callEnding = false; callStatus = nil; captureStopping = false }
             if status == "processing" { processingID = sid; processingLabel = wasRecording ? "Finishing live transcription…" : "Transcribing saved audio…" }
             else if processingID == sid { processingID = nil }
             reloadSoon()
@@ -315,7 +318,12 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             if text(v["session_id"]) == selectedID, let audio = v["audio"] as? Object, audio["available"] as? Bool != true { stopAudio() }
             reloadSoon()
         case "people": people = objects(v["people"]); nextPeopleOffset = v["next_offset"] as? Int
-        case "auto_call_ending": callEnding = true
+        case "auto_call_status": applyCallStatus(v)
+        case "recording_state":
+            activeID = v["active_id"] as? String; processingID = v["processing_id"] as? String
+            captureStopping = v["stopping"] as? Bool ?? false
+            callEnding = false; callStatus = nil
+            if activeID == nil { partials = [:] }
         case "error", "recording_error", "transcription_error", "rolling_notes_error", "audio_cleanup_error":
             if kind == "transcription_error" { streamingProgress = [:] }
             message = text(v["message"]); reloadSoon()
@@ -362,7 +370,20 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         message = "Uncertain actions acknowledged. No command was replayed."
     }
     var uncertainActions: Bool { mutationIDs.contains { ["unknown","dispatching"].contains(requests[$0] ?? "") } }
-    func stopRecording() { if let activeID { send(["action":"stop","session_id":activeID]) } }
+    func applyCallStatus(_ value: Object) {
+        guard text(value["session_id"]) == activeID else { return }
+        switch text(value["state"]) {
+        case "ending":
+            callEnding = true
+            callStatus = "Call audio activity ended · stopping in \(value["remaining_s"] as? Int ?? 60) seconds."
+        case "unknown":
+            callEnding = false
+            callStatus = "Call-end detection is unavailable. Press Stop recording when finished."
+        default:
+            callEnding = false; callStatus = nil
+        }
+    }
+    func stopRecording() { send(["action":"stop_recording"]) }
     func record(scope: String, app: String?, microphone: String, candidate: Record? = nil) {
         var command: Object
         if let candidate {

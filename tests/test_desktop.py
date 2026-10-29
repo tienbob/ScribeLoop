@@ -207,6 +207,7 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
         sock=Socket()
         sockets.append(sock)
         return sock
+    settings._cloud.connector = connector
     def recording(store,audio,_factory,publish):
         def source(*_args,**_kwargs):
             item=MicrophoneSource()
@@ -222,6 +223,14 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
         with client.websocket_connect('ws://127.0.0.1/ws') as ws:
             ws.send_text(token)
             snapshot=receive(ws,'snapshot')
+            customer_key = 'customer-synthetic-key-123456789'
+            ws.send_json(envelope({'action':'save_settings','settings':{'deepgram_key':customer_key}}))
+            event = receive(ws,'settings')
+            assert event['settings']['transcription_configured']
+            assert event['transcription']['configured']
+            assert customer_key not in str(event)
+            assert receive(ws,'receipt')['status']=='accepted'
+            assert app.state.recording.base_config.api_key == customer_key
             ws.send_json(envelope({'action':'accept_agreement','version':snapshot['agreement']['version']}))
             receive(ws,'agreement'); receive(ws,'receipt')
             record=envelope({'action':'record','request_id':1,'scope':'microphone','microphone_id':'default',
@@ -248,7 +257,7 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
         with client.websocket_connect('ws://127.0.0.1/ws') as ws:
             ws.send_text(token)
             assert receive(ws,'snapshot')['active_id']==sid and len(sources)==1
-            ws.send_json(envelope({'action':'stop','session_id':sid}))
+            ws.send_json(envelope({'action':'stop_recording'}))
             completed=None
             for _ in range(100):
                 event=ws.receive_json()
@@ -259,6 +268,15 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
                 'gain_db':0., 'noise_filter':'standard', 'noise_threshold_db':-40.}
             assert (tmp_path/'recordings'/sid/'mic.raw.slpa').is_file()
             assert len(sockets)==1, 'Stop finishes the existing streams; no full-audio second pass'
+            # A delayed Stop or a stale UI must not fall back to replay rejection.
+            for command in ({'action':'stop','session_id':sid}, {'action':'stop_recording'}):
+                request = envelope(command)
+                ws.send_json(request)
+                assert receive(ws,'recording_state')['active_id'] is None
+                receipt = receive(ws,'receipt')
+                while receipt['request_id'] != request['request_id']:
+                    receipt = receive(ws,'receipt')
+                assert receipt['status'] == 'accepted'
             ws.send_json(envelope({'action':'meeting_page','session_id':sid}))
             detail=receive(ws,'meeting_page')
             assert detail['segments'] and detail['notes'] and detail['audio']['available']
@@ -289,33 +307,27 @@ def test_provider_presets_select_endpoints_and_do_not_reuse_keys():
     assert settings.value.public()['summary_presets']==SUMMARY_PRESETS
 
 
-def test_transcription_is_operator_managed_and_legacy_user_key_is_ignored(monkeypatch):
+def test_customer_transcription_key_persists_without_secret_echo(monkeypatch):
     import json
     monkeypatch.setenv('DEEPGRAM_API_KEY','environment-must-not-win')
-    vault=Vault()
-    vault.value=json.dumps({'deepgram_key':'legacy-must-not-win','summary_key':'summary-secret'})
-    settings=DesktopSettings(vault,transcription_key='operator-build-key')
-    assert settings.cloud().api_key=='operator-build-key'
-    assert settings.value.summary_key=='summary-secret'
-    with pytest.raises(ValueError):
-        settings.save({'deepgram_key':'user-cannot-change-this'})
-    settings.save({'language':'vi'})
-    assert 'deepgram_key' not in vault.value
-    assert 'operator-build-key' not in vault.value
-    assert 'operator-build-key' not in str(settings.value.public())
-    assert settings.cloud().api_key=='operator-build-key'
-
-
-def test_build_credential_is_literal_validated_and_explicit(tmp_path):
-    import runpy
-    namespace=runpy.run_path(str(Path(__file__).parents[1]/'packaging/macos/build_desktop.py'))
-    read=namespace['transcription_key']
-    config=tmp_path/'build.env'
-    config.write_text('DEEPGRAM_API_KEY="literal-build-key-12345"\nOPENAI_API_KEY=ignored\n')
-    assert read({},config)=='literal-build-key-12345'
-    assert read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'explicit-build-key-12345'},config)=='explicit-build-key-12345'
-    with pytest.raises(SystemExit):
-        read({'SCRIBELOOP_BUILD_DEEPGRAM_API_KEY':'invalid key'},config)
+    vault = Vault()
+    settings = DesktopSettings(vault)
+    assert not settings.cloud().api_key
+    key = 'customer-owned-synthetic-key-12345'
+    public = settings.save({'deepgram_key':key})
+    assert settings.cloud().api_key == key
+    assert public['transcription_configured']
+    assert 'deepgram_key' not in public and key not in str(public)
+    assert key not in repr(settings.value)
+    reopened = DesktopSettings(vault)
+    assert reopened.cloud().api_key == key
+    reopened.save({'language':'vi'})
+    assert json.loads(vault.value)['deepgram_key'] == key
+    for bad in ('short', 'invalid key with spaces', 'x'*513):
+        with pytest.raises(ValueError): reopened.save({'deepgram_key':bad})
+    reopened.save({'deepgram_key':''})
+    assert not reopened.cloud().api_key
+    assert not DesktopSettings(vault).value.public()['transcription_configured']
 
 
 def test_summary_instructions_roundtrip_clear_and_unicode_bounds():

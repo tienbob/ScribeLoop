@@ -40,6 +40,7 @@ class RecordingRunner:
         self.stop_timeout_s = stop_timeout_s
         self.active_id = None
         self.reprocess_id = None
+        self.processing_id = None
         self.task = None
         self.source = None
         self.closed = False
@@ -250,6 +251,7 @@ class RecordingRunner:
             self.store.record_audio_duration(session_id, samples)
             self.capture_done.set()
             self.active_id = None
+            self.processing_id = session_id
             await self._state(session_id, 'processing')
             if self.cancel_processing.is_set():
                 await self._state(session_id, 'interrupted')
@@ -268,6 +270,7 @@ class RecordingRunner:
             log.warning('Meeting recording/processing failed (%s)', type(exc).__name__)
             diagnostic = failure_diagnostic(exc,stage)
             with contextlib.suppress(*DATABASE_ERRORS):
+                self.active_id = None  # Capture has drained before publishing failure.
                 self.store.record_failure(session_id,diagnostic)
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
@@ -284,6 +287,8 @@ class RecordingRunner:
             ready_wait.cancel()
             if self.active_id == session_id:
                 self.active_id = None
+            if self.processing_id == session_id:
+                self.processing_id = None
 
     def _transcribe(self, audio, session_id, emit, cancelled):
         if self.transcriber:

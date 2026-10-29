@@ -137,7 +137,11 @@ async def test_capture_failure_releases_slot_and_never_transcribes(setup, failur
         return source
     def no_transcribe(*a):
         raise AssertionError('Failed capture must not start ASR')
-    runner = RecordingRunner(store, audio, factory, publish, transcriber=no_transcribe, queue_size=2)
+    async def checked_publish(event):
+        if event.get('session',{}).get('status') == 'failed':
+            assert runner.active_id is None, 'Failed-state snapshots must not retain a capture owner'
+        await publish(event)
+    runner = RecordingRunner(store, audio, factory, checked_publish, transcriber=no_transcribe, queue_size=2)
     session = runner.start(None, {}, 'Failure', consent_confirmed=True)
     await asyncio.wait_for(runner.task, 3)
     assert runner.active_id is None

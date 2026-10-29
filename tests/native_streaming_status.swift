@@ -13,6 +13,15 @@ import Foundation
         precondition(client.streamingLabel == "Live transcription connected")
         client.activeID = nil
         precondition(client.streamingLabel == nil)
+        client.activeID = sid
+        client.applyCallStatus(["session_id":sid,"state":"ending","remaining_s":12])
+        precondition(client.callEnding && client.callStatus?.contains("12 seconds") == true)
+        client.applyCallStatus(["session_id":sid,"state":"unknown"])
+        precondition(!client.callEnding && client.callStatus?.contains("Press Stop") == true)
+        client.applyCallStatus(["session_id":sid,"state":"recording"])
+        precondition(!client.callEnding && client.callStatus == nil)
+        client.applyCallStatus(["session_id":"other","state":"ending","remaining_s":1])
+        precondition(client.callStatus == nil)
         print("Native streaming labels passed; no core launch, devices or audio output")
     }
 }

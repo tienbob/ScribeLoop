@@ -18,6 +18,7 @@ jobs:
       - name: Compile native production UI
         run: |
           xcrun swiftc -parse-as-library -swift-version 5 -O \
+            -target "$(uname -m)-apple-macos13.0" \
             -module-cache-path "$RUNNER_TEMP/swift-cache" \
             shell/macos/Desktop/DesktopClient.swift \
             shell/macos/Desktop/MeetingPlayback.swift \
@@ -33,9 +34,20 @@ jobs:
             shell/macos/ScribeLoop/CoreSupervisor.swift \
             shell/macos/ScribeLoop/ScribeLoopApp.swift \
             -o "$RUNNER_TEMP/ScribeLoopM0"
+      - name: Compile capture helpers for macOS 13 without opening audio devices
+        run: |
+          for kind in meeting observer; do
+            xcrun swiftc -parse-as-library -O \
+              -target "$(uname -m)-apple-macos13.0" \
+              -module-cache-path "$RUNNER_TEMP/swift-cache" \
+              "core/scribeloop_core/capture/native/macos_$kind/main.swift" \
+              -o "$RUNNER_TEMP/scribeloop-$kind"
+            "$RUNNER_TEMP/scribeloop-$kind" --version
+          done
       - name: Verify native streaming status without audio or core launch
         run: |
           xcrun swiftc -parse-as-library -swift-version 5 -O \
+            -target "$(uname -m)-apple-macos13.0" \
             -module-cache-path "$RUNNER_TEMP/swift-cache" \
             shell/macos/Desktop/DesktopClient.swift \
             shell/macos/Desktop/MeetingPlayback.swift \

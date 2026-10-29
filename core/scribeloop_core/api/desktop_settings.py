@@ -23,6 +23,7 @@ SUMMARY_PRESETS = {
 class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     summary_key: str = Field(default='', max_length=2048, repr=False)
+    deepgram_key: str = Field(default='', max_length=512, repr=False)
     summary_endpoint: str = Field(default='https://api.openai.com/v1', max_length=500)
     summary_model: str = Field(default='gpt-5.4-mini', min_length=1, max_length=100)
     summary_provider: str = Field(default='OpenAI', min_length=1, max_length=80)
@@ -48,11 +49,18 @@ class Settings(BaseModel):
             raise ValueError('Unsupported duration')
         return value
 
-    @field_validator('summary_key')
+    @field_validator('summary_key', 'deepgram_key')
     @classmethod
     def secret_valid(cls, value):
         if value and (not value.isascii() or any(c.isspace() for c in value)):
             raise ValueError('Invalid API key')
+        return value
+
+    @field_validator('deepgram_key')
+    @classmethod
+    def transcription_secret_valid(cls, value):
+        if value and len(value) < 16:
+            raise ValueError('Invalid transcription API key')
         return value
 
     def summary(self):
@@ -61,7 +69,8 @@ class Settings(BaseModel):
             'SUMMARY_PROVIDER': self.summary_provider,'SUMMARY_INSTRUCTIONS':self.summary_instructions})
 
     def public(self):
-        return {**self.model_dump(exclude={'summary_key'}),
+        return {**self.model_dump(exclude={'summary_key','deepgram_key'}),
+                'transcription_configured': bool(self.deepgram_key),
                 'summary_key_preview': ((self.summary_key[:4] if len(self.summary_key)>4 else '')
                                         +'********') if self.summary_key else '',
                 'summary_configured': self.summary().configured,
@@ -85,13 +94,15 @@ class DesktopSettings:
             value = json.loads(raw) if raw else {}
             if not isinstance(value,dict):
                 raise TypeError('Invalid settings')
-            value.pop('deepgram_key',None)  # Legacy user key is never used or retained on save.
             return Settings.model_validate(value)
         except Exception:  # noqa: BLE001 - native errors can include secret data
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None
 
     def cloud(self):
-        return self._cloud
+        # Explicit test injection is retained; production never reads a bundle key.
+        return DeepgramConfig(api_key=self.value.deepgram_key or self._cloud.api_key,
+            connector=self._cloud.connector, batch_transport=self._cloud.batch_transport,
+            budget_usd=self._cloud.budget_usd, max_requests=self._cloud.max_requests)
 
     def save(self, patch):
         if not isinstance(patch, dict) or len(json.dumps(patch,ensure_ascii=False).encode()) > 12288:

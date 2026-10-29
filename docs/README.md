@@ -9,6 +9,10 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Recording Stop and call-end status fix — October 29](RECORDING_STOP_FIX_2026-10-29.md)
+
+- [Internal Mac distribution and installation](INTERNAL_MAC_DISTRIBUTION.md)
+
 - [Pricing: $1 app, self-hosted models or customer API keys](PRICING_AND_MODEL_ACCESS.md)
 
 - [Shared 256 MB memory cache](MEMORY_CACHE_256MB.md)

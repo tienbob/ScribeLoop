@@ -15,8 +15,9 @@ Open `dist/macos/ScribeLoop.app`. Configure notes in Preferences, accept the
 first-use agreement, and choose **New recording** or review a detected call.
 The app runs without a terminal server, browser, installed Python, or local speech
 models. Closing its window keeps the menu bar available; Quit stops the core.
-The current private-demo bundle uses ad-hoc signing and contains an operator
-transcription credential; it is not ready for public distribution.
+The internal test build uses customer-owned transcription and summary credentials;
+no shared API key is bundled. It remains ad-hoc signed until Developer ID signing
+and notarization are completed. See [internal Mac distribution](docs/INTERNAL_MAC_DISTRIBUTION.md).
 
 ## Repo layout
 
