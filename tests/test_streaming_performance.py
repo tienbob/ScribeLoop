@@ -46,7 +46,7 @@ def test_real_blocked_socket_write_obeys_deadline_and_cancellation(cancel):
         right.close()
 
 
-def test_long_meeting_pages_have_bounded_sql_count(tmp_path):
+def test_long_meeting_pages_have_bounded_sql_count(tmp_path,require_sqlcipher):
     results = harness().page_bench(tmp_path)
     assert all(r['returned_segments']==100 for r in results)
     assert max(r['sql_statements_per_page'] for r in results) < 80
