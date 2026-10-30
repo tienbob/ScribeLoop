@@ -54,6 +54,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     var onCandidate: ((Record) -> Void)?
     private var shownCandidates = Set<String>()
     private var mutationIDs = Set<String>()
+    private var emergencyRequests: [String:String] = [:]
     private var process: Process?
     private var input: Pipe?, output: Pipe?, diagnostics: Pipe?
     private var buffer = Data()
@@ -213,22 +214,33 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
         let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access"]
-        if !reads.contains(action) && !["stop","stop_recording","revoke_agreement"].contains(action) && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
+        let isRead = reads.contains(action)
+        let emergency = ["stop","stop_recording","revoke_agreement"].contains(action)
+        if !isRead && !emergency && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
-        if requests.count >= 256 { requests = requests.filter { !["accepted","rejected"].contains($0.value) } }
-        guard requests.count < 256 else { message = "Too many pending actions. Reconnect to check their status."; return nil }
+        if requests.count >= 256 {
+            requests = requests.filter { !["accepted","rejected","reviewed"].contains($0.value) }
+        }
+        // Reads have no uncertain side effects. Never let bookkeeping block recovery or Stop.
+        if emergency, let prior = emergencyRequests[action] {
+            if ["pending","dispatching"].contains(requests[prior] ?? "") { return prior }
+            requests.removeValue(forKey:prior); mutationIDs.remove(prior)
+        }
+        guard isRead || emergency || requests.count < 256 else { message = "Too many pending actions. Reconnect to check their status."; return nil }
         let id = UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
         do {
             let envelope: Object = ["protocol":2,"request_id":id,"command":command]
             let bytes = try JSONSerialization.data(withJSONObject:envelope)
             guard bytes.count <= 12288 else { throw CocoaError(.coderInvalidValue) }
-            requests[id] = "pending"
-            if !reads.contains(action) { mutationIDs.insert(id) }
-            if requests.count > 256, let old = requests.first(where: { $0.value == "accepted" || $0.value == "rejected" })?.key { requests.removeValue(forKey:old) }
+            if !isRead { requests[id] = "pending"; mutationIDs.insert(id) }
+            if emergency { emergencyRequests[action] = id }
             Task { [weak self] in
                 do { try await ws.send(.string(String(decoding:bytes,as:UTF8.self))) }
-                catch { self?.requests[id] = "unknown"; self?.message = "Action delivery is uncertain. Reconnect to check status before trying again." }
+                catch {
+                    if !isRead { self?.requests[id] = "unknown" }
+                    self?.message = isRead ? "Could not load data. Reconnect and try again." : "Action delivery is uncertain. Reconnect to check status before trying again."
+                }
             }
             return id
         } catch { message = "Action is invalid or too large."; return nil }
@@ -254,14 +266,13 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             else if let first = sessions.first { select(first.id) }
         case "receipt":
             let id = text(v["request_id"]), status = text(v["status"])
-            requests[id] = status
+            if requests[id] != nil { requests[id] = status }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
         case "history_page":
             let page = objects(v["sessions"])
             for row in page { if !sessions.contains(where: { $0.id == row.id }) { sessions.append(row) } }
-            if sessions.count > 120 { sessions = Array(sessions.suffix(120)) }
             nextCursor = v["next_cursor"] as? [Any]
         case "meeting_page":
             guard text((v["session"] as? Object)?["id"]) == selectedID,
@@ -306,6 +317,9 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             if text(v["session_id"]) == selectedID { partials[text((v["segment"] as? Object)?["stream"])] = nil; reloadSoon() }
         case "transcript_replaced":
             if text(v["session_id"]) == selectedID { detail = [:]; partials = [:]; reloadSoon() }
+        case "transcription_warning": message = text(v["message"])
+        case "transcription_stage":
+            if text(v["stage"]) == "finalizing" { processingLabel = "Refining the saved transcript…" }
         case "summary_started": summaryID = v["session_id"] as? String
         case "summary_ready", "summary_error": summaryID = nil; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
         case "markdown_export": saveExport(text(v["content"]))
@@ -352,7 +366,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     private func upsert(_ value: Object) {
         let row = Record(raw:value); guard !row.id.isEmpty else { return }
         if let index = sessions.firstIndex(where: { $0.id == row.id }) { sessions[index] = row }
-        else { sessions.insert(row,at:0); if sessions.count > 120 { sessions.removeLast() } }
+        else { sessions.insert(row,at:0) }
     }
     func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1) }
     func loadPage(_ offset: Int, anchor: String? = nil) {
@@ -456,3 +470,11 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         let callback = completion; completion = nil; callback?()
     }
 }
+
+#if DESKTOP_AUDIT_TESTS
+// Test-only access to the real reducer and send guards, without launching the core.
+extension DesktopClient {
+    func auditConnect(_ socket: URLSessionWebSocketTask) { self.socket = socket; state = "Connected" }
+    func auditReceive(_ value: Object) { receive(value) }
+}
+#endif

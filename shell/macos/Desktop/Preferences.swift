@@ -22,6 +22,12 @@ struct Preferences: View {
     @State private var selectedLanguages: Set<String> = ["en","vi"]
     @State private var languageSearch = ""
     @State private var duration = 3600
+    @State private var vocabulary = ""
+    @State private var asrMicrophoneSource = "processed"
+    @State private var finalTranscription = false
+    private var vocabularyTerms: [String] {
+        vocabulary.components(separatedBy:.newlines).map { $0.trimmingCharacters(in:.whitespaces) }.filter { !$0.isEmpty }
+    }
     @State private var microphoneGain = 0.0
     @State private var microphoneFilter = "standard"
     @State private var microphoneThreshold = -40.0
@@ -49,7 +55,7 @@ struct Preferences: View {
             return left == right ? $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending : left < right
         }
     }
-    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease)].joined(separator:"\u{001f}") }
+    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != initialDetection || login != initialLogin }
     private var keyPreview: String {
@@ -65,7 +71,7 @@ struct Preferences: View {
                 Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction).disabled(applying)
                 Button(applying ? "Saving…" : "Done") { finish() }
                     .buttonStyle(.borderedProminent).tint(ScribeTheme.action).keyboardShortcut(.defaultAction)
-                    .disabled(applying || (changed && core.busy))
+                    .disabled(applying || !core.connected || (changed && core.busy))
             }.padding(.horizontal,24).padding(.top,20)
             if let saveError { Label(saveError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning).padding(.horizontal,24) }
             if changed && core.busy { Text("Finish current processing before saving these changes.").font(.caption).foregroundStyle(.secondary).padding(.horizontal,24) }
@@ -87,6 +93,20 @@ struct Preferences: View {
                         Toggle("Remove saved transcription key",isOn:$removeTranscriptionKey)
                     }
                     Text("Stored in this Mac's Keychain. Leave unchanged to keep it. Audio is sent to Deepgram when you record or rerun transcription; your provider bills your account directly. This build does not include transcription credits or self-hosted ASR.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Recognition accuracy") {
+                    Picker("Microphone audio for transcription",selection:$asrMicrophoneSource) {
+                        Text("Processed · gain and noise filter").tag("processed")
+                        Text("Original · before gain and noise filter").tag("raw")
+                    }
+                    Text("Original sends the unprocessed microphone track to Deepgram. Playback keeps your microphone settings. Applies to new recordings and Transcribe again; older recordings need a retained original track.").font(.caption).foregroundStyle(.secondary)
+                    Text("Names and vocabulary · one term per line").font(.callout.weight(.medium))
+                    TextEditor(text:$vocabulary).frame(height:85).font(.body)
+                        .accessibilityLabel("Transcription vocabulary")
+                        .overlay { RoundedRectangle(cornerRadius:6).strokeBorder(ScribeTheme.border) }
+                    Text("Add names, projects and technical terms you expect to hear. Up to 50 short terms; hints may improve recognition but do not force exact wording.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Refine transcript after recording",isOn:$finalTranscription)
+                    Text("Sends the recording to Deepgram one more time after Stop, then generates notes. This adds processing time and provider charges within the displayed audio cap. The live revision is retained. If refinement fails, notes use the live transcript.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Conversation notes") {
                     Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
@@ -159,7 +179,7 @@ struct Preferences: View {
                         }.padding(.vertical,4)
                     }
                     Text("Sensitivity boosts your voice and background sound. The filter reduces rumble and quiet background noise; it cannot isolate voices or remove every sudden sound. Strong may soften quiet speech.").font(.caption).foregroundStyle(.secondary)
-                    Text("Applies to new recordings and their transcription. An encrypted original microphone track is kept when processing is enabled. Existing recordings stay as recorded.").font(.caption).foregroundStyle(.secondary)
+                    Text("Applies to new recordings and processed-audio transcription. An encrypted original microphone track is kept when processing is enabled. Existing recordings stay as recorded.").font(.caption).foregroundStyle(.secondary)
                     Button("Reset microphone settings") { microphoneGain = 0; microphoneFilter = "standard"; microphoneThreshold = -40 }
                 }
                 Section("Recording preset") {
@@ -236,6 +256,7 @@ struct Preferences: View {
         }.background(ScribeTheme.canvas).tint(ScribeTheme.accent).background(InteractiveWindowActivation())
         .background(OutsideClickFocusDismissal(dismissFocus:{ focusedField = nil },
             cancelOnOutsideModal:applying ? nil : { cancel() }).allowsHitTesting(false)).onAppear {
+            guard core.connected else { dismiss(); return }
             endpoint = text(core.settings["summary_endpoint"])
             model = text(core.settings["summary_model"])
             provider = text(core.settings["summary_provider"])
@@ -249,6 +270,9 @@ struct Preferences: View {
             if selectedLanguages.isEmpty { selectedLanguages = ["en","vi"] }
             languageSearch = ""
             duration = core.settings["duration_s"] as? Int ?? 3600
+            vocabulary = (core.settings["vocabulary"] as? [String] ?? []).joined(separator:"\n")
+            asrMicrophoneSource = core.settings["asr_microphone_source"] as? String ?? "processed"
+            finalTranscription = core.settings["final_transcription"] as? Bool ?? false
             microphoneGain = (core.settings["microphone_gain_db"] as? NSNumber)?.doubleValue ?? 0
             microphoneFilter = text(core.settings["microphone_noise_filter"])
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
@@ -291,6 +315,9 @@ struct Preferences: View {
         guard !applying else { return }
         guard changed else { dismiss(); return }
         guard !model.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { saveError = "Enter a model ID before saving."; return }
+        guard vocabularyTerms.count <= 50, vocabularyTerms.allSatisfy({ $0.count <= 80 }), vocabularyTerms.reduce(0,{ $0 + $1.utf8.count }) <= 500 else {
+            saveError = "Keep vocabulary to a shorter list of important names and terms."; return
+        }
         guard instructions.count <= 2000 else { saveError = "Keep summary instructions within 2,000 characters."; return }
         guard core.connected, !core.busy else { saveError = "Reconnect and wait for processing to finish before saving."; return }
         saveError = nil; saveCommands = []
@@ -298,6 +325,9 @@ struct Preferences: View {
             var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":"auto","language_hints":selectedLanguages.sorted(),"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
             if !summaryKey.isEmpty { value["summary_key"] = summaryKey }
             value["stop_on_microphone_release"] = stopOnMicrophoneRelease
+            value["vocabulary"] = vocabularyTerms
+            value["asr_microphone_source"] = asrMicrophoneSource
+            value["final_transcription"] = finalTranscription
             if removeTranscriptionKey { value["deepgram_key"] = "" }
             else if !transcriptionKey.isEmpty { value["deepgram_key"] = transcriptionKey }
             saveCommands.append(["action":"save_settings","settings":value])

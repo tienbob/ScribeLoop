@@ -63,6 +63,15 @@ class SessionStore:
         with self.conn:
             self._insert_end(session_id,reason)
 
+    def record_final_transcription(self, session_id, state):
+        if state not in {'completed','failed'}:
+            raise ValueError('Invalid final transcription state')
+        revision=self.get(session_id)['transcript_revision']
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                "VALUES (?,?,?,'final_transcription_outcome',?)",(session_id,self._now(),
+                'warning' if state=='failed' else 'info',json.dumps({'state':state,'revision':revision})))
+
     def record_summary_outcome(self, session_id, code=None):
         payload={'state':'failed' if code else 'completed','code':code}
         if code:
@@ -159,6 +168,11 @@ class SessionStore:
         session['transcript_revision'] = self.conn.execute(
             'SELECT MAX(revision) FROM segments WHERE session_id=?', (session['id'],)).fetchone()[0]
         if session['source'] == 'meeting':
+            final=self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='final_transcription_outcome' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            final=json.loads(final[0]) if final else {}
+            session['transcription_warning'] = ('Final transcription could not finish. The live transcript is retained; no retry was made.'
+                if final.get('state')=='failed' and final.get('revision')==session['transcript_revision'] else None)
             outcome=self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='summary_outcome' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
             outcome=json.loads(outcome[0]) if outcome else None
@@ -176,7 +190,7 @@ class SessionStore:
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language','language_hints','microphone_processing')}
+                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language','language_hints','microphone_processing','transcription_quality')}
             session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()

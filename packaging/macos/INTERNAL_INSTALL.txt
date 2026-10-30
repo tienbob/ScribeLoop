@@ -1,27 +1,41 @@
-ScribeLoop — internal testing
+ScribeLoop — internal Mac test build
 
-INSTALL
-1. Check the macOS requirement below. This package supports Apple Silicon (M1 and newer), not Intel.
-2. Drag ScribeLoop.app onto Applications. Eject this disk image.
-3. Open ScribeLoop from Applications. No Python, Homebrew or terminal setup is needed.
-4. In Preferences, enter your own Deepgram API key for transcription. Configure a notes provider and model: your own cloud API key, or an already-running compatible Ollama/LM Studio server.
-5. Save with Done. Keys are kept in this Mac's Keychain; provider usage is billed to your account.
-6. When ready to record, approve microphone access. Meeting-app audio also needs macOS Screen Recording permission. Accept the processing agreement and choose Record explicitly.
+REQUIREMENTS
+Apple Silicon Mac (M1 or newer), macOS 13 Ventura or later. Intel Macs and macOS 11–12 are not supported.
+Python, Homebrew, Xcode and Ollama are NOT required. Each tester supplies their own API keys; provider usage is billed to their account.
 
-On macOS 13 through 14.1, start meetings manually with New recording. Automatic call detection requires macOS 14.2 or later. Microphone and meeting-app audio capture are built for macOS 13 or later; an actual Ventura Mac still needs acceptance testing.
+INSTALL FROM GOOGLE DRIVE
+1. Download the .dmg file to your Mac. Google Drive's preview cannot install it.
+2. Open the downloaded DMG. Drag ScribeLoop.app onto the Applications shortcut.
+3. Eject the ScribeLoop disk image. Open ScribeLoop from Applications, not from the disk image.
+4. This internal build is ad-hoc signed and NOT notarized. If macOS blocks it, verify that it came from your trusted colleague, then use Apple's app-specific Open Anyway flow in System Settings > Privacy & Security. Your Mac may require Touch ID/password. Managed Macs may need IT approval.
+   Apple instructions: https://support.apple.com/102445
+   Do not disable Gatekeeper or remove quarantine protections.
 
-This test build uses Deepgram cloud ASR. Fully self-hosted ASR is not included.
-Opening the app does not start recording or play saved audio. Do not use Play if sound output must remain off. A microphone-only test does not require playing any sound.
-Capture of a selected browser includes its other tabs. Get permission from everyone whose audio you capture.
+FIRST SETUP
+1. Open Preferences (gear icon). Enter your own Deepgram API key for transcription.
+2. Select a cloud notes provider, enter a model supported by your account, and enter your own key for that provider. Local notes-server options are optional and require an existing server; choose a cloud provider if you want no extra software.
+3. Select conversation languages, normally English and Vietnamese. Save with Done.
+4. Accept the in-app processing agreement when ready. Approve microphone access locally. Meeting-app audio also requires Screen Recording / Screen & System Audio Recording permission in macOS Privacy & Security.
+5. Use Check capture access without recording in Preferences to confirm permissions. This check does not record or play audio.
 
-UNSIGNED TEST BUILDS
-A package marked internal-unsigned is ad-hoc signed and not notarized. macOS may block it. Only use a package from your trusted internal distributor. Apple documents the app-specific exception under System Settings > Privacy & Security > Open Anyway; this is a manual decision for the tester or IT. Managed Macs may prohibit exceptions. Do not disable Gatekeeper or remove quarantine protections to install it. Prefer a signed/notarized package for wider rollout.
-Apple instructions: https://support.apple.com/102445
+TRY A CALL
+- Start with a short, consented test. Choose New recording, select the audio source and microphone, then Record & take notes. Recording does not start merely by opening the app.
+- Recording a selected browser also includes audio from its other tabs. Obtain permission from everyone whose audio will be captured.
+- On macOS 13–14.1, start and stop manually. Automatic call detection requires macOS 14.2 or later.
+- Call-end detection can show a 60-second countdown before stopping. Muting or receive-only calls may trigger microphone-release detection; choose Keep recording if needed. If the browser keeps its microphone active, use Stop recording manually.
+- After capture stops, transcription and notes may continue processing. Review transcript wording and cited notes; recognition can make mistakes.
+- Vocabulary takes exact spoken names/phrases, one per line. For example: what's up. Do not append language labels such as '-English'.
+- Refine transcript after recording is optional and off by default; enabling it adds a billed Deepgram pass before notes.
+- Opening the app does not play audio. If sound output must stay off, do not use Play; a microphone-only test needs no audio playback.
 
 UPDATES
-Quit ScribeLoop (closing the window leaves the menu-bar app running), then replace the app in Applications. Do not run old and new copies together. Back up important work before testing an upgrade. Database downgrades are not supported. Signed upgrade and Keychain continuity testing is still required.
+Quit ScribeLoop completely before replacing it in Applications; closing its window can leave the menu-bar app running. Do not run multiple copies. Back up important work before testing an upgrade; database downgrades are not supported.
+Ad-hoc updates can invalidate recording permissions. If access is denied while its toggle is on: quit ScribeLoop, remove only ScribeLoop from the Screen Recording list, add /Applications/ScribeLoop.app again, approve locally, and reopen it. Recheck microphone access too. Never send your password to the distributor.
 
-DATA
-Each Mac creates its own encrypted workspace at ~/Library/Application Support/ScribeLoop/. Copying the app does not copy anyone else's recordings, keys or provider settings. Back up workspace data and the applicable macOS Keychain together; copying encrypted files alone is not a supported restore procedure. No account sync or workspace transfer tool is included.
+DATA AND LIMITATIONS
+Each Mac creates a separate encrypted workspace at ~/Library/Application Support/ScribeLoop/. The installer contains no shared API keys, provider settings or recordings. Keys stay in that Mac's Keychain. App updates normally leave workspace data in place; encrypted files alone are not a supported backup/restore transfer. No account sync is included.
+This build uses Deepgram cloud transcription. Self-hosted ASR and bundled local LLM correction are not included. Actual behavior on a second Mac and macOS 13 still needs tester validation.
 
-Report startup failures, missing permission prompts, interrupted recordings or upgrade problems to the person who provided this package. Never attach API keys or private recordings to a bug report.
+REPORT A BUG
+Send the distributor: app version, Mac model/macOS version, audio source and call app, exact error, and steps to reproduce. Mention whether the call ended automatically or you pressed Stop. Never include API keys, passwords or private recordings/transcripts without an explicit agreement.

@@ -1,11 +1,13 @@
 """Single-provider streaming transcription and anonymous word-level speakers.
 
-Each source owns one connection. No automatic reconnection, second pass, local
-speech model, or cross-connection identity matching. Capture remains independent.
+Each source owns one live connection. An explicitly enabled final pass can refine
+the saved transcript after Stop. No automatic reconnect or provider switching;
+capture remains independent.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import threading
@@ -21,6 +23,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
 
 from ..capture.source import sample_position
+from ..storage.db import DATABASE_ERRORS
 from .cloud_meeting import CloudRecordingRunner, pcm_window
 from .languages import (
     AUTO_LANGUAGES,
@@ -30,8 +33,10 @@ from .languages import (
     validate_language_hints,
     word_language,
 )
+from .transcription_quality import TranscriptionQuality, recognition_audio
 
 STREAMS = ('loopback', 'mic')
+log = logging.getLogger(__name__)
 
 
 class DeepgramError(RuntimeError):
@@ -55,7 +60,7 @@ class DeepgramConfig:
     model = 'nova-3'
     rate = .60  # Conservative estimate including diarization, not actual billing.
 
-    def __init__(self, *, api_key=None, connector=None, batch_transport=None, budget_usd=.15, max_requests=80, write_timeout_s=5.):
+    def __init__(self, *, api_key=None, connector=None, batch_transport=None, budget_usd=.15, max_requests=80, write_timeout_s=5., quality=None):
         if not 0 < budget_usd <= 10 or not 1 <= max_requests <= 7200:
             raise ValueError('Invalid cloud budget')
         if api_key is None:
@@ -70,6 +75,7 @@ class DeepgramConfig:
                             api_key = api_key[1:-1]
             if not 16 <= len(api_key) <= 512 or not api_key.isascii() or any(c.isspace() for c in api_key):
                 api_key = ''
+        self.quality = TranscriptionQuality.model_validate(quality or {})
         self.api_key = api_key
         self.connector = connector or connect
         self.batch_transport = batch_transport
@@ -261,7 +267,8 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
     budget.reserve(stream,emit,cancelled)
     reserved_until = sent+10000
     params = {'model':'nova-3',**deepgram_language_options(language,language_hints),'encoding':'linear16','sample_rate':16000,
-        'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1'}
+        'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1',
+        **config.quality.deepgram_options()}
     url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params,doseq=True)
     # No redirect following: authorization must only reach this fixed host.
     from websockets.exceptions import SecurityError
@@ -412,6 +419,7 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         super().__init__(*args,config=config,**kwargs)
         self.budget = StreamingBudget(config,{})
         self.language_hints = None
+        self.quality = config.quality
 
     def _authorize(self,confirmed):
         if confirmed is not True:
@@ -420,6 +428,8 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             raise ValueError('Configure DEEPGRAM_API_KEY locally')
 
     def start(self,selection,metadata,title, *, consent_confirmed):
+        if self.closed or self.active_id or (self.task and not self.task.done()):
+            raise ValueError('Wait for recording and processing to finish')
         self._authorize(metadata.get('cloud_consent'))
         if metadata.get('language','auto') not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
@@ -427,7 +437,9 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         from .recording import RecordingRunner
         hints = metadata.get('language_hints')
         hints = validate_language_hints(hints) if hints is not None else None
-        result = RecordingRunner.start(self,selection,{**metadata,'provider':'deepgram','model':'nova-3',
+        self.quality = TranscriptionQuality.model_validate(metadata.get('transcription_quality') or self.cloud.quality)
+        self.keep_raw_microphone = self.quality.asr_microphone_source == 'raw'
+        result = RecordingRunner.start(self,selection,{**metadata,'transcription_quality':self.quality.model_dump(),'provider':'deepgram','model':'nova-3',
             'cloud_budget_usd':self.cloud.budget_usd},title,consent_confirmed=consent_confirmed)
         self.language_hints = hints
         return result
@@ -445,23 +457,54 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,'deepgram'}:
             raise ValueError('Saved transcript uses another provider; explicitly replace it instead of mixing backends')
         hints = validate_language_hints(language_hints) if language_hints is not None else None
+        self.quality = TranscriptionQuality.model_validate(self.store.get(sid)['capture'].get('transcription_quality') or {}).model_copy(update={'final_transcription':False})
         result = super().resume(sid,language=language,cloud_consent=cloud_consent)
         self.language_hints = hints
         return result
 
     def reprocess(self,sid, *, language,cloud_consent=False,language_hints=None):
+        self._saved(sid)
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         hints = validate_language_hints(language_hints) if language_hints is not None else None
+        self.quality = self.cloud.quality
         result = super().reprocess(sid,language=language,cloud_consent=cloud_consent)
         self.language_hints = hints
         return result
 
     def _live(self,audio,sid,emit,cancelled,done,**kwargs):
-        return run_streaming(audio,sid,emit,cancelled,done,config=self.cloud,budget=self.budget,
+        return run_streaming(recognition_audio(audio,self.quality),sid,emit,cancelled,done,config=self._quality_config(),budget=self.budget,
                              language_hints=self.language_hints,**kwargs)
 
     def _batch(self,audio,sid,emit,cancelled):
         from .deepgram_batch import run_batch
-        return run_batch(audio,sid,emit,cancelled,config=self.cloud,budget=self.budget,
+        return run_batch(recognition_audio(audio,self.quality),sid,emit,cancelled,config=self._quality_config(),budget=self.budget,
                          language=self.language,language_hints=self.language_hints)
+
+    def _quality_config(self):
+        # Per-session snapshot: settings changed later must not alter resumed streams.
+        import copy
+        config = copy.copy(self.cloud)
+        config.quality = self.quality
+        return config
+
+    async def _complete_live(self, session_id):
+        if not self.quality.final_transcription or self.closed or not self.store.segments(session_id):
+            return await super()._complete_live(session_id)
+        await self.publish({'type':'transcription_stage','session_id':session_id,'stage':'finalizing'})
+        try:
+            replacement = await self._process(session_id,replace=True,finalize=False)
+            if not replacement:
+                raise DeepgramError('Empty final transcript')
+        except DATABASE_ERRORS:
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional provider pass; retain live transcript
+            log.warning('Optional final transcription failed (%s)',type(exc).__name__)
+            self.store.record_final_transcription(session_id,'failed')
+            await self.publish({'type':'transcription_warning','session_id':session_id,
+                'message':'Final transcription could not finish. The live transcript is retained; no retry was made.'})
+        else:
+            # Storage/commit failures remain visible failures, never a provider fallback.
+            await self._replace_transcript(session_id,replacement)
+            self.store.record_final_transcription(session_id,'completed')
+        await self._finish(session_id)

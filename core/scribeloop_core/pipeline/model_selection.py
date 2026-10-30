@@ -66,7 +66,8 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         self.cloud=(self.base_config if duration==300 else DeepgramConfig(api_key=self.base_config.api_key,
             connector=self.base_config.connector,batch_transport=self.base_config.batch_transport,
             budget_usd=3 if duration==3600 else 8,
-            max_requests=1800 if duration==3600 else 4800))
+            max_requests=1800 if duration==3600 else 4800,
+            write_timeout_s=self.base_config.write_timeout_s, quality=self.base_config.quality))
         self.max_s=duration
 
     def _saved_duration(self,sid):

@@ -25,6 +25,38 @@ def summary_settings(path):
     return {name:os.environ.get(name,values.get(name,'' )).strip() for name in names}
 
 
+def gemini_summary_schema():
+    """Small provider grammar; full length/list/citation checks remain local.
+
+    Nested array bounds in the Pydantic schema multiply Gemini's grammar states.
+    Inline the small acyclic definitions and omit decoding bounds/defaults rather
+    than weakening GroundedSummary validation or retrying a rejected request.
+    """
+    from .schemas import GroundedSummary
+    source = GroundedSummary.model_json_schema()
+    definitions = source.get('$defs', {})
+    def simplify(node):
+        if isinstance(node, list):
+            return [simplify(value) for value in node]
+        if not isinstance(node, dict):
+            return node
+        if '$ref' in node:
+            return simplify(definitions[node['$ref'].removeprefix('#/$defs/')])
+        result = {}
+        for key, value in node.items():
+            if key in {'$defs','default','title','minItems','maxItems','minLength','maxLength'}:
+                continue
+            if key == 'properties':
+                # Property names may themselves be JSON Schema keywords (title).
+                result[key] = {name:simplify(schema) for name,schema in value.items()}
+            else:
+                result[key] = simplify(value)
+        if 'properties' in result:
+            result['required'] = list(result['properties'])
+        return result
+    return simplify(source)
+
+
 class SummaryProvider:
     def __init__(self, *, settings=None, request=None):
         settings = settings if settings is not None else summary_settings(
@@ -71,6 +103,9 @@ class SummaryProvider:
             return await self._request(messages)
         body = ({'model':self.model,'input':messages,'max_output_tokens':4000,'store':False}
                 if self.openai else {'model':self.model,'messages':messages,'max_tokens':4000,'temperature':0.2})
+        if self.base_url == 'https://generativelanguage.googleapis.com/v1beta/openai':
+            body['response_format'] = {'type':'json_schema','json_schema':{
+                'name':'meeting_summary','strict':True,'schema':gemini_summary_schema()}}
         headers = {'Authorization':'Bearer '+self._api_key} if self._api_key else {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10),
                                      trust_env=False,follow_redirects=False) as client, client.stream('POST',self.base_url+('/responses' if self.openai else '/chat/completions'),

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..llm.summary_provider import SummaryProvider
 from ..pipeline.deepgram_meeting import DeepgramConfig
 from ..pipeline.languages import AUTO_LANGUAGES, HINT_LANGUAGE_NAMES, LanguageHints
+from ..pipeline.transcription_quality import TranscriptionQuality
 from ..storage.keys import KeyUnavailable
 
 SERVICE = 'ai.scribeloop.providers.v1'
@@ -33,6 +34,14 @@ class Settings(BaseModel):
     language_hints: LanguageHints | None = None
     duration_s: int = 3600
     stop_on_microphone_release: bool = True
+    vocabulary: list[str] = Field(default_factory=list, max_length=50)
+    asr_microphone_source: Literal['processed', 'raw'] = 'processed'
+    final_transcription: bool = False
+
+    @field_validator('vocabulary')
+    @classmethod
+    def vocabulary_valid(cls, value):
+        return TranscriptionQuality(vocabulary=value).vocabulary
     microphone_gain_db: float = Field(default=0., ge=-12, le=24, allow_inf_nan=False)
     microphone_noise_filter: Literal['off','standard','strong'] = 'standard'
     microphone_noise_threshold_db: float = Field(default=-40., ge=-65, le=-25, allow_inf_nan=False)
@@ -110,7 +119,10 @@ class DesktopSettings:
         # Explicit test injection is retained; production never reads a bundle key.
         return DeepgramConfig(api_key=self.value.deepgram_key or self._cloud.api_key,
             connector=self._cloud.connector, batch_transport=self._cloud.batch_transport,
-            budget_usd=self._cloud.budget_usd, max_requests=self._cloud.max_requests)
+            budget_usd=self._cloud.budget_usd, max_requests=self._cloud.max_requests,
+            quality=TranscriptionQuality(vocabulary=self.value.vocabulary,
+                asr_microphone_source=self.value.asr_microphone_source,
+                final_transcription=self.value.final_transcription))
 
     def save(self, patch):
         if not isinstance(patch, dict) or len(json.dumps(patch,ensure_ascii=False).encode()) > 12288:

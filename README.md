@@ -1,143 +1,96 @@
 # ScribeLoop
 
-System-audio → speaker-separated transcript → LLM summary → (Phase 3) tool-using agent.
-Target platforms: **Linux + macOS**, local-first, privacy-preserving.
+**Your meeting notebook for Mac.**
 
-Start with the [native macOS app instructions](packaging/macos/DESKTOP.md) and
-[current acceptance checklist](docs/CURRENT_STATUS.md). The working app is a
-SwiftUI desktop client with a bundled Python core. Signing, real-call acceptance,
-and public distribution remain open. [Architecture](ARCHITECTURE.md) also preserves
-historical experiments and the longer-term roadmap.
+ScribeLoop records your microphone and meeting audio, transcribes the conversation as it happens, and turns the transcript into notes with links back to their sources. Keep recordings, transcripts, and notes together so you can revisit a discussion without starting from scratch.
 
-## macOS app
+The app is currently available for **internal testing on Apple Silicon Macs running macOS 13 or later**. Python and the runtime are included—there is no terminal setup or additional app to install.
 
-Open `dist/macos/ScribeLoop.app`. Configure notes in Preferences, accept the
-first-use agreement, and choose **New recording** or review a detected call.
-The app runs without a terminal server, browser, installed Python, or local speech
-models. Closing its window keeps the menu bar available; Quit stops the core.
-The internal test build uses customer-owned transcription and summary credentials;
-no shared API key is bundled. It remains ad-hoc signed until Developer ID signing
-and notarization are completed. See [internal Mac distribution](docs/INTERNAL_MAC_DISTRIBUTION.md).
+## What you can do
 
-## Repo layout
+- **Record your way.** Capture your microphone, a selected meeting app or browser plus your microphone, or system audio plus your microphone.
+- **Follow a live transcript.** See text during the conversation, with anonymous speaker labels that you can name manually.
+- **Use multiple languages.** Search and select expected conversation languages, including English and Vietnamese, to guide recognition.
+- **Get notes with sources.** Generate an overview, key points, decisions, action items, open questions, and uncertainties where the transcript supports them. Follow citations back to the transcript.
+- **Revisit and share.** Browse saved conversations, play retained audio, and export notes and transcripts as Markdown.
+- **Control recognition settings.** Adjust microphone sensitivity and noise filtering, add vocabulary hints, and choose whether transcription uses original or processed microphone audio.
 
-```
-scribeloop/
-├── ARCHITECTURE.md        # the plan (source of truth for every module)
-├── core/scribeloop_core/  # Python package: capture, pipeline, llm, storage, agent, api
-├── scripts/bakeoff.py     # Phase 0a ASR bake-off harness
-├── tests/                 # unit tests (run anywhere; no audio hardware needed)
-├── shell/                 # native SwiftUI macOS app and fixture host
-└── audio/                 # runtime session recordings (gitignored)
-```
+## Requirements
 
-## Browser/core development setup
+| Requirement | Details |
+| --- | --- |
+| Mac | Apple Silicon: M1 or newer |
+| macOS | 13 Ventura or later; automatic call detection requires 14.2 or later |
+| Transcription | Your own Deepgram API key and an internet connection |
+| Conversation notes | A supported cloud provider/model and your own API key, or an existing compatible local model server |
+| Permissions | Microphone access; Screen Recording access for meeting-app or system audio |
 
-Deepgram Nova-3 streaming with anonymous speaker labels is the only app ASR path.
-Install core/security dependencies without local ML packages, configure
-`DEEPGRAM_API_KEY` in the ignored `.env`, and restart the server. Accept the app
-agreement once, then choose **Record / Not now** for each detected call. No repeated
-upload checkboxes are needed. Stop finalizes the current stream and never starts
-a full transcription rerun. **Microphone only** captures no app audio and does not
-require Screen Recording permission.
+Intel Macs and macOS 11–12 are not supported by the current installer. Python, Homebrew, Xcode, and Ollama are not prerequisites for using cloud transcription and notes.
 
-Encrypted audio is kept for **30 days**, then removed while the app is running,
-idle and the agreement is accepted. **Archive audio** exempts it from expiry;
-unarchiving an old recording makes it eligible again. Transcripts and notes remain
-after audio expiry. While audio exists, use **Load playback** to listen locally or
-**Rerun transcription & notes** to explicitly upload it for a replacement transcript
-and a bounded notes workflow. No provider fallback or automatic paid retry is used.
-See [retained audio and manual reruns](docs/RETAINED_AUDIO.md).
+## Install
 
-Recording preferences offer 5-minute, 1-hour and 3-hour presets with shared audio
-cost caps. Long calls use bounded encrypted readers, playback windows and durable
-section notes. Summaries default to OpenAI `gpt-5.4-mini`: set `OPENAI_API_KEY` in
-`.env`; explicit `SUMMARY_*` overrides remain supported. Named people can be linked
-across meetings manually; voice learning requires a configured cloud extractor and
-consented calibration. See [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md).
-See [native launch instructions](packaging/macos/DESKTOP.md). The
-[Phase 1 closeout](docs/PHASE_1_CLOSEOUT.md) preserves historical development evidence.
-The [documentation index](docs/README.md) separates current instructions from historical evaluations.
-The demo web UI opens directly at `http://127.0.0.1:8757/`, without a launch key.
-Restart the server after updating. Add `--require-launch-key` to opt into token authentication.
+1. Download the ScribeLoop DMG shared by your team.
+2. Open it and drag **ScribeLoop.app** into **Applications**.
+3. Eject the disk image, then open ScribeLoop from Applications.
 
-```bash
-uv pip install -e ".[dev,security,sqlcipher]"
-```
+The current internal build is ad-hoc signed and **not notarized**. If macOS blocks it, verify the download with your distributor and follow Apple's app-specific [Open Anyway instructions](https://support.apple.com/102445). Company-managed Macs may require IT approval. Do not disable Gatekeeper.
 
-The optional `local-asr`, `diar` and `sherpa` extras are for historical evaluations.
-The new Q6_K option uses transcribe.cpp and does not require PyTorch. Local speech
-models are not loaded by cloud meetings.
+See the [full installation guide](packaging/macos/INTERNAL_INSTALL.txt) for setup, updates, and permission troubleshooting.
 
-## Optional local evaluation setup
+## Your first recording
 
-```bash
-python -m venv .venv
-# Windows:      .venv\Scripts\activate
-# macOS/Linux:  source .venv/bin/activate
-pip install -e ".[dev,local-asr,diar,sherpa]"
-pytest
-```
+1. Open **Preferences** using the gear icon.
+2. Enter your **Deepgram API key**. Choose a notes provider and model, then enter its API key. Save with **Done**.
+3. Select the languages you expect to hear. English and Vietnamese can be selected together.
+4. Grant microphone access and, when needed, macOS Screen Recording access. Use **Check capture access without recording** to verify permissions silently.
+5. Review the processing agreement, choose **New recording**, select your audio source, and press **Record & take notes**.
+6. Press **Stop recording** when finished. Transcription can continue processing after capture stops; notes follow when the transcript is ready.
 
-> The full ML stack (torch + pyannote) is ~2–3 GB. Cloud setup above does not require this stack.
+On supported macOS versions, ScribeLoop can suggest recording when it detects a possible call. A suggestion waits for your approval before recording. Call-end detection may show a **60-second countdown**; choose **Keep recording** if the conversation is still in progress. Use Stop manually if the call has ended but the browser remains active.
 
-## Platform note (development on Windows)
+On macOS 13–14.1, start and stop recordings manually.
 
-The pipeline, storage, LLM client, tests, and bake-off harness are platform-independent and
-run on any dev machine using `WavFileSource` (WAV replay). The macOS ScreenCaptureKit fallback and Python transport build locally; silent
-and controlled-tone host capture pass after enabling Screen Recording permission. The preferred
-Core Audio tap and Linux GStreamer source remain placeholders.
-`capture/native/` holds the Swift helper source.
+## Make it fit your conversations
 
-## Historical Phase 0a tasks (from ARCHITECTURE.md §8)
+In Preferences, you can choose recording duration limits, adjust microphone gain and background-noise filtering, and customize the instructions used to generate notes.
 
-These original research checklists are historical; use the
-[current acceptance checklist](docs/CURRENT_STATUS.md) for active work. Tauri,
-local-model bake-offs and embedded llama.cpp are not the current desktop stack.
+Under **Recognition accuracy**, you can:
 
-See the [Phase 0 local-development closeout](docs/PHASE_0_CLOSEOUT.md) for defaults,
-implementation decisions, and explicitly deferred gates.
+- Choose **processed** microphone audio or the **original** signal before ScribeLoop's gain and noise filter. Original-audio transcription requires a retained original track; playback keeps its existing audio settings.
+- Add names and vocabulary **one phrase per line**. Enter the words as spoken—for example, `what's up`. Do not append language labels such as `-English` or separate terms with semicolons.
+- Enable **Refine transcript after recording** for an additional Deepgram pass before notes. This adds processing time and provider charges. The live transcript revision is retained if refinement fails.
 
-Current implementation and host-validation status: [Phase 0a notes](docs/PHASE_0A.md).
+Language and vocabulary hints can help recognition, but they do not guarantee correct wording. Review important names, numbers, decisions, and action items against their sources.
 
-- [x] Repo on GitHub (CI runs tests + import smoke on ubuntu/macos/windows)
-- [x] Consumer-side silent-frame monitor and bounded WAV diagnostic (native integration pending)
-- [ ] Signed & notarized macOS build records loopback PCM; permission attributes to the Tauri bundle
-- [ ] ASR bake-off:
-      ```bash
-      python scripts/download_models.py sherpa-streaming-zipformer-en   # ~160 MB, into models/
-      python scripts/bakeoff.py --wav <meeting.wav> --backend sherpa-onnx
-      python scripts/bakeoff.py --wav <meeting.wav> --backend faster-whisper --model tiny
-      ```
-      (whisper.cpp / Moonshine measured on macOS/Linux hosts or separate harnesses)
-- [x] Select Python/FastAPI + browser for local v0 development
-- [ ] Validate frozen distribution, Linux GStreamer packaging, and embedded llama-cpp-python wheels
-- [x] Select near-online chunked community-1 for the initial Phase 1 implementation; live quality/delay unvalidated
-- [x] SQLCipher + sqlite-vec coexistence check; vec0 delete-scrub check — **both verified 2026-10-21** (SQLCipher 4.19.0 + sqlite-vec 0.1.9 coexist; vec0 deletes scrub vector bytes under `secure_delete=ON` + WAL TRUNCATE checkpoint). Harness: `scripts/check_vec.py`; tests: `tests/test_vectors.py`
-- [ ] Smoke test on the second OS
+## Your data and privacy
 
-## Phase 0b: development checkpoint closed
+Recordings and meeting data are stored encrypted on your Mac. API keys are kept in the macOS Keychain. Each Mac has its own workspace; installing the app does not copy another person's recordings or credentials. Markdown exports are readable plaintext files outside that encrypted workspace.
 
-Development work is closed for now. Results and deferred release criteria are tracked in
-[the Phase 0b checklist](docs/PHASE_0B.md).
+When you record or rerun transcription, audio is sent to Deepgram. When you generate cloud notes, transcript text and speaker labels are sent to your configured notes provider. Provider charges apply to your account. Encryption on your Mac does not make cloud processing offline.
 
-- [x] Corpus validation, AMI import, and reproducible ASR baseline tooling
-- [x] Sherpa error investigation, adapter fixes, and Whisper comparison
-- [x] Local MOSS WER/diagnostic DER and precision/quantization experiments
-- [x] Five-minute Opus robustness check with timing/hash safeguards ([results](docs/CODEC_EVALUATION.md))
-- [x] Overlap-error review and dedicated community-1 comparison ([results](docs/DIARIZATION_REVIEW.md))
-- [x] Five-minute development default: ES2004a 300–600 s, float16 + SDPA
-- [ ] Complete multi-meeting corpus, codec variants, live-latency baselines, and target sign-off
+The default audio-retention period is **30 days**. Archive audio to keep it beyond that period. Transcripts and notes remain available after audio expires. See [audio retention and playback](docs/RETAINED_AUDIO.md) for details.
 
-Historical five-minute PyTorch MOSS result: **20.31% WER**, **32.16% diagnostic DER**, and
-**82.93 s processing**. These are exploratory results from one meeting, not release
-validation. See [MOSS evaluation and configuration](docs/MOSS_EVALUATION.md).
-Full-meeting MOSS runs are deferred during development.
+Opening the app does not start recording or play audio. Recording a selected browser can include sound from its other tabs—get permission from everyone whose audio you capture.
 
-## Phase 1: macOS development closed
+## Pricing
 
-Deepgram Nova-3 now streams microphone/output audio and returns anonymous individual speaker labels. Capture, SQLCipher metadata and SLPA audio stay encrypted locally; the first-use agreement authorizes cloud processing; each call still waits for Record. Use Auto (default) for supported multilingual conversations, or choose a fixed language such as Tiếng Việt. No local speech models load in the default path.
+The planned public price is **US$1 as a one-time app purchase**, with no recurring ScribeLoop subscription or usage fee. Transcription and language-model services are not included; you pay your providers directly using your own keys.
 
-M5 recovery/resume/deletion/retention and durable cloud checkpoints are implemented. See [streaming speaker implementation and acceptance](docs/DEEPGRAM_STREAMING.md) for current validation. The earlier Groq public-audio check measured 13.80 s first text and 78.73 MiB peak client RSS; these are historical batch-backend measurements.
+The current build uses Deepgram cloud transcription and configurable notes providers. Fully self-hosted ASR and bundled local transcript-correction models are not included. See [pricing and model access](docs/PRICING_AND_MODEL_ACCESS.md) for the product plan and current availability.
 
-Encrypted cloud startup no longer needs a public WAV fixture. See [Phase 1 closeout and demo instructions](docs/PHASE_1_CLOSEOUT.md). Real-call/device acceptance, automatic detection reliability, speaker-attribution quality, original latency/accuracy targets, Linux and packaged desktop validation remain open. Real-call acceptance and signing remain open. The native SwiftUI app is the current macOS host; the browser UI remains a development/test client.
+## Internal testing status
+
+ScribeLoop is an internal preview. Transcription, speaker labels, and generated notes can contain errors. Call detection and automatic stopping depend on the meeting app and available macOS activity information; manual recording and Stop remain available.
+
+The installer targets macOS 13+, but testing on additional Macs and macOS versions is still needed. Account sync and workspace transfer are not included. Ad-hoc app updates can require recording permissions to be refreshed.
+
+To report a problem, include your app version, Mac model, macOS version, call app/audio source, exact error, and steps to reproduce. Do not include API keys, passwords, or private recordings in a bug report.
+
+## More information
+
+- [Installation and troubleshooting](packaging/macos/INTERNAL_INSTALL.txt)
+- [Internal distribution guide](docs/INTERNAL_MAC_DISTRIBUTION.md)
+- [Documentation and developer guides](docs/README.md)
+- [Architecture](ARCHITECTURE.md)
+
+License: Proprietary.

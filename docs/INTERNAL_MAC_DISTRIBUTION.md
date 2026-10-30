@@ -1,6 +1,6 @@
 # Internal Mac distribution
 
-Updated October 29, 2026. Internal build **0.1.5 (6)** targets **Apple Silicon
+Updated October 30, 2026. Internal build **0.1.12 (13)** targets **Apple Silicon
 (M1 and newer), macOS 13 Ventura or later**. This is the build deployment target,
 verified against native dependency metadata. Runtime acceptance on an actual
 Ventura Mac remains required; the development host runs macOS 27.2.
@@ -8,6 +8,15 @@ Ventura Mac remains required; the development host runs macOS 27.2.
 Microphone and selected-app/system audio capture use the macOS 13 APIs. Automatic
 call detection uses macOS 14.2 audio-activity metadata; on 13–14.1 use **New
 recording** manually. macOS 11–12 and Intel are outside the selected release scope.
+
+## Current installer
+
+The current Google Drive-ready package is `dist/macos/internal/ScribeLoop-0.1.12-13-arm64-internal-unsigned.dmg`.
+Upload that DMG and the adjacent `START_HERE.txt` and `.sha256` file. The JSON file is build metadata for the distributor.
+This packages the verified 0.1.12 app, including the Gemini HTTP 400 fix; no rebuild or new signing identity is introduced by packaging.
+The latest full Python suite passed 620 tests. Automatic call stop and successful notes were observed on the development Mac; second-Mac acceptance remains outstanding.
+
+The optional local transcript-correction LLM was abandoned for this release under the user's small-library/small-model and no-extra-app requirements. No additional local runtime or model was installed or bundled.
 
 ## What testers install
 
@@ -71,7 +80,7 @@ artifact containing the operator credential.
 .venv/bin/python packaging/macos/package_internal.py --unsigned-internal
 ```
 
-Output: `dist/macos/internal/ScribeLoop-0.1.5-6-arm64-internal-unsigned.dmg`, plus
+Output: `dist/macos/internal/ScribeLoop-0.1.12-13-arm64-internal-unsigned.dmg`, plus
 JSON metadata and `.sha256`. The filename and included instructions explicitly
 identify this as an ad-hoc, unnotarized test build. This command does not upload
 anything. It packages a copy and never changes the source app or user data.

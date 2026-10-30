@@ -124,17 +124,18 @@ class RecordingRunner:
         from ..capture.microphone_processing import MicrophoneProcessing, MicrophoneProcessor
         config = getattr(self, 'microphone_processing', MicrophoneProcessing())
         processor = MicrophoneProcessor(config)
+        keep_raw = config.enabled or getattr(self,'keep_raw_microphone',False)
         synced = dict(samples)
         try:
             # Keys and both writers must exist before even constructing a source.
-            reserve=self.max_s*16000*4*(len(selected_streams)+int(config.enabled))+50_000_000
+            reserve=self.max_s*16000*4*(len(selected_streams)+int(keep_raw))+50_000_000
             if shutil.disk_usage(self.audio.root.parent).free<reserve:
                 raise OSError('Insufficient space for selected recording limit')
             self.audio.create_session(session_id)
             created_key = True
             for stream in samples:
                 writers[stream] = self.audio.writer(session_id, stream)
-            if config.enabled:
+            if keep_raw:
                 writers['mic_raw'] = self.audio.raw_microphone_writer(session_id)
             self.storage_ready.set()
             if self.stop_requested.is_set():
@@ -181,16 +182,18 @@ class RecordingRunner:
                     raise ValueError('Audio arrived outside the selected capture scope')
                 if frame.t_ms+frame.pcm.size/16>(self.max_s+5)*1000:
                     raise ValueError('Audio exceeds selected recording timeline')
-                if frame.stream == 'mic' and config.enabled:
-                    writers['mic_raw'].write(frame)
-                    frame = processor.process(frame)
+                if frame.stream == 'mic':
+                    if keep_raw:
+                        writers['mic_raw'].write(frame)
+                    if config.enabled:
+                        frame = processor.process(frame)
                 writers[frame.stream].write(frame)
                 samples[frame.stream] += frame.pcm.size
                 if checkpoint and samples[frame.stream]-synced[frame.stream] >= 32000:
                     if shutil.disk_usage(self.audio.root.parent).free<50_000_000:
                         raise OSError('Recording disk reserve exhausted')
                     writers[frame.stream].checkpoint()
-                    if frame.stream == 'mic' and config.enabled:
+                    if frame.stream == 'mic' and keep_raw:
                         writers['mic_raw'].checkpoint()
                     synced[frame.stream] = samples[frame.stream]
                     checkpoint(frame.stream,round(writers[frame.stream].last_end))
@@ -442,20 +445,23 @@ class RecordingRunner:
         finally:
             await processing
         if not finalize:
-            return
+            return replacement if replace else None
         if self.closed:
             await self._state(session_id, 'interrupted')
         else:
             if replace:
-                config = getattr(self,'cloud',None) or getattr(self,'config',None)
-                provenance = config.public() if config is not None else {}
-                self.store.revise_transcript(session_id, replacement,
-                    provider=provenance.get('provider',getattr(self,'provider',None)),
-                    model=provenance.get('model'))
-                await self.publish({'type':'transcript_replaced', 'session_id':session_id,
-                                    'segments':self.store.segments(session_id),
-                                    'transcript_revisions':self.store.revisions(session_id)})
+                await self._replace_transcript(session_id,replacement)
             await self._finish(session_id)
+
+    async def _replace_transcript(self, session_id, replacement):
+        config = getattr(self,'cloud',None) or getattr(self,'config',None)
+        provenance = config.public() if config is not None else {}
+        self.store.revise_transcript(session_id, replacement,
+            provider=provenance.get('provider',getattr(self,'provider',None)),
+            model=provenance.get('model'))
+        await self.publish({'type':'transcript_replaced','session_id':session_id,
+                            'segments':self.store.segments(session_id),
+                            'transcript_revisions':self.store.revisions(session_id)})
 
     async def _complete_live(self, session_id):
         if self.closed:

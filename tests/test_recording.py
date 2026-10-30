@@ -78,7 +78,7 @@ async def test_capture_end_reason_reset_and_manual_stop_persist(setup):
     for expected in ('selected_app_exited','manual_stop'):
         sid = runner.start(None,{},'Fixture',consent_confirmed=True)['id']
         assert runner._capture_end_reason is None and runner._stop_reason is None
-        await wait_for(lambda: any(e.get('session',{}).get('id')==sid and
+        await wait_for(lambda sid=sid: any(e.get('session',{}).get('id')==sid and
             e.get('session',{}).get('status')=='recording' for e in events))
         runner.stop(sid)
         await asyncio.wait_for(runner.task,3)
@@ -350,3 +350,45 @@ async def test_source_close_failure_clears_reference_and_releases_slot(setup):
     assert runner.source is None and runner.active_id is None
     assert source.closed
     assert store.get(session['id'])['status'] == 'failed'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('one_track', [False, True], ids=['before-pcm', 'before-second-track'])
+async def test_stop_during_native_startup_finishes_without_capture_failure(setup, tmp_path, one_track):
+    import struct
+    import sys
+
+    from scribeloop_core.capture.multiplexed import MultiplexedPCMSource
+
+    store, audio, events, publish = setup
+    prefix = struct.pack('<4sQ', b'SLC2', 0)
+    if one_track:
+        prefix += struct.pack('<4sIB3sQ', b'SLP2', 320, 0, b'\0\0\0', 0)
+        prefix += np.zeros(320, dtype='<f4').tobytes()
+    end = struct.pack('<4sIB3sQ', b'SLE2', 0, 255, b'\0\0\0', 0)
+    path = tmp_path / 'silent_startup_helper.py'
+    path.write_text('import sys\n'
+        f'sys.stdout.buffer.write({prefix!r}); sys.stdout.flush()\n'
+        "assert sys.stdin.buffer.read(5)==b'STOP\\n'\n"
+        f'sys.stdout.buffer.write({end!r}); sys.stdout.flush()\n')
+    started = threading.Event()
+    class Source(MultiplexedPCMSource):
+        def _start_process(self, **kwargs):
+            super()._start_process(**kwargs)
+            started.set()
+    source = Source([sys.executable, '-u', str(path)])
+    runner = RecordingRunner(store, audio, lambda *args, **kwargs: source, publish,
+                             transcriber=lambda *args: None)
+    try:
+        sid = runner.start(None, {}, 'Silent startup cancellation', consent_confirmed=True)['id']
+        await wait_for(started.is_set)
+        runner.stop(sid)
+        await asyncio.wait_for(runner.task, 3)
+        session = store.get(sid)
+        assert session['status'] == 'completed'
+        assert session['end_reason'] == 'manual_stop'
+        assert runner.active_id is None and runner.processing_id is None
+        assert source._process.returncode == 0
+        assert not any(event['type'] == 'recording_error' for event in events)
+    finally:
+        await runner.close()

@@ -23,7 +23,7 @@ def summary_messages(rows, instructions=''):
     data = {'untrusted_transcript':transcript}
     if instructions.strip():
         data['summary_preferences'] = instructions
-    payload = json.dumps(data,ensure_ascii=True)
+    payload = json.dumps(data,ensure_ascii=False)
     if not rows or len(payload.encode()) > 100_000:
         raise ValueError('Summary requires a nonempty transcript under 100 KB')
     system = (
@@ -35,6 +35,10 @@ def summary_messages(rows, instructions=''):
         'explicitly stated; otherwise use null. Retain uncertainty and disagreements; do not '
         'turn proposals into decisions. Use empty arrays for unsupported sections. Do not infer '
         'dates from relative phrases. Summarize in the conversation language. Return JSON only.'
+        ' Preserve ambiguous or garbled speech as uncertainty; never reconstruct missing words or infer '
+        'responsibility, agreement, intent or a named entity from unclear fragments. An audio-check question '
+        'does not establish a decision or a question about accepting work. Omit unclear topic claims. '
+        'Write Unicode text directly; do not manually compose Unicode escape sequences.'
         ' Provide title as a concise topic name under 80 characters with supporting segment_ids.'
     )
     if instructions.strip():

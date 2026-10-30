@@ -215,7 +215,7 @@ def test_v1_migration_preserves_existing_session(tmp_path):
     conn.commit()
     migrate(conn)
     migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 13
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
     assert conn.execute("SELECT title FROM sessions WHERE id='legacy'").fetchone()[0] == 'Keep me'
     conn.close()
 

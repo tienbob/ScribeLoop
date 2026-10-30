@@ -9,6 +9,14 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Gemini summary HTTP 400 regression fix — October 30](GEMINI_SUMMARY_400_FIX_2026-10-30.md)
+
+- [Recognition controls and six-way accuracy comparison — October 30](TRANSCRIPTION_ACCURACY_CONTROLS_2026-10-30.md)
+
+- [Transcription and summary quality test — October 30](QUALITY_TEST_2026-10-30.md)
+
+- [Code audit fixes and re-audit — October 30](CODE_AUDIT_FIXES_2026-10-30.md)
+
 - [Transcription languages and hints](EN_VI_TRANSCRIPTION.md)
 - [Latest-call transcription quality review — October 29](TRANSCRIPTION_QUALITY_REVIEW_2026-10-29.md)
 - [Call stop and automatic notes repair — October 29](CALL_WORKFLOW_FIX_2026-10-29.md)

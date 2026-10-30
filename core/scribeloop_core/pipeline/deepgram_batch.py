@@ -60,6 +60,8 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language,language_hints=N
     options = deepgram_language_options(language,language_hints)
     language = options['language']
     streams = [s for s in STREAMS if audio.path(sid,s).is_file()]
+    if hasattr(audio,'audio') and audio.audio.path(sid,'mic').is_file() and 'mic' not in streams:
+        raise DeepgramError('Raw microphone audio is unavailable; choose processed audio for this recording')
     if not streams:
         raise DeepgramError('No retained audio to transcribe')
     with ExitStack() as stack:
@@ -83,7 +85,8 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language,language_hints=N
         budget.reserve('multichannel',emit,cancelled,seconds=samples/SAMPLE_RATE*len(streams))
         emit({'type':'transcription_progress','mode':'batch_upload','stream':'all'})
         params = {'model':'nova-3',**options,'multichannel':'true',
-                  'diarize_model':'v1','smart_format':'true','mip_opt_out':'true'}
+                  'diarize_model':'v1','smart_format':'true','mip_opt_out':'true',
+                  **config.quality.deepgram_options()}
         headers = {'Authorization':'Token '+config.api_key,'Content-Type':'audio/wav',
                    'Content-Length':str(44+samples*len(streams)*2)}
         def content():

@@ -202,7 +202,7 @@ struct Notebook: View {
                         Text(core.monitorLabel).font(.system(size:11)).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button { NSApp.activate(ignoringOtherApps:true); showPreferences = true } label: { Image(systemName:"gearshape").padding(4) }.buttonStyle(.borderless).help("Preferences")
+                    Button { NSApp.activate(ignoringOtherApps:true); showPreferences = true } label: { Image(systemName:"gearshape").padding(4) }.buttonStyle(.borderless).help("Preferences").disabled(!core.connected)
                 }.padding(10).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:12))
             }.padding(18).background(ScribeTheme.sidebar)
             .navigationSplitViewColumnWidth(min:260,ideal:290,max:380)
@@ -249,6 +249,9 @@ struct Notebook: View {
                                 }
                                 if !selected.text("notes_status").isEmpty {
                                     Text(selected.text("notes_status")).font(.callout).foregroundStyle(.secondary)
+                                }
+                                if !selected.text("transcription_warning").isEmpty {
+                                    Label(selected.text("transcription_warning"),systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning)
                                 }
                                 if let failure = selected.raw["summary_failure"] as? Object {
                                     Label(text(failure["message"]),systemImage:"exclamationmark.triangle")
@@ -395,6 +398,10 @@ struct RecordingReview: View {
             }.font(.callout).notebookCard()
             let duration = core.settings["duration_s"] as? Int ?? 3600
             Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Languages: \(core.transcriptionLanguageLabel)").font(.callout)
+            if core.settings["final_transcription"] as? Bool == true {
+                Text("Includes an extra billed Deepgram pass after Stop before notes are generated.").font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Microphone transcription: \(core.settings["asr_microphone_source"] as? String == "raw" ? "original audio" : "processed audio") · \((core.settings["vocabulary"] as? [String] ?? []).count) vocabulary hints").font(.caption).foregroundStyle(.secondary)
             Text(candidate == nil && scope != "application" ? "Press Stop to end this recording. Notes follow automatically." : (core.settings["stop_on_microphone_release"] as? Bool == true ? "Recording stops after 60 seconds of known app inactivity or after the app releases its microphone. Muted calls may also trigger the countdown; choose Keep recording to continue. Stop is always available." : "Recording stops after 60 seconds of known app inactivity. Other browser tabs can keep audio active; press Stop if the call has ended. Unknown activity keeps recording.")).font(.caption).foregroundStyle(.secondary)
             if core.transcription["configured"] as? Bool != true { Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange) }
             if let recordError { Label(recordError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning) }

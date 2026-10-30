@@ -88,7 +88,7 @@ def legacy():
 def test_migration_dedupes_first_row():
     assert sqlite3.sqlite_version_info >= (3,24,0)
     conn = legacy(); migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 13
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
     rows = conn.execute("SELECT payload_json FROM events WHERE type='recording_end'").fetchall()
     assert len(rows) == 1 and json.loads(rows[0][0])['end_reason'] == 'manual_stop'
     with pytest.raises(sqlite3.IntegrityError):

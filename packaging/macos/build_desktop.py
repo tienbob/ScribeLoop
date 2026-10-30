@@ -81,7 +81,7 @@ def main(*, app=APP, fixture=False):
         plistlib.dump({'CFBundleExecutable': 'ScribeLoop', 'CFBundleName': 'ScribeLoop Preview' if fixture else 'ScribeLoop',
             'CFBundleIdentifier': 'ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop', 'CFBundlePackageType': 'APPL',
             'CFBundleIconFile': 'ScribeLoop.icns',
-            'CFBundleShortVersionString': '0.1.9', 'CFBundleVersion': '10',
+            'CFBundleShortVersionString': '0.1.12', 'CFBundleVersion': '13',
             'LSMinimumSystemVersion': MINIMUM_MACOS, 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': 'Record your microphone only when you choose Record for a conversation.',
             'NSAudioCaptureUsageDescription': 'Record selected meeting audio only when you choose Record.',
