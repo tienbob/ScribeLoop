@@ -181,7 +181,7 @@ async def test_fractional_frame_batches_advance_and_finalize_without_stalling(st
         with audio.writer(sid,stream) as writer:
             # Native resampling commonly produces nonintegral millisecond ends.
             for i in range(24):
-                writer.write(AudioFrame(np.ones(1601,dtype='float32'),stream,i*100,0))
+                writer.write(AudioFrame(np.ones(1601,dtype='float32'),stream,round(i*1601/16),0))
     sockets=[]
     def connector(*args,**kwargs):
         sock=Socket()
@@ -201,7 +201,7 @@ async def test_fractional_frame_batches_advance_and_finalize_without_stalling(st
     finally:
         timer.cancel()
     assert not cancelled.is_set(), 'The reader must not stall at a fractional endpoint'
-    assert len(sockets)==2 and all(s.sent_ms==2400 and s.closed for s in sockets)
+    assert len(sockets)==2 and all(s.sent_ms==2402 and s.closed for s in sockets)
 
 
 def test_window_memory_is_bounded_even_with_many_tiny_overlapping_frames(state):
@@ -215,5 +215,6 @@ def test_window_memory_is_bounded_even_with_many_tiny_overlapping_frames(state):
         _,peak=tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert pcm.size==312*16
+    assert pcm.size==5000  # Keep all samples, including the fractional-ms tail.
+    assert np.all(pcm == 1)
     assert peak<1_000_000, 'Memory must depend on window size, not frame count'

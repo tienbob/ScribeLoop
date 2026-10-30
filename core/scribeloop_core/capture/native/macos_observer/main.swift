@@ -4,11 +4,13 @@ import CoreAudio
 
 struct ObserverError: Error { let status: OSStatus }
 
+@available(macOS 14.2, *)
 func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
                                mElement: kAudioObjectPropertyElementMain)
 }
 
+@available(macOS 14.2, *)
 func scalar(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
     var property = address(selector)
     var value: UInt32 = 0
@@ -18,6 +20,7 @@ func scalar(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) ->
     return value
 }
 
+@available(macOS 14.2, *)
 func bundleID(_ object: AudioObjectID) -> String? {
     var property = address(kAudioProcessPropertyBundleID)
     var value: Unmanaged<CFString>?
@@ -28,6 +31,7 @@ func bundleID(_ object: AudioObjectID) -> String? {
     return value.takeRetainedValue() as String
 }
 
+@available(macOS 14.2, *)
 func snapshot() throws -> [String: Any] {
     let system = AudioObjectID(kAudioObjectSystemObject)
     var property = address(kAudioHardwarePropertyProcessObjectList)

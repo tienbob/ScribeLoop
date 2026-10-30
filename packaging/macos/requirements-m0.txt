@@ -1,0 +1,3 @@
+# Frozen from a separate cloud-only environment; no local-asr/diar extras.
+-e .[security,sqlcipher]
+pyinstaller==6.22.3

@@ -18,6 +18,22 @@ from .failures import failure_diagnostic
 from .language import LanguageDetectionError
 
 log = logging.getLogger(__name__)
+STOP_REASONS = frozenset({'manual_stop','auto_app_inactive','auto_microphone_released'})
+STOP_REASON_WINS = frozenset({'duration_limit','auto_app_inactive','auto_microphone_released','app_shutdown'})
+
+
+def resolve_end_reason(stop_reason, capture_end_reason):
+    if stop_reason in STOP_REASON_WINS:
+        return stop_reason
+    return capture_end_reason or stop_reason or 'unknown'
+
+
+def automatic_notes_eligible(session_id, duration_ms, confirmed_segments):
+    if confirmed_segments or (duration_ms or 0) >= 30000:
+        return True
+    log.warning('Automatic notes skipped for session %s: duration_ms=%s confirmed_segments=%s',
+                session_id,duration_ms or 0,confirmed_segments)
+    return False
 
 
 class RecordingRunner:
@@ -39,11 +55,16 @@ class RecordingRunner:
         self.queue_size, self.max_s = queue_size, max_s
         self.stop_timeout_s = stop_timeout_s
         self.active_id = None
+        self.reprocess_id = None
+        self.processing_id = None
         self.task = None
         self.source = None
         self.closed = False
         self.stop_requested = threading.Event()
         self.cancel_processing = threading.Event()
+        self._reason_lock = threading.Lock()
+        self._stop_reason = None
+        self._capture_end_reason = None
 
     def start(self, selection, source_metadata, title, *, consent_confirmed):
         if consent_confirmed is not True:
@@ -54,9 +75,14 @@ class RecordingRunner:
         self.language_lock = None
         if self.language not in self.supported_languages:
             raise ValueError('Unsupported language hint')
+        from ..capture.microphone_processing import MicrophoneProcessing
+        self.microphone_processing = MicrophoneProcessing.model_validate(source_metadata.get('microphone_processing', {}))
         session = self.store.create_recording(title, source_metadata)
         self.store.set_audio_paths(session['id'], self.audio)
         self.active_id = session['id']
+        with self._reason_lock:
+            self._stop_reason = None
+            self._capture_end_reason = None
         self.stop_requested.clear()
         self.cancel_processing.clear()
         self.capture_done.clear()
@@ -64,15 +90,23 @@ class RecordingRunner:
         self.task = asyncio.create_task(self._run(session['id'], selection))
         return session
 
-    def stop(self, session_id):
+    def _request_stop(self, reason):
+        with self._reason_lock:
+            if self._stop_reason is None:
+                self._stop_reason = reason
+            self.stop_requested.set()
+
+    def stop(self, session_id, *, reason='manual_stop'):
+        if reason not in STOP_REASONS:
+            raise ValueError('Invalid recording stop reason')
         if self.active_id != session_id:
             raise ValueError('That recording is not active')
-        self.stop_requested.set()
+        self._request_stop(reason)
 
     async def close(self):
         self.closed = True
         self.cancel_processing.set()
-        self.stop_requested.set()
+        self._request_stop('app_shutdown')
         if self.task:
             await self.task
 
@@ -87,16 +121,22 @@ class RecordingRunner:
         capture_failed = False
         samples = {'mic': 0, 'loopback': 0}
         selected_streams = ('mic',) if getattr(selection,'scope',None) == 'microphone' else tuple(samples)
+        from ..capture.microphone_processing import MicrophoneProcessing, MicrophoneProcessor
+        config = getattr(self, 'microphone_processing', MicrophoneProcessing())
+        processor = MicrophoneProcessor(config)
+        keep_raw = config.enabled or getattr(self,'keep_raw_microphone',False)
         synced = dict(samples)
         try:
             # Keys and both writers must exist before even constructing a source.
-            reserve=self.max_s*16000*4*len(selected_streams)+50_000_000
+            reserve=self.max_s*16000*4*(len(selected_streams)+int(keep_raw))+50_000_000
             if shutil.disk_usage(self.audio.root.parent).free<reserve:
                 raise OSError('Insufficient space for selected recording limit')
             self.audio.create_session(session_id)
             created_key = True
             for stream in samples:
                 writers[stream] = self.audio.writer(session_id, stream)
+            if keep_raw:
+                writers['mic_raw'] = self.audio.raw_microphone_writer(session_id)
             self.storage_ready.set()
             if self.stop_requested.is_set():
                 for writer in writers.values():
@@ -127,7 +167,7 @@ class RecordingRunner:
             while producer.is_alive() or not frames.empty():
                 now = time.monotonic()
                 if now - started >= self.max_s:
-                    self.stop_requested.set()
+                    self._request_stop('duration_limit')
                 if self.stop_requested.is_set():
                     if stop_at is None:
                         stop_at = now
@@ -142,12 +182,19 @@ class RecordingRunner:
                     raise ValueError('Audio arrived outside the selected capture scope')
                 if frame.t_ms+frame.pcm.size/16>(self.max_s+5)*1000:
                     raise ValueError('Audio exceeds selected recording timeline')
+                if frame.stream == 'mic':
+                    if keep_raw:
+                        writers['mic_raw'].write(frame)
+                    if config.enabled:
+                        frame = processor.process(frame)
                 writers[frame.stream].write(frame)
                 samples[frame.stream] += frame.pcm.size
                 if checkpoint and samples[frame.stream]-synced[frame.stream] >= 32000:
                     if shutil.disk_usage(self.audio.root.parent).free<50_000_000:
                         raise OSError('Recording disk reserve exhausted')
                     writers[frame.stream].checkpoint()
+                    if frame.stream == 'mic' and keep_raw:
+                        writers['mic_raw'].checkpoint()
                     synced[frame.stream] = samples[frame.stream]
                     checkpoint(frame.stream,round(writers[frame.stream].last_end))
                 if not announced and all(samples[stream] for stream in selected_streams):
@@ -156,11 +203,13 @@ class RecordingRunner:
             producer.join()
             if outcome:
                 raise outcome[0]
+            with self._reason_lock:
+                self._capture_end_reason = getattr(source,'end_reason',None)
             if not all(samples[stream] for stream in selected_streams) and not self.stop_requested.is_set():
                 raise RuntimeError('A selected capture stream produced no audio')
             for stream, writer in writers.items():
                 writer.close()
-                if checkpoint:
+                if checkpoint and stream in selected_streams:
                     checkpoint(stream,round(writer.last_end))
             return samples
         except BaseException:
@@ -175,6 +224,7 @@ class RecordingRunner:
             if source is None and created_key:
                 for stream in samples:
                     self.audio.path(session_id, stream).unlink(missing_ok=True)
+                self.audio.original_path(session_id, 'mic').with_name('mic.raw.slpa').unlink(missing_ok=True)
                 self.audio.forget_session_key(session_id)
             raise
         finally:
@@ -234,8 +284,12 @@ class RecordingRunner:
             stage = 'transcription'
             persist_progress()
             self.store.record_audio_duration(session_id, samples)
+            with self._reason_lock:
+                end_reason = resolve_end_reason(self._stop_reason,self._capture_end_reason)
+            self.store.record_end(session_id,end_reason)
             self.capture_done.set()
             self.active_id = None
+            self.processing_id = session_id
             await self._state(session_id, 'processing')
             if self.cancel_processing.is_set():
                 await self._state(session_id, 'interrupted')
@@ -254,7 +308,10 @@ class RecordingRunner:
             log.warning('Meeting recording/processing failed (%s)', type(exc).__name__)
             diagnostic = failure_diagnostic(exc,stage)
             with contextlib.suppress(*DATABASE_ERRORS):
+                self.active_id = None  # Capture has drained before publishing failure.
                 self.store.record_failure(session_id,diagnostic)
+                if stage == 'capture':
+                    self.store.record_end(session_id,'capture_failed:'+diagnostic['code'])
                 await self._state(session_id, 'failed')
             await self.publish({'type': 'recording_error', 'session_id': session_id,
                 'diagnostic':diagnostic,
@@ -270,6 +327,8 @@ class RecordingRunner:
             ready_wait.cancel()
             if self.active_id == session_id:
                 self.active_id = None
+            if self.processing_id == session_id:
+                self.processing_id = None
 
     def _transcribe(self, audio, session_id, emit, cancelled):
         if self.transcriber:
@@ -289,6 +348,7 @@ class RecordingRunner:
         prior = self.store.language_lock(session_id)
         self.language_lock = prior if language == 'auto' and prior and prior.get('mode') == 'auto' else None
         self.cancel_processing.clear()
+        self.reprocess_id = session_id
         self.task = asyncio.create_task(self._reprocess(session_id))
 
     async def _reprocess(self, session_id):
@@ -306,6 +366,8 @@ class RecordingRunner:
                 'message':('Cannot confidently detect the early speech language. Select Tiếng Việt or English and transcribe again.'
                            if isinstance(exc, LanguageDetectionError) else
                            diagnostic['message']+' Previous transcript retained.')})
+        finally:
+            self.reprocess_id = None
 
     async def _process(self, session_id, *, replace=False, live=False, finalize=True):
         # Bounded output queue keeps transcript persistence on the DB thread.
@@ -357,6 +419,10 @@ class RecordingRunner:
                                         'segment':{'text':''}})
                     continue
                 if chunk.get('type') in {'partial','transcription_progress','model_metrics'}:
+                    if chunk.get('mode') == 'streaming' and chunk.get('stream') in {'mic','loopback'}:
+                        watermark = self.store.checkpoints(session_id).get(chunk['stream'],{}).get('recorded_ms',0)
+                        chunk['recorded_ms'] = max(watermark,chunk.get('recorded_ms',0))
+                        chunk['send_lag_ms'] = max(0,chunk['recorded_ms']-chunk.get('sent_ms',0))
                     await self.publish({**chunk,'session_id':session_id})
                     continue
                 if chunk.get('type') == 'language_locked':
@@ -379,20 +445,23 @@ class RecordingRunner:
         finally:
             await processing
         if not finalize:
-            return
+            return replacement if replace else None
         if self.closed:
             await self._state(session_id, 'interrupted')
         else:
             if replace:
-                config = getattr(self,'cloud',None) or getattr(self,'config',None)
-                provenance = config.public() if config is not None else {}
-                self.store.revise_transcript(session_id, replacement,
-                    provider=provenance.get('provider',getattr(self,'provider',None)),
-                    model=provenance.get('model'))
-                await self.publish({'type':'transcript_replaced', 'session_id':session_id,
-                                    'segments':self.store.segments(session_id),
-                                    'transcript_revisions':self.store.revisions(session_id)})
+                await self._replace_transcript(session_id,replacement)
             await self._finish(session_id)
+
+    async def _replace_transcript(self, session_id, replacement):
+        config = getattr(self,'cloud',None) or getattr(self,'config',None)
+        provenance = config.public() if config is not None else {}
+        self.store.revise_transcript(session_id, replacement,
+            provider=provenance.get('provider',getattr(self,'provider',None)),
+            model=provenance.get('model'))
+        await self.publish({'type':'transcript_replaced','session_id':session_id,
+                            'segments':self.store.segments(session_id),
+                            'transcript_revisions':self.store.revisions(session_id)})
 
     async def _complete_live(self, session_id):
         if self.closed:

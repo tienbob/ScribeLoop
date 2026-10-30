@@ -12,10 +12,16 @@ class AutoCallMonitor:
         self.max_gap_s = max_gap_s
         self.session_id = self.app_id = None
         self.inactive_since = self.last_observed = None
+        self.stop_on_input_release = self.input_seen = self.ignore_input_release = False
+        self.last_reason = None
 
-    def track(self, session_id, app_id):
+    def track(self, session_id, app_id, *, stop_on_input_release=False, input_was_active=False):
         self.session_id,self.app_id = session_id,app_id
         self.inactive_since = self.last_observed = None
+        self.stop_on_input_release = stop_on_input_release
+        self.input_seen = input_was_active
+        self.ignore_input_release = False
+        self.last_reason = None
 
     def clear(self):
         self.track(None,None)
@@ -24,6 +30,8 @@ class AutoCallMonitor:
         if session_id != self.session_id:
             raise ValueError('Unknown automatic recording')
         self.inactive_since = self.clock()
+        if self.last_reason == 'microphone_released':
+            self.ignore_input_release = True
 
     def observe(self, snapshot):
         now = self.clock()
@@ -31,15 +39,24 @@ class AutoCallMonitor:
         healthy = (snapshot.get('status') == 'available' and isinstance(observed,(int,float)) and
                    math.isfinite(observed) and 0 <= now-observed <= self.max_gap_s)
         activity = snapshot.get('activity',{}).get(self.app_id,'unknown')
-        if (not healthy or activity != 'inactive' or (self.last_observed is not None and
+        microphone = snapshot.get('input_activity',{}).get(self.app_id,'unknown')
+        if healthy and microphone == 'active':
+            self.input_seen = True
+            self.ignore_input_release = False
+        released = (healthy and activity != 'inactive' and self.stop_on_input_release and
+                    self.input_seen and not self.ignore_input_release and microphone == 'inactive')
+        ending = activity == 'inactive' or released
+        reason = 'microphone_released' if released else 'app_inactive' if ending else None
+        if (not healthy or not ending or (self.last_observed is not None and
                 observed-self.last_observed > self.max_gap_s)):
             self.inactive_since = None
+        self.last_reason = reason
         self.last_observed = observed if healthy else None
-        if not healthy or activity == 'unknown':
+        if not healthy or (activity == 'unknown' and not released):
             return {'state':'unknown','remaining_s':None},False
-        if activity != 'inactive':
+        if not ending:
             return {'state':'recording','remaining_s':None},False
         if self.inactive_since is None:
             self.inactive_since = now
         remaining = max(0,math.ceil(self.end_grace_s-(now-self.inactive_since)))
-        return {'state':'ending','remaining_s':remaining},remaining == 0
+        return {'state':'ending','remaining_s':remaining,'reason':reason},remaining == 0

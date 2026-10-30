@@ -189,21 +189,105 @@ final class Resampler {
     }
 }
 
+struct Captured: Sendable {
+    let pid: pid_t
+    let start: UInt64?
+    var zombie = false
+}
+
+enum PidState { case alive(Captured); case gone; case unknown }
+
+func composedStart(_ seconds: UInt64, _ microseconds: UInt64) -> UInt64 {
+    seconds * 1_000_000 + microseconds
+}
+
+func decodedPid(_ pid: pid_t, bytes: Int32, error: Int32, info: proc_bsdinfo) -> PidState {
+    guard bytes == Int32(MemoryLayout<proc_bsdinfo>.size) else {
+        return bytes == 0 && error == ESRCH ? .gone : .unknown
+    }
+    return .alive(Captured(pid: pid, start: composedStart(UInt64(info.pbi_start_tvsec),
+        UInt64(info.pbi_start_tvusec)), zombie: info.pbi_status == UInt32(SZOMB)))
+}
+
+func readPid(_ pid: pid_t) -> PidState {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    errno = 0
+    let bytes = proc_pidinfo(pid, Int32(PROC_PIDTBSDINFO), 0, &info, size)
+    let error = errno
+    return decodedPid(pid, bytes: bytes, error: error, info: info)
+}
+
+func pidGone(_ captured: Captured, _ state: PidState) -> Bool {
+    switch state {
+    case .gone: return true
+    case .unknown: return false
+    case .alive(let current):
+        return current.zombie || (captured.start != nil && current.start != captured.start)
+    }
+}
+
+func allGone(_ owners: [Captured], read: (pid_t) -> PidState = readPid) -> Bool {
+    !owners.isEmpty && owners.allSatisfy { pidGone($0, read($0.pid)) }
+}
+
 final class StopRequest: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
+    private var dead = false
+    private var callbackStarted = false
+    private var owners: [Captured] = []
     func request() { lock.lock(); value = true; lock.unlock() }
     func requested() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func capture(_ pids: [pid_t]) {
+        let identities = pids.map { pid -> Captured in
+            if case .alive(let identity) = readPid(pid) { return identity }
+            return Captured(pid: pid, start: nil)
+        }
+        lock.lock(); owners = identities; lock.unlock()
+    }
+    func capturedGone() -> Bool {
+        lock.lock(); let snapshot = owners; lock.unlock()
+        return allGone(snapshot)
+    }
+    func markStreamDead() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        dead = true // Always first, including late callbacks during shutdown.
+        guard !value && !callbackStarted else { return false }
+        callbackStarted = true
+        return true
+    }
+    func streamDead() -> Bool { lock.lock(); defer { lock.unlock() }; return dead }
+    func sourceEnded() {
+        lock.lock(); defer { lock.unlock() }
+        guard !value else { return }
+        FileHandle.standardError.write(Data("Source ended: selected_app_exited\n".utf8))
+        value = true
+    }
+    func failIfActive() {
+        lock.lock(); defer { lock.unlock() }
+        if !value { fail("Meeting output stopped; check the selected app and capture permission") }
+    }
+    func waitForDeadStreamOwner() async {
+        for _ in 0..<15 {
+            if requested() { return }
+            if capturedGone() { sourceEnded(); return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if capturedGone() { sourceEnded() } else { failIfActive() }
+    }
 }
 
 final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let writer: PacketWriter
     let micSession: AVCaptureSession
+    let stop: StopRequest
     var converters: [UInt8: Resampler] = [:]
 
-    init(writer: PacketWriter, micSession: AVCaptureSession) {
+    init(writer: PacketWriter, micSession: AVCaptureSession, stop: StopRequest) {
         self.writer = writer
         self.micSession = micSession
+        self.stop = stop
     }
 
     func emit(_ sample: CMSampleBuffer, stream: UInt8, clock: CMClock?) {
@@ -245,7 +329,9 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, AVCapture
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        fail("Meeting output stopped; check the selected app and capture permission")
+        guard stop.markStreamDead() else { return }
+        let state = stop
+        Task.detached { await state.waitForDeadStreamOwner() }
     }
 }
 
@@ -254,6 +340,20 @@ struct MeetingCapture {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         if args == ["--version"] { print("scribeloop-meeting 1; SLC2/SLP2; host ns; 16000 Hz mono Float32LE"); return }
+        if args == ["--check-capture-access"] {
+            // Read-only permission/source check: no SCStream, AVCaptureSession,
+            // PacketWriter, microphone request or audio device is opened.
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let result: [String:Any] = ["microphone":permission(),"output_access":true,"display_available":!content.displays.isEmpty]
+                print(String(data:try JSONSerialization.data(withJSONObject:result),encoding:.utf8)!)
+            } catch {
+                let native = error as NSError
+                let domain = native.domain == SCStreamErrorDomain ? "screen" : "other"
+                fail("Native capture startup failed: output_enumeration:\(domain):\(native.code)")
+            }
+            return
+        }
         if args == ["--devices"] {
             let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
             let data: [String: Any] = ["version": 1, "permission": permission(),
@@ -276,6 +376,24 @@ struct MeetingCapture {
             return
         }
         if args == ["--self-test"] { selfTest(); return }
+        if (args.count == 2 || (args.count == 3 && args[2] == "--stream-dead")) &&
+                args[0] == "--self-test-liveness-pid", let pid = Int32(args[1]), pid > 0 {
+            let stop = StopRequest(); stop.capture([pid])
+            guard !stop.capturedGone() else { fail("Liveness fixture must start alive") }
+            var goneTicks = 0
+            for _ in 0..<100 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                goneTicks = stop.capturedGone() ? goneTicks + 1 : 0
+                if args.count == 3 && goneTicks == 1 && stop.markStreamDead() {
+                    Task.detached { await stop.waitForDeadStreamOwner() }
+                }
+                if stop.requested() { break }
+                if goneTicks >= 20 { stop.sourceEnded(); break }
+            }
+            guard stop.requested() else { fail("Liveness fixture timed out") }
+            let writer = PacketWriter(nonblocking: false); writer.finish()
+            return
+        }
         if args.count == 3 && args[0] == "--self-test" && args[1] == "--seconds" {
             guard let seconds = Int(args[2]), seconds >= 30 && seconds <= 10800 else {
                 fail("Generated duration must be 30 to 10800 seconds")
@@ -314,6 +432,7 @@ struct MeetingCapture {
         let devices = microphones()
         guard let device = microphone == "default" ? AVCaptureDevice.default(for: .audio) :
                 devices.first(where: { $0.uniqueID == microphone }) else { fail("Selected microphone is unavailable") }
+        var captureStage = "microphone_setup"
         do {
             let session = AVCaptureSession()
             session.beginConfiguration()
@@ -324,9 +443,9 @@ struct MeetingCapture {
             session.addOutput(audio)
             session.commitConfiguration()
             let writer = PacketWriter()
-            let output = CaptureOutput(writer: writer, micSession: session)
-            let queue = DispatchQueue(label: "scribeloop.meeting-audio")
             let stop = StopRequest()
+            let output = CaptureOutput(writer: writer, micSession: session, stop: stop)
+            let queue = DispatchQueue(label: "scribeloop.meeting-audio")
             DispatchQueue.global().async {
                 var command = Data()
                 while command.count < 5 {
@@ -344,6 +463,7 @@ struct MeetingCapture {
                 object: session, queue: nil) { _ in fail("Microphone capture interrupted") }
             var loopback: SCStream?
             if !micOnly {
+                captureStage = "output_enumeration"
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard let display = content.displays.first else { fail("No display for output capture") }
                 let filter: SCContentFilter
@@ -352,6 +472,7 @@ struct MeetingCapture {
                     guard bundles.allSatisfy({ id in apps.contains(where: { $0.bundleIdentifier == id }) }) else {
                         fail("A selected app is not running; scope was not broadened")
                     }
+                    stop.capture(apps.map { $0.processID })
                     filter = SCContentFilter(display: display, including: apps, exceptingWindows: [])
                 } else { filter = SCContentFilter(display: display, excludingWindows: []) }
                 let config = SCStreamConfiguration()
@@ -361,13 +482,16 @@ struct MeetingCapture {
                 config.minimumFrameInterval = CMTime(seconds: 1, preferredTimescale: 1)
                 let stream = SCStream(filter: filter, configuration: config, delegate: output)
                 try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
+                captureStage = "output_start"
                 try await stream.startCapture()
                 loopback = stream
             }
             // Keep blocking microphone startup away from the main actor.
+            captureStage = "microphone_start"
             await withCheckedContinuation { continuation in
                 DispatchQueue.global().async { session.startRunning(); continuation.resume() }
             }
+            var goneTicks = 0
             while !stop.requested() {
                 try await Task.sleep(nanoseconds: 100_000_000)
                 guard device.isConnected else { fail("Selected microphone disconnected") }
@@ -375,12 +499,12 @@ struct MeetingCapture {
                     fail("Default microphone changed; select and restart the source")
                 }
                 if scope == "application" {
-                    let running = Set(NSWorkspace.shared.runningApplications.compactMap { $0.bundleIdentifier })
-                    guard bundles.allSatisfy({ running.contains($0) }) else { fail("Selected meeting app exited") }
+                    goneTicks = stop.capturedGone() ? goneTicks + 1 : 0
+                    if goneTicks >= 20 { stop.sourceEnded() }
                 }
                 withExtendedLifetime((session, output, loopback, runtime, interruption)) {}
             }
-            if let loopback { try await loopback.stopCapture() }
+            if let loopback, !stop.streamDead() { try? await loopback.stopCapture() }
             await withCheckedContinuation { continuation in
                 DispatchQueue.global().async { session.stopRunning(); continuation.resume() }
             }
@@ -388,10 +512,41 @@ struct MeetingCapture {
                 for (track, converter) in output.converters { converter.finish(writer: writer, stream: track) }
                 writer.finish()
             }
-        } catch { fail("Meeting capture failed; verify permissions, app, and microphone") }
+        } catch {
+            let native = error as NSError
+            let domain = native.domain == SCStreamErrorDomain ? "screen" : native.domain == AVFoundationErrorDomain ? "microphone" : "other"
+            // Fixed domains/stages and numeric codes only; no paths, app content
+            // or arbitrary localized OS/provider error strings cross the pipe.
+            fail("Native capture startup failed: \(captureStage):\(domain):\(native.code)")
+        }
     }
 
     static func selfTest(seconds: Int = 300) {
+        let original = Captured(pid: 42, start: composedStart(123, 456))
+        precondition(original.start == 123_000_456)
+        precondition(!pidGone(original, .alive(original)))
+        precondition(!pidGone(original, .unknown))
+        precondition(pidGone(original, decodedPid(42, bytes: 0, error: ESRCH, info: proc_bsdinfo())))
+        for (bytes, error) in [(Int32(0), EPERM), (Int32(1), ESRCH), (Int32(-1), EINVAL)] {
+            precondition(!pidGone(original, decodedPid(42, bytes: bytes, error: error, info: proc_bsdinfo())))
+        }
+        var info = proc_bsdinfo(); info.pbi_start_tvsec = 123; info.pbi_start_tvusec = 456
+        info.pbi_status = UInt32(SSTOP) // Status is an enum, not a bit mask.
+        precondition(!pidGone(original, decodedPid(42, bytes: Int32(MemoryLayout<proc_bsdinfo>.size), error: 0, info: info)))
+        precondition(pidGone(original, .gone))
+        precondition(pidGone(original, .alive(Captured(pid: 42, start: 123_000_457))))
+        precondition(pidGone(original, .alive(Captured(pid: 42, start: original.start, zombie: true))))
+        precondition(!allGone([]))
+        precondition(!allGone([original], read: { _ in .unknown }))
+        precondition(!allGone([original, Captured(pid: 43, start: 2)], read: { $0 == 42 ? .gone : .unknown }))
+        precondition(allGone([original], read: { _ in .gone }))
+        // A replacement process cannot restore the original SCK capture filter.
+        precondition(allGone([original], read: { _ in .alive(Captured(pid: 42, start: 999)) }))
+        let dead = StopRequest()
+        precondition(!dead.streamDead()); precondition(dead.markStreamDead())
+        precondition(dead.streamDead()); precondition(!dead.markStreamDead())
+        let manual = StopRequest(); manual.request()
+        precondition(!manual.markStreamDead()); precondition(manual.streamDead())
         // Bounded accelerated generated PCM, no device/capture/permission use.
         let writer = PacketWriter(nonblocking: false)
         let base = hostNS(CMClockGetTime(CMClockGetHostTimeClock())) + 100_000_000

@@ -1,0 +1,6 @@
+# Use a portable Python 3.11 whose native deployment target is <= macOS 13.
+# Homebrew's host-built Python may require the current build host OS.
+-r requirements-m0.txt
+numpy==1.26.4
+# The sqlite-vec 0.1.9 wheel requires macOS 14. Build the same pinned extension
+# for macOS 13 using prepare_compat13.py before freezing the app.

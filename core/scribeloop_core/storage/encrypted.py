@@ -50,7 +50,7 @@ def database_account(path: Path) -> str:
 
 
 @contextmanager
-def encrypted_database(path: Path, key_store: KeyStore | None = None):
+def encrypted_database(path: Path, key_store: KeyStore | None = None, *, on_unlock=None):
     """Hold the process lock until after connection close. Never re-key an existing DB.
 
     Moving a DB changes its key account: relocation/export needs an explicit
@@ -82,6 +82,8 @@ def encrypted_database(path: Path, key_store: KeyStore | None = None):
             os.close(fd)
         conn = connect_encrypted(path, key)
         migrate(conn)
+        if on_unlock is not None:
+            on_unlock(key, store)
         yield conn
     except DATABASE_ERRORS:
         raise EncryptedStorageError('Encrypted database operation failed') from None

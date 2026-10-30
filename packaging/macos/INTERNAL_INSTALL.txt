@@ -1,0 +1,41 @@
+ScribeLoop — internal Mac test build
+
+REQUIREMENTS
+Apple Silicon Mac (M1 or newer), macOS 13 Ventura or later. Intel Macs and macOS 11–12 are not supported.
+Python, Homebrew, Xcode and Ollama are NOT required. Each tester supplies their own API keys; provider usage is billed to their account.
+
+INSTALL FROM GOOGLE DRIVE
+1. Download the .dmg file to your Mac. Google Drive's preview cannot install it.
+2. Open the downloaded DMG. Drag ScribeLoop.app onto the Applications shortcut.
+3. Eject the ScribeLoop disk image. Open ScribeLoop from Applications, not from the disk image.
+4. This internal build is ad-hoc signed and NOT notarized. If macOS blocks it, verify that it came from your trusted colleague, then use Apple's app-specific Open Anyway flow in System Settings > Privacy & Security. Your Mac may require Touch ID/password. Managed Macs may need IT approval.
+   Apple instructions: https://support.apple.com/102445
+   Do not disable Gatekeeper or remove quarantine protections.
+
+FIRST SETUP
+1. Open Preferences (gear icon). Enter your own Deepgram API key for transcription.
+2. Select a cloud notes provider, enter a model supported by your account, and enter your own key for that provider. Local notes-server options are optional and require an existing server; choose a cloud provider if you want no extra software.
+3. Select conversation languages, normally English and Vietnamese. Save with Done.
+4. Accept the in-app processing agreement when ready. Approve microphone access locally. Meeting-app audio also requires Screen Recording / Screen & System Audio Recording permission in macOS Privacy & Security.
+5. Use Check capture access without recording in Preferences to confirm permissions. This check does not record or play audio.
+
+TRY A CALL
+- Start with a short, consented test. Choose New recording, select the audio source and microphone, then Record & take notes. Recording does not start merely by opening the app.
+- Recording a selected browser also includes audio from its other tabs. Obtain permission from everyone whose audio will be captured.
+- On macOS 13–14.1, start and stop manually. Automatic call detection requires macOS 14.2 or later.
+- Call-end detection can show a 60-second countdown before stopping. Muting or receive-only calls may trigger microphone-release detection; choose Keep recording if needed. If the browser keeps its microphone active, use Stop recording manually.
+- After capture stops, transcription and notes may continue processing. Review transcript wording and cited notes; recognition can make mistakes.
+- Vocabulary takes exact spoken names/phrases, one per line. For example: what's up. Do not append language labels such as '-English'.
+- Refine transcript after recording is optional and off by default; enabling it adds a billed Deepgram pass before notes.
+- Opening the app does not play audio. If sound output must stay off, do not use Play; a microphone-only test needs no audio playback.
+
+UPDATES
+Quit ScribeLoop completely before replacing it in Applications; closing its window can leave the menu-bar app running. Do not run multiple copies. Back up important work before testing an upgrade; database downgrades are not supported.
+Ad-hoc updates can invalidate recording permissions. If access is denied while its toggle is on: quit ScribeLoop, remove only ScribeLoop from the Screen Recording list, add /Applications/ScribeLoop.app again, approve locally, and reopen it. Recheck microphone access too. Never send your password to the distributor.
+
+DATA AND LIMITATIONS
+Each Mac creates a separate encrypted workspace at ~/Library/Application Support/ScribeLoop/. The installer contains no shared API keys, provider settings or recordings. Keys stay in that Mac's Keychain. App updates normally leave workspace data in place; encrypted files alone are not a supported backup/restore transfer. No account sync is included.
+This build uses Deepgram cloud transcription. Self-hosted ASR and bundled local LLM correction are not included. Actual behavior on a second Mac and macOS 13 still needs tester validation.
+
+REPORT A BUG
+Send the distributor: app version, Mac model/macOS version, audio source and call app, exact error, and steps to reproduce. Mention whether the call ended automatically or you pressed Stop. Never include API keys, passwords or private recordings/transcripts without an explicit agreement.

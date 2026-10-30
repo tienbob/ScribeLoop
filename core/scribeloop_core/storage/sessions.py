@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 from uuid import uuid4
 
+log = logging.getLogger(__name__)
+
 
 class SessionStore:
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection, *, memory_cache=None):
+        from .memory_cache import MemoryCache
         self.conn = conn
+        self.memory_cache = memory_cache if memory_cache is not None else MemoryCache()
 
     AGREEMENT_VERSION = '2026-10-26-v3'
 
@@ -37,11 +42,44 @@ class SessionStore:
 
     def recover(self):
         with self.conn:
+            interrupted = self.conn.execute("SELECT id FROM sessions WHERE source='meeting' AND "
+                "status IN ('preparing','recording','stopping','processing')").fetchall()
             self.conn.execute("UPDATE sessions SET status='interrupted', ended_at=COALESCE(ended_at,?) "
                               "WHERE status IN ('loading','replaying','preparing','recording','stopping','processing')", (self._now(),))
             self.conn.execute('UPDATE session_streams SET ended_at=(' 
                 'SELECT ended_at FROM sessions WHERE id=session_streams.session_id) '
                 "WHERE ended_at IS NULL AND session_id IN (SELECT id FROM sessions WHERE status='interrupted')")
+            for row in interrupted:
+                self._insert_end(row[0],'interrupted')
+
+    def _insert_end(self, session_id, reason):
+        row = self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+            "VALUES (?,?,?,'recording_end',?) ON CONFLICT(session_id) WHERE type='recording_end' DO NOTHING",
+            (session_id,self._now(),'info',json.dumps({'end_reason':reason})))
+        if row.rowcount == 0:
+            log.warning('Duplicate recording_end ignored for session %s',session_id)
+
+    def record_end(self, session_id, reason):
+        with self.conn:
+            self._insert_end(session_id,reason)
+
+    def record_final_transcription(self, session_id, state):
+        if state not in {'completed','failed'}:
+            raise ValueError('Invalid final transcription state')
+        revision=self.get(session_id)['transcript_revision']
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                "VALUES (?,?,?,'final_transcription_outcome',?)",(session_id,self._now(),
+                'warning' if state=='failed' else 'info',json.dumps({'state':state,'revision':revision})))
+
+    def record_summary_outcome(self, session_id, code=None):
+        payload={'state':'failed' if code else 'completed','code':code}
+        if code:
+            payload['message']=f'Notes could not finish. Recording and transcript are saved. Diagnostic: {code}. Generate notes can retry.'
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                "VALUES (?,?,?,'summary_outcome',?)",(session_id,self._now(),
+                'warning' if code else 'info',json.dumps(payload)))
 
     @staticmethod
     def _now():
@@ -130,13 +168,29 @@ class SessionStore:
         session['transcript_revision'] = self.conn.execute(
             'SELECT MAX(revision) FROM segments WHERE session_id=?', (session['id'],)).fetchone()[0]
         if session['source'] == 'meeting':
+            final=self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='final_transcription_outcome' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            final=json.loads(final[0]) if final else {}
+            session['transcription_warning'] = ('Final transcription could not finish. The live transcript is retained; no retry was made.'
+                if final.get('state')=='failed' and final.get('revision')==session['transcript_revision'] else None)
+            outcome=self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='summary_outcome' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            outcome=json.loads(outcome[0]) if outcome else None
+            session['summary_failure']=outcome if outcome and outcome['state']=='failed' else None
+            ended = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='recording_end' ORDER BY id LIMIT 1",(session['id'],)).fetchone()
+            session['end_reason'] = json.loads(ended[0])['end_reason'] if ended else 'unknown'
+            skipped = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+                "AND type='automatic_notes_skipped' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
+            session['notes_status'] = (json.loads(skipped[0])['message']
+                if skipped and session['transcript_revision'] is None else None)
             metadata = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_selection' "
                 'ORDER BY id LIMIT 1', (session['id'],)).fetchone()
             capture = json.loads(metadata['payload_json']) if metadata else {}
             session['capture'] = {key:capture.get(key) for key in (
                 'scope','name','kind','app_id','microphone_id','microphone_name',
-                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language')}
+                'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language','language_hints','microphone_processing','transcription_quality')}
             session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
             provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
@@ -169,26 +223,38 @@ class SessionStore:
             'WHERE r.session_id=? GROUP BY r.session_id,r.revision ORDER BY r.revision DESC',
             (session_id,))]
 
-    def segments(self, session_id: str, *, revision: int | None = None):
+    def segments(self, session_id: str, *, revision: int | None = None,
+                 limit: int | None = None, offset: int = 0):
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError('Invalid transcript revision')
+        if (limit is not None and (type(limit) is not int or not 1 <= limit <= 201)) or type(offset) is not int or offset < 0:
+            raise ValueError('Invalid transcript page')
+        versions = self._page_source_versions(session_id)
+        selected = revision if revision is not None else self.conn.execute(
+            'SELECT MAX(revision) FROM segments WHERE session_id=?',(session_id,)).fetchone()[0]
+        key = (session_id,selected,limit,offset,versions)
+        cached = self.memory_cache.get(('segments',key))
+        if cached is not None:
+            return [dict(row) for row in cached]
         rows = [dict(row) for row in self.conn.execute(
             'SELECT segments.*, session_speakers.local_label AS speaker_label FROM segments '
             'LEFT JOIN session_speakers ON session_speakers.id=segments.local_speaker_id '
             'WHERE segments.session_id=? AND revision=COALESCE(?,('
-            'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid',
-            (session_id, revision, session_id))]
+            'SELECT MAX(revision) FROM segments WHERE session_id=?)) ORDER BY start_ms, segments.rowid LIMIT ? OFFSET ?',
+            (session_id, revision, session_id, limit if limit is not None else -1, offset))]
         if not rows:
             return rows
         edits = {row['speaker_id']:dict(row) for row in self.conn.execute(
             'SELECT * FROM revision_speaker_edits WHERE session_id=? AND revision=?',
             (session_id,rows[0]['revision']))}
+        labels = {row['id']:row['local_label'] for row in self.conn.execute(
+            'SELECT id,local_label FROM session_speakers WHERE session_id=?',(session_id,))}
         for row in rows:
             identity = row['local_speaker_id']
             target = edits.get(identity,{}).get('merge_target') or identity
             row['display_speaker_id'] = target
             if target:
-                row['speaker_label'] = edits.get(target,{}).get('label') or self._speaker_label(target)
+                row['speaker_label'] = edits.get(target,{}).get('label') or labels.get(target)
         people={r['speaker_id']:dict(r) for r in self.conn.execute(
             'SELECT p.speaker_id,p.person_id,s.canonical_name FROM person_links p JOIN speakers s ON s.id=p.person_id '
             'WHERE p.session_id=? AND p.revision=?',(session_id,rows[0]['revision']))}
@@ -197,6 +263,51 @@ class SessionStore:
             if person:
                 row['speaker_label']=person['canonical_name']
                 row['person_id']=person['person_id']
+        if limit is not None or len(rows)<=201:
+            self.memory_cache.put(('segments',key),[dict(row) for row in rows],owner=session_id)
+        return rows
+
+    def _page_source_versions(self, session_id):
+        versions = tuple(tuple(r) for r in self.conn.execute(
+            'SELECT bucket,generation FROM summary_source_versions WHERE session_id=? ORDER BY bucket',(session_id,)))
+        previous = self.memory_cache.get(('page_versions',session_id))
+        if previous is not None and previous != versions:
+            self.memory_cache.invalidate(session_id,namespaces={'segments','roster','page_versions'})
+        self.memory_cache.put(('page_versions',session_id),versions,owner=session_id)
+        return versions
+
+    def speaker_roster(self,session_id,revision):
+        session=self.get(session_id)
+        if not session or type(revision) is not int or revision!=session['transcript_revision']:
+            raise ValueError('Select the current transcript revision')
+        key=(session_id,revision,self._page_source_versions(session_id))
+        cached=self.memory_cache.get(('roster',key))
+        if cached is not None:
+            return [dict(row) for row in cached]
+        query = """WITH identities AS (
+            SELECT s.id,s.stream,s.local_label,ROW_NUMBER() OVER (ORDER BY s.rowid) AS number
+            FROM session_speakers s WHERE s.session_id=?
+        ), utterances AS (
+            SELECT COALESCE(e.merge_target,g.local_speaker_id) AS identity,g.text,g.start_ms,g.rowid AS position
+            FROM segments g LEFT JOIN revision_speaker_edits e ON e.session_id=g.session_id
+            AND e.revision=g.revision AND e.speaker_id=g.local_speaker_id
+            WHERE g.session_id=? AND g.revision=? AND g.local_speaker_id IS NOT NULL
+        ) SELECT i.id,i.stream,i.number AS person_number,
+            COALESCE(p.canonical_name,e.label,i.local_label) AS name,l.person_id,
+            (SELECT text FROM utterances u WHERE u.identity=i.id ORDER BY start_ms,position LIMIT 1) AS sample,
+            (SELECT MIN(start_ms) FROM utterances u WHERE u.identity=i.id) AS start_ms
+        FROM identities i LEFT JOIN revision_speaker_edits e ON e.session_id=? AND e.revision=? AND e.speaker_id=i.id
+        LEFT JOIN person_links l ON l.session_id=? AND l.revision=? AND l.speaker_id=i.id
+        LEFT JOIN speakers p ON p.id=l.person_id
+        WHERE EXISTS (SELECT 1 FROM utterances u WHERE u.identity=i.id)
+        ORDER BY i.number LIMIT 2001"""
+        rows=[dict(row) for row in self.conn.execute(query,
+            (session_id,session_id,revision,session_id,revision,session_id,revision))]
+        if len(rows)>2000:
+            raise ValueError('Speaker roster exceeds bounds')
+        for row in rows:
+            row['sample']=(row['sample'] or '')[:180]
+        self.memory_cache.put(('roster',key),[dict(row) for row in rows],owner=session_id)
         return rows
 
     def correct_speaker(self, session_id, revision, speaker_id, *, label=None, merge_target=None):
@@ -303,7 +414,9 @@ class SessionStore:
                 (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now()))
             selection = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='recording_selection' ORDER BY id LIMIT 1",(session_id,)).fetchone()
-            if selection and json.loads(selection[0]).get('auto_title'):
+            manual_title = self.conn.execute("SELECT 1 FROM events WHERE session_id=? "
+                "AND type='conversation_renamed' LIMIT 1",(session_id,)).fetchone()
+            if selection and json.loads(selection[0]).get('auto_title') and not manual_title:
                 title = (summary.get('title') or summary['overview'])['text']
                 title = ' '.join(title.split())[:100]
                 if title:
@@ -318,7 +431,36 @@ class SessionStore:
             return None
         result = dict(row)
         result['summary'] = json.loads(result.pop('summary_json'))
-        result['stale'] = result['input_hash'] != transcript_hash(self.segments(session_id))
+        versions = tuple(tuple(r) for r in self.conn.execute(
+            'SELECT bucket,generation FROM summary_source_versions WHERE session_id=? ORDER BY bucket',(session_id,)))
+        cache = getattr(self,'_transcript_hash_cache',None)
+        if cache is None:
+            self._transcript_hash_cache = cache = self.memory_cache.namespace('transcript_hash')
+        known = getattr(self,'_summary_input_counts',None)
+        if known is None:
+            self._summary_input_counts = known = self.memory_cache.namespace('summary_counts',owner=lambda key:key[0])
+        count_key = (session_id,result['id'])
+        prior = cache.get(session_id)
+        if prior is None or prior[0] != versions:
+            known_count = known.get(count_key)
+            if known_count is not None:
+                count = self.conn.execute('SELECT COUNT(*) FROM segments WHERE session_id=? AND revision='
+                    '(SELECT MAX(revision) FROM segments WHERE session_id=?)',(session_id,session_id)).fetchone()[0]
+                if count != known_count:
+                    # A different number of source IDs cannot match the old hash.
+                    # This avoids rehashing an entire old final summary on every
+                    # appended window during explicit resume.
+                    known.move_to_end(count_key)
+                    result['stale'] = True
+                    return result
+            rows = self.segments(session_id)
+            prior = (versions,transcript_hash(rows),len(rows))
+            cache[session_id] = prior
+        cache.move_to_end(session_id)
+        result['stale'] = result['input_hash'] != prior[1]
+        if not result['stale']:
+            known[count_key] = prior[2]
+            known.move_to_end(count_key)
         return result
 
     def revise_transcript(self, session_id, chunks, *, provider=None, model=None):
@@ -418,6 +560,9 @@ class SessionStore:
                 raise ValueError('Confirmation exceeds durable recording')
             revision = self.conn.execute('SELECT COALESCE(MAX(revision),1) FROM segments WHERE session_id=?',
                                          (session_id,)).fetchone()[0]
+            if rows:
+                from .db import ensure_transcript_revision
+                ensure_transcript_revision(self.conn,session_id,revision,created_at=self._now())
             saved = []
             for chunk in rows:
                 if not chunk['is_final'] or not current['confirmed_ms'] <= chunk['start_ms'] < chunk['end_ms'] <= end_ms:
@@ -452,11 +597,27 @@ class SessionStore:
                 self.conn.execute('UPDATE recording_checkpoints SET recorded_ms=? WHERE session_id=? AND stream=?',
                                   (int(report['end_ms']),session_id,stream))
 
+    def rename_conversation(self, session_id, title):
+        if not isinstance(title,str) or not 1<=len(title)<=160:
+            raise ValueError('Use a conversation name from 1 to 160 characters')
+        title.encode('utf-8')
+        if not title.strip() or any(ord(c)<32 or ord(c)==127 for c in title):
+            raise ValueError('Use a nonempty single-line conversation name')
+        session = self.get(session_id)
+        if not session or session['status'] not in {'completed','failed','interrupted'}:
+            raise ValueError('Select an idle saved conversation')
+        with self.conn:
+            self.conn.execute('UPDATE sessions SET title=? WHERE id=?',(title.strip(),session_id))
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
+                'VALUES (?,?,?,?,?)',(session_id,self._now(),'info','conversation_renamed','{"manual":true}'))
+        return self.get(session_id)
+
     def begin_delete(self, session_id):
         self.transition(session_id, 'deleting')
 
     def finish_delete(self, session_id):
         """Delete dependent data in FK order; callers have already retired audio keys."""
+        self.memory_cache.invalidate(session_id)
         has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
         if has_vectors:
             from .vectors import load_vec_extension

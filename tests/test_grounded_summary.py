@@ -40,6 +40,32 @@ def config(request):
         'SUMMARY_MODEL':'chosen-model','SUMMARY_API_KEY':'private-test-key','SUMMARY_PROVIDER':'Test provider'},request=request)
 
 
+@pytest.mark.parametrize('label,newline', [('json','\n'), ('','\n'), ('json','\r\n')])
+def test_single_fenced_json_keeps_schema_and_citation_validation(saved,label,newline):
+    _store,_sid,row,_path = saved
+    def wrap(value):
+        return '  ```'+label+newline+json.dumps(value)+newline+'```\n'
+    value = summary(row)
+    assert validate_summary(wrap(value),[row]) == validate_summary(value,[row])
+    value['overview']['segment_ids'] = ['foreign']
+    with pytest.raises(ValueError,match='unknown segments'):
+        validate_summary(wrap(value),[row])
+    with pytest.raises(ValueError):
+        validate_summary(wrap({'overview':'invalid'}),[row])
+
+
+@pytest.mark.parametrize('template', [
+    'Here is the JSON:\n```json\n%s\n```',
+    '```json\n%s\n```\nAdditional explanation',
+    '```json\n%s\n```\n```json\n{}\n```',
+    '```javascript\n%s\n```',
+])
+def test_summary_does_not_extract_json_from_other_content(saved,template):
+    _store,_sid,row,_path = saved
+    with pytest.raises(ValueError):
+        validate_summary(template % json.dumps(summary(row)),[row])
+
+
 def test_citations_prompt_boundaries_and_export(saved):
     store,sid,row,_ = saved
     rows,fingerprint,messages = store.summary_input(sid,1)
@@ -89,12 +115,14 @@ def test_summary_provider_settings_are_literal_and_secret_free(tmp_path,monkeypa
     assert SummaryProvider(settings={'SUMMARY_BASE_URL':'http://127.0.0.1:8080/v1','SUMMARY_MODEL':'local'}).configured
 
 
-def test_api_requires_separate_consent_restores_and_exports(saved):
+@pytest.mark.parametrize('fenced', [False, True])
+def test_api_requires_separate_consent_restores_and_exports(saved,fenced):
     _store,sid,row,path = saved
     calls = []
     async def request(messages):
         calls.append(messages)
-        return json.dumps(summary(row))
+        value = json.dumps(summary(row))
+        return '```json\n'+value+'\n```' if fenced else value
     provider = config(request)
     app,token = create_app(storage='public-demo',database=path,fixtures={},backend_factory=lambda:None,summary_provider=provider)
     headers = {'origin':'http://127.0.0.1'}

@@ -70,8 +70,9 @@ def pcm_window(frames,start,end):
     if not 0 <= start < end <= 10_805_000 or end-start>305000:
         raise ValueError('Invalid recording window')
     pcm = np.zeros(round((end-start)*16),dtype=np.float32)
+    from ..capture.source import sample_position
     for frame in frames:
-        offset = round((frame.t_ms-start)*16)
+        offset = sample_position(frame)-round(start*16)
         lo,hi = max(0,offset),min(len(pcm),offset+len(frame.pcm))
         if hi>lo:
             pcm[lo:hi] = frame.pcm[lo-offset:hi-offset]

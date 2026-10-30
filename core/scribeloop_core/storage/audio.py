@@ -11,12 +11,13 @@ import json
 import os
 import re
 import struct
+import threading
 import time
 from pathlib import Path
 
 import numpy as np
 
-from ..capture.source import SAMPLE_RATE, AudioFrame
+from ..capture.source import SAMPLE_RATE, AudioFrame, aligned_sample, sample_position
 from .keys import KeyStore, KeyUnavailable
 
 MAGIC = b'SLPA\x01'
@@ -172,6 +173,7 @@ def read_audio(path: Path, session_id: str, stream: str, key: bytes, *, _prefix=
         cipher = _cipher(key, file_id)
         sequence = samples = 0
         last_end = 0.0
+        aligned_end = None
         # Snapshot the byte boundary: a concurrent writer cannot make this read
         # unbounded. Prefix mode tolerates only a missing/incomplete final record;
         # malformed records and failed authentication remain fatal.
@@ -215,23 +217,42 @@ def read_audio(path: Path, session_id: str, stream: str, key: bytes, *, _prefix=
             samples += count
             last_end = t_ms + count * 1000 / SAMPLE_RATE
             sequence += 1
-            yield AudioFrame(pcm, stream, t_ms, time.monotonic())
+            start = aligned_sample(t_ms, aligned_end)
+            aligned_end = start + count
+            yield AudioFrame(pcm, stream, t_ms, time.monotonic(), start)
 
 
 class SessionAudioStore:
-    def __init__(self, root: Path, keys: KeyStore):
+    def __init__(self, root: Path, keys: KeyStore, *, memory_cache=None):
+        from .memory_cache import MemoryCache
         self.root = Path(root)
         self.keys = keys
+        self.memory_cache = memory_cache if memory_cache is not None else MemoryCache()
+        self._unlocked_keys = {}
+        self._key_lock = threading.RLock()
 
     def create_session(self, session_id: str):
         _identity(session_id, 'loopback')
-        self.keys.create('audio:' + session_id)
+        with self._key_lock:
+            key = self.keys.create('audio:' + session_id)
+            if isinstance(key, bytes) and len(key) == 32:
+                self._unlocked_keys[session_id] = key
 
     def _key(self, session_id):
-        key = self.keys.get('audio:' + session_id)
-        if key is None:
-            raise KeyUnavailable('Session audio key is missing')
-        return key
+        with self._key_lock:
+            if session_id in self._unlocked_keys:
+                return self._unlocked_keys[session_id]
+            key = self.keys.get('audio:' + session_id)
+            if not isinstance(key, bytes) or len(key) != 32:
+                raise KeyUnavailable('Session audio key is missing or invalid')
+            self._unlocked_keys[session_id] = key
+            return key
+
+    def clear_unlocked_keys(self):
+        """Release process-only key references after audio workers have stopped."""
+        with self._key_lock:
+            self.memory_cache.clear()
+            self._unlocked_keys.clear()
 
     def original_path(self, session_id, stream):
         _identity(session_id, stream)
@@ -244,6 +265,10 @@ class SessionAudioStore:
 
     def writer(self, session_id, stream):
         return EncryptedAudioWriter(self.original_path(session_id, stream), session_id, stream, self._key(session_id))
+
+    def raw_microphone_writer(self, session_id):
+        path = self.original_path(session_id, 'mic').with_name('mic.raw.slpa')
+        return EncryptedAudioWriter(path, session_id, 'mic', self._key(session_id))
 
     def frames(self, session_id, stream):
         return read_audio(self.path(session_id, stream), session_id, stream, self._key(session_id))
@@ -269,7 +294,7 @@ class SessionAudioStore:
             while True:
                 batch,report=cursor.read(max_frames=8)
                 for frame in batch:
-                    offset=round((frame.t_ms-start_ms)*SAMPLE_RATE/1000)
+                    offset=sample_position(frame)-round(start_ms*SAMPLE_RATE/1000)
                     lo,hi=max(0,offset),min(len(pcm),offset+len(frame.pcm))
                     if hi>lo:
                         pcm[lo:hi]=frame.pcm[lo-offset:hi-offset]
@@ -277,19 +302,22 @@ class SessionAudioStore:
                     if not report['complete']:
                         raise AudioIntegrityError('Incomplete playback audio')
                     break
-        end=min(end_ms,int(report['end_ms']))
+        end=min(end_ms,cursor.aligned_end/SAMPLE_RATE*1000 if cursor.aligned_end is not None else 0)
         if end<=start_ms:
             raise ValueError('No audio in selected playback window')
         return pcm[:round((end-start_ms)*SAMPLE_RATE/1000)]
 
     def forget_session_key(self, session_id):
-        """Irreversible crypto-shred; invoke only from an authorized deletion flow.
+        """Remove the active session key in an authorized deletion flow.
 
         Existing unlocked readers already hold keys in memory and must be stopped
         before deletion. Backed-up keys/ciphertext require a separate retention policy.
         """
         _identity(session_id, 'loopback')
-        self.keys.delete('audio:' + session_id)
+        with self._key_lock:
+            self.memory_cache.invalidate(session_id)
+            self._unlocked_keys.pop(session_id, None)
+            self.keys.delete('audio:' + session_id)
 
 
     def prefix(self, session_id, stream, *, durable=False, original=False):
@@ -356,8 +384,14 @@ class SessionAudioStore:
         directory = self.root / session_id
         if directory.is_symlink():
             raise OSError('Refuse redirected recording directory')
-        if self.keys.get('audio:' + session_id) is not None:
-            self.forget_session_key(session_id)
+        with self._key_lock:
+            self.memory_cache.invalidate(session_id)
+            self._unlocked_keys.pop(session_id, None)
+            delete_if_present = getattr(self.keys, 'delete_if_present', None)
+            if delete_if_present is not None:
+                delete_if_present('audio:' + session_id)
+            elif self.keys.get('audio:' + session_id) is not None:
+                self.forget_session_key(session_id)
         if directory.exists():
             # Only application-owned encrypted artifacts; no arbitrary paths.
             for path in directory.iterdir():

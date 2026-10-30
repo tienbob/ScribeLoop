@@ -29,6 +29,16 @@ def sample(now, *processes, available=True, complete=True):
                             complete=complete, processes=processes)
 
 
+def test_known_microphone_release_is_not_hidden_by_unknown_output():
+    detector=MeetingDetector(APPS)
+    detector.update(sample(0,process(mic=True,output=True)))
+    detector.update(sample(1,process(mic=False,output=None)))
+    assert detector.activity['teams']=='unknown'
+    assert detector.input_activity['teams']=='inactive'
+    detector.update(sample(2,process(mic=None,output=True)))
+    assert detector.input_activity['teams']=='unknown'
+
+
 def test_idle_apps_and_unknown_processes_never_prompt():
     detector = MeetingDetector(APPS)
     for now in range(10):
@@ -53,34 +63,35 @@ def test_helpers_aggregate_and_id_stays_stable_during_mute_and_silence():
     assert detector.update(sample(20)) == ()
 
 
-def test_transient_activity_does_not_accumulate_debounce():
+def test_interrupted_start_does_not_accumulate_confirmation():
     detector = MeetingDetector(APPS)
-    assert detector.update(sample(0, process())) == ()
-    assert detector.update(sample(1)) == ()
-    for now in (2, 3, 4):
-        assert detector.update(sample(now, process())) == ()
-    assert len(detector.update(sample(5, process()))) == 1
+    assert not detector.update(sample(0))
+    assert not detector.update(sample(1, process()))
+    assert not detector.update(sample(2, process(output=False)))
+    assert not detector.update(sample(3, process()))
+    assert len(detector.update(sample(4, process()))) == 1
 
 
 @pytest.mark.parametrize('mic,output', [(True, False), (False, True)])
-def test_single_direction_is_only_ambiguous(mic, output):
+def test_single_direction_never_prompts(mic, output):
     detector = MeetingDetector(APPS)
     detector.update(sample(0, process(mic=mic, output=output)))
-    candidate, = detector.update(sample(3, process(mic=mic, output=output)))
-    assert candidate.confidence == 'ambiguous'
+    assert detector.update(sample(3, process(mic=mic, output=output))) == ()
 
 
 def test_browser_never_claims_a_specific_meeting_even_with_both_directions():
     detector = MeetingDetector(APPS)
     detector.update(sample(0, process('example.browser')))
+    detector.update(sample(1, process('example.browser')))
     candidate, = detector.update(sample(3, process('example.browser')))
     assert candidate.kind == 'browser' and candidate.confidence == 'ambiguous'
 
 
 def test_multiple_candidates_and_dismissal_until_new_episode():
-    detector = MeetingDetector(APPS, end_grace_s=2)
+    detector = MeetingDetector(APPS, end_grace_s=2, dismiss_cooldown_s=2)
     processes = (process(), process('example.slack'))
     detector.update(sample(0, *processes))
+    detector.update(sample(1, *processes))
     rows = detector.update(sample(3, *processes))
     assert len(rows) == 2
     teams = next(row for row in rows if row.app_id == 'teams')
@@ -105,12 +116,14 @@ def test_missing_observations_do_not_satisfy_debounce(failure):
     elif failure == 'partial':
         detector.update(sample(2, process(), complete=False))
     assert detector.update(sample(10, process())) == ()
+    assert detector.update(sample(11, process())) == ()
     assert len(detector.update(sample(13, process()))) == 1
 
 
 def test_observer_failure_does_not_end_or_redisplay_dismissed_episode():
     detector = MeetingDetector(APPS, end_grace_s=2)
     detector.update(sample(0, process()))
+    detector.update(sample(1, process()))
     candidate, = detector.update(sample(3, process()))
     detector.dismiss(candidate.id)
     assert detector.update(sample(4, available=False, complete=False)) == ()
@@ -128,6 +141,7 @@ def test_observer_failure_does_not_end_or_redisplay_dismissed_episode():
 def test_unknown_activity_never_counts_as_idle():
     detector = MeetingDetector(APPS, end_grace_s=2)
     detector.update(sample(0, process()))
+    detector.update(sample(1, process()))
     candidate, = detector.update(sample(3, process()))
     for now in range(4, 10):
         rows = detector.update(sample(now, process(mic=None, output=False)))
@@ -141,7 +155,7 @@ def test_clock_order_config_and_mapping_validation():
         detector.update(sample(1))
     for value in (0, -1, math.inf, math.nan, True):
         with pytest.raises(ValueError):
-            MeetingDetector(APPS, debounce_s=value)
+            MeetingDetector(APPS, confirmation_samples=value)
     with pytest.raises(ValueError, match='Duplicate'):
         MeetingDetector(APPS + (APPS[0],))
     with pytest.raises(ValueError, match='ambiguous'):
@@ -174,3 +188,109 @@ def test_shared_clock_preserves_offsets_gaps_and_large_host_times():
             clock.milliseconds(bad)
     with pytest.raises(ValueError):
         SessionClock(-1)
+
+
+@pytest.mark.parametrize('app', ['example.teams','example.slack','example.browser'])
+def test_repeated_chat_notification_output_never_becomes_a_call(app):
+    detector=MeetingDetector(APPS,)
+    for now in range(120):
+        # Notification sounds, including sustained output-stream activity.
+        assert not detector.update(sample(now,process(app,mic=False,output=now%20<8)))
+    assert not detector._episodes
+
+
+def test_known_microphone_edge_confirms_without_fixed_six_second_wait():
+    detector = MeetingDetector(APPS)
+    assert not detector.update(sample(0))
+    assert not detector.update(sample(1, process()))
+    assert len(detector.update(sample(2, process()))) == 1
+
+
+def test_microphone_edge_can_precede_remote_audio():
+    detector = MeetingDetector(APPS)
+    detector.update(sample(0))
+    for now in range(1, 6):
+        assert not detector.update(sample(now, process(output=False)))
+    assert not detector.update(sample(6, process()))
+    assert len(detector.update(sample(7, process()))) == 1
+
+
+def test_already_held_microphone_plus_notifications_does_not_prompt():
+    detector = MeetingDetector(APPS)
+    for now in range(30):
+        assert not detector.update(sample(now, process(output=now % 10 >= 5)))
+
+
+def test_startup_and_browser_require_three_confirmations():
+    for bundle in ('example.teams', 'example.browser'):
+        detector = MeetingDetector(APPS)
+        assert not detector.update(sample(0, process(bundle)))
+        assert not detector.update(sample(1, process(bundle)))
+        assert len(detector.update(sample(2, process(bundle)))) == 1
+
+
+def test_dismissal_survives_churn_but_new_known_call_bypasses_quiet_period():
+    detector = MeetingDetector(APPS, end_grace_s=2)
+    for now in range(3):
+        rows = detector.update(sample(now, process()))
+    candidate, = rows
+    detector.dismiss(candidate.id)
+    detector.reconfigure(tuple(reversed(APPS)))
+    assert not detector.update(sample(3, process()))
+    detector.update(sample(4))
+    detector.update(sample(6))
+    assert not detector.update(sample(7, process()))
+    fresh, = detector.update(sample(8, process()))
+    assert fresh.id != candidate.id
+
+
+def test_uncertain_reappearance_stays_suppressed_during_quiet_period():
+    detector = MeetingDetector(APPS, end_grace_s=2)
+    for now in range(3):
+        rows = detector.update(sample(now, process()))
+    detector.dismiss(rows[0].id)
+    detector.update(sample(3))
+    detector.update(sample(5))
+    detector.update(sample(6, available=False, complete=False))
+    for now in range(7, 12):
+        assert not detector.update(sample(now, process()))
+
+
+def test_direction_loss_does_not_mark_a_running_call_inactive():
+    detector=MeetingDetector(APPS)
+    detector.update(sample(0,process()))
+    detector.update(sample(3,process()))
+    detector.update(sample(4,process(mic=False)))
+    assert detector.activity['teams']=='active'
+
+
+def test_failed_browser_recording_rearms_next_input_edge_with_other_tab_audio():
+    detector = MeetingDetector(APPS)
+    for now in range(3):
+        rows = detector.update(sample(now,process('example.browser')))
+    original = rows[0]
+    detector.dismiss(original.id)
+    detector.recording_failed('browser')
+    for now in range(3,8):
+        assert not detector.update(sample(now,process('example.browser'))), 'No repeated prompt in the same failed call'
+    assert not detector.update(sample(8,process('example.browser',mic=False)))
+    assert not detector.update(sample(9,process('example.browser')))
+    assert not detector.update(sample(10,process('example.browser')))
+    fresh, = detector.update(sample(11,process('example.browser')))
+    assert fresh.id != original.id
+
+
+def test_not_now_survives_mute_but_quick_redial_after_full_idle_rearms():
+    detector = MeetingDetector(APPS)
+    for now in range(3):
+        rows=detector.update(sample(now,process()))
+    original=rows[0]
+    detector.dismiss(original.id)
+    detector.update(sample(3,process(mic=False)))
+    for now in range(4,7):
+        assert not detector.update(sample(now,process())), 'Ordinary mute/unmute must retain Not now'
+    detector.update(sample(7))
+    detector.update(sample(8))
+    assert not detector.update(sample(9,process()))
+    fresh, = detector.update(sample(10,process()))
+    assert fresh.id != original.id

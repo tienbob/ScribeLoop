@@ -30,12 +30,13 @@ def recording_pcm(audio, session_id):
             frames.append(frame)  # Footer checked before use.
         if not frames:
             raise ValueError('Recording has an empty selected stream')
-        end = max(round(frame.t_ms * 16) + frame.pcm.size for frame in frames)
+        from ..capture.source import sample_position
+        end = max(sample_position(frame) + frame.pcm.size for frame in frames)
         if not 0 < end <= 305 * 16000:
             raise ValueError('Recording exceeds five-minute development limit')
         pcm = np.zeros(end, dtype=np.float32)
         for frame in frames:
-            start = round(frame.t_ms * 16)
+            start = sample_position(frame)
             pcm[start:start + frame.pcm.size] = frame.pcm
         tracks[stream] = pcm
     return tracks

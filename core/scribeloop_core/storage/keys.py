@@ -35,6 +35,9 @@ class NativeKeyStore:
             else:
                 raise KeyUnavailable('No supported native keystore on this platform')
             self._backend = Keyring()
+            if sys.platform == 'darwin':
+                from keyring.backends.macOS import api
+                self._macos_api = api
         except (ImportError, RuntimeError):
             raise KeyUnavailable('Native keystore unavailable; no fallback is permitted') from None
 
@@ -64,12 +67,33 @@ class NativeKeyStore:
             raise KeyUnavailable('Native keystore write failed') from None
         return key
 
-    def delete(self, account: str) -> None:
-        if self.get(account) is None:
-            raise KeyUnavailable('Key not found')
+    def _exists(self, account: str) -> bool:
+        api = getattr(self, '_macos_api', None)
+        if api is None:
+            return self.get(account) is not None
+        # No kSecReturnData: checking identity must not unlock/read the secret.
+        query = api.create_query(kSecClass=api.k_('kSecClassGenericPassword'),
+                                 kSecAttrService=SERVICE, kSecAttrAccount=account)
+        status = api.SecItemCopyMatching(query, None)
+        if status == api.error.item_not_found:
+            return False
+        api.Error.raise_for_status(status)
+        return True
+
+    def _delete(self, account: str, *, missing_ok: bool) -> None:
         try:
+            if not self._exists(account):
+                if missing_ok:
+                    return
+                raise KeyUnavailable('Key not found')
             self._backend.delete_password(SERVICE, account)
-            if self.get(account) is not None:
+            if self._exists(account):
                 raise KeyUnavailable('Key still present')
         except Exception:  # noqa: BLE001 - sanitize native provider errors
             raise KeyUnavailable('Native keystore deletion failed') from None
+
+    def delete(self, account: str) -> None:
+        self._delete(account, missing_ok=False)
+
+    def delete_if_present(self, account: str) -> None:
+        self._delete(account, missing_ok=True)

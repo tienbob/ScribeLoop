@@ -78,3 +78,25 @@ def request_microphone_access(helper_path=None):
     except (OSError, subprocess.SubprocessError):
         raise ValueError('Microphone permission request failed; check System Settings') from None
     return result.stdout.decode().strip()
+
+
+def check_capture_access(helper_path):
+    """Read-only native source enumeration; no audio streams or paid requests."""
+    from ..pipeline.failures import failure_diagnostic
+    try:
+        result = subprocess.run([str(Path(helper_path).resolve()),'--check-capture-access'],
+            capture_output=True,timeout=15,check=True)
+        if len(result.stdout)>2048:
+            raise ValueError('Oversized capture access result')
+        value = json.loads(result.stdout)
+        if (set(value)!={'microphone','output_access','display_available'} or
+                value['microphone'] not in {'authorized','denied','restricted','not_determined','unknown'} or
+                type(value['output_access']) is not bool or type(value['display_available']) is not bool):
+            raise ValueError('Invalid capture access result')
+        return {'ok':True,**value}
+    except subprocess.CalledProcessError as exc:
+        marker = exc.stderr[-2048:].decode('utf-8',errors='replace')
+        return {'ok':False,'diagnostic':failure_diagnostic(RuntimeError(marker),'capture')}
+    except (OSError,subprocess.TimeoutExpired,ValueError,TypeError,KeyError):
+        return {'ok':False,'diagnostic':{'code':'access_check_unavailable',
+            'message':'Could not check capture access. This does not establish that permission is missing.'}}

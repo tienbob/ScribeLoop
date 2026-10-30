@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 
+import httpx
 import numpy as np
 import pytest
 from scribeloop_core.pipeline.deepgram_meeting import (
@@ -171,6 +172,10 @@ async def test_fault_keeps_recorder_running_and_fresh_resume_does_not_merge_peop
     await runner.task
     labels={r['speaker_label'] for r in store.segments(sid)}
     assert len(labels)==4
+    runner.cloud.batch_transport=httpx.MockTransport(lambda request:httpx.Response(200,json={
+        'results':{'channels':[{'alternatives':[{'words':[
+            {'word':'hello','start':0,'end':.1,'speaker':0},
+            {'word':'there','start':.1,'end':.2,'speaker':1}]}]} for _ in range(2)]}}))
     runner.reprocess(sid,language='en',cloud_consent=True)
     await runner.task
     new_labels={r['speaker_label'] for r in store.segments(sid)}
@@ -309,7 +314,8 @@ def test_wrong_provider_configuration_is_rejected_before_key_dispatch(state):
 
 
 @pytest.mark.asyncio
-async def test_automatic_multilingual_keeps_word_languages_and_speaker_separation(state):
+@pytest.mark.parametrize('hints',[None,['en','fr','ja'],['zh-HK']])
+async def test_automatic_multilingual_keeps_word_languages_and_speaker_separation(state,hints):
     from urllib.parse import parse_qs, urlsplit
     store,audio,_,publish=state
     urls=[]
@@ -318,34 +324,36 @@ async def test_automatic_multilingual_keeps_word_languages_and_speaker_separatio
             result=json.loads(super().recv(timeout))
             if result['type']=='Results':
                 alt=result['channel']['alternatives'][0]
-                alt['languages']=['en','es']
-                for word,code in zip(alt['words'],('en','es'),strict=True):
+                alt['languages']=['en','vi']
+                for word,code in zip(alt['words'],('en','vi'),strict=True):
                     word['language']=code
             return json.dumps(result)
     def connector(url,**kwargs):
         query=parse_qs(urlsplit(url).query)
         assert query['language']==['multi'] and query['diarize_model']==['v1']
-        assert 'detect_language' not in query and 'language_hint' not in query
+        assert 'detect_language' not in query
+        assert query['language_hint']==(hints or ['en','vi'])
         urls.append(url)
         return MultilingualSocket()
     source=ControlledSource()
     runner=DeepgramRecordingRunner(store,audio,lambda *a,**k:source,publish,
         config=DeepgramConfig(api_key='test-key',connector=connector))
-    sid=runner.start(None,{'cloud_consent':True,'language':'auto'},'Multilingual',consent_confirmed=True)['id']
+    sid=runner.start(None,{'cloud_consent':True,'language':'auto','language_hints':hints},'Multilingual',consent_confirmed=True)['id']
     await wait_for(lambda:len(store.segments(sid))>=4)
     runner.stop(sid)
     await runner.task
     assert len(urls)==2
     assert store.language_lock(sid)['mode']=='multilingual'
     rows=store.segments(sid)
-    assert {r['language'] for r in rows}=={'en','es'}
+    assert {r['language'] for r in rows}=={'en','vi'}
     assert len({r['speaker_label'] for r in rows})==4
-    assert runner.cloud.public()['language_hints'] is False
+    assert runner.cloud.public()['language_hints'] is True
+    assert runner.cloud.public()['auto_languages']==['en','vi']
 
 
 def test_same_speaker_changes_language_without_getting_new_person_identity():
     payload=event([{'word':'hello','speaker':0,'start':0,'end':.1,'language':'en'},
-                   {'word':'hola','speaker':0,'start':.1,'end':.2,'language':'es'}])
+                   {'word':'chào','speaker':0,'start':.1,'end':.2,'language':'vi'}])
     rows=speaker_rows(payload,stream='loopback',epoch='a'*32,base_ms=0,sent_ms=200,language='multi')
     assert len(rows)==2 and rows[0]['speaker_key']==rows[1]['speaker_key']
-    assert [r['language'] for r in rows]==['en','es']
+    assert [r['language'] for r in rows]==['en','vi']

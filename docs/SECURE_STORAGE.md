@@ -1,3 +1,8 @@
+> Updated 2026-10-28: the native recorder and desktop app are implemented. Audio
+> keys now use workspace-encrypted envelopes: one workspace unlock covers new and
+> migrated recordings. See [current key management](../packaging/macos/DESKTOP.md#one-workspace-unlock).
+> Earlier Phase 1 implementation evidence and keystore descriptions below are historical.
+
 # Phase 1 secure storage foundation — 2026-10-22
 
 Implemented: SQLCipher application database + native OS-keystore lifecycle,

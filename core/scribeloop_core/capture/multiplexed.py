@@ -26,6 +26,7 @@ class MultiplexedPCMSource(PCMProcessSource):
         super().__init__(command, timeout_s=timeout_s)
         self.expected_streams = tuple(expected_streams)
         self.clock: SessionClock | None = None
+        self._stop_requested = False
         self.monitors = {stream: CaptureSilenceMonitor(stream) for stream in self.expected_streams}
 
     def frames(self):
@@ -61,8 +62,10 @@ class MultiplexedPCMSource(PCMProcessSource):
                     raise RuntimeError(f'Native capture ended (exit {status}): {self._diagnostic()}')
                 magic, count, tag, reserved, timestamp = PACKET.unpack(header)
                 if magic == b'SLE2':
+                    with self._lifecycle_lock:
+                        stopped = self._stop_requested
                     if (count != 0 or tag != 255 or reserved != b'\0\0\0' or timestamp != 0
-                            or seen != set(self.expected_streams)):
+                            or (seen != set(self.expected_streams) and not stopped)):
                         raise ValueError('Invalid stream completion')
                     if self._read(1, allow_eof=True, deadline=deadline):
                         raise ValueError('Unexpected bytes after stream completion')
@@ -72,6 +75,7 @@ class MultiplexedPCMSource(PCMProcessSource):
                         raise TimeoutError('Native helper did not finish shutdown') from None
                     if status != 0:
                         raise RuntimeError('Native helper failed during shutdown')
+                    self.end_reason = self._source_end_reason()
                     return
                 stream = STREAMS.get(tag)
                 if (magic != b'SLP2' or reserved != b'\0\0\0'
@@ -112,6 +116,7 @@ class MultiplexedPCMSource(PCMProcessSource):
                 self._process.stdin.write(b'STOP\n')
                 self._process.stdin.flush()
                 self._process.stdin.close()
+                self._stop_requested = True
                 return True
             except OSError:
                 return False

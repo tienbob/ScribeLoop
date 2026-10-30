@@ -101,3 +101,32 @@ def test_late_packet_cannot_reset_expired_stream_deadline(tmp_path):
     source = MultiplexedPCMSource(helper(tmp_path, initial, body), timeout_s=.2)
     with pytest.raises(TimeoutError, match='stalled'):
         list(source.frames())
+
+
+@pytest.mark.parametrize('initial', [b'', packet(0, 0)], ids=['no-pcm', 'one-track'])
+def test_accepted_startup_stop_allows_missing_tracks(tmp_path, initial):
+    # Synchronize STOP before reading completion; never open capture devices.
+    tail = ("assert sys.stdin.buffer.read(5)==b'STOP\\n'\n"
+            f"sys.stdout.buffer.write({END!r}); sys.stdout.flush()\n")
+    source = MultiplexedPCMSource(helper(tmp_path, PREFIX + initial, tail))
+    start = source._start_process
+    def start_and_stop(**kwargs):
+        start(**kwargs)
+        assert source.request_stop() is True
+    source._start_process = start_and_stop
+    assert len(list(source.frames())) == bool(initial)
+    assert source._process.returncode == 0
+
+
+@pytest.mark.parametrize('ending,exit_code', [(END + b'extra', 0), (END, 1), (b'', 0)])
+def test_startup_stop_still_requires_valid_completion_and_success(tmp_path, ending, exit_code):
+    tail = ("assert sys.stdin.buffer.read(5)==b'STOP\\n'\n"
+            f"sys.stdout.buffer.write({ending!r}); sys.stdout.flush(); sys.exit({exit_code})\n")
+    source = MultiplexedPCMSource(helper(tmp_path, PREFIX, tail))
+    start = source._start_process
+    def start_and_stop(**kwargs):
+        start(**kwargs)
+        assert source.request_stop() is True
+    source._start_process = start_and_stop
+    with pytest.raises((ValueError, RuntimeError)):
+        list(source.frames())

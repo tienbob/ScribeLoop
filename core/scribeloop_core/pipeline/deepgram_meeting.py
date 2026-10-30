@@ -1,16 +1,20 @@
 """Single-provider streaming transcription and anonymous word-level speakers.
 
-Each source owns one connection. No automatic reconnection, second pass, local
-speech model, or cross-connection identity matching. Capture remains independent.
+Each source owns one live connection. An explicitly enabled final pass can refine
+the saved transcript after Stop. No automatic reconnect or provider switching;
+capture remains independent.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from time import monotonic as wall_clock
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -18,14 +22,37 @@ import numpy as np
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.sync.client import connect
 
+from ..capture.source import sample_position
+from ..storage.db import DATABASE_ERRORS
 from .cloud_meeting import CloudRecordingRunner, pcm_window
-from .languages import AUTO_LANGUAGES, LANGUAGE_CHOICES, LANGUAGE_NAMES, word_language
+from .languages import (
+    AUTO_LANGUAGES,
+    LANGUAGE_CHOICES,
+    LANGUAGE_NAMES,
+    deepgram_language_options,
+    validate_language_hints,
+    word_language,
+)
+from .transcription_quality import TranscriptionQuality, recognition_audio
 
 STREAMS = ('loopback', 'mic')
+log = logging.getLogger(__name__)
 
 
 class DeepgramError(RuntimeError):
     pass
+
+
+def available_audio_ms(report):
+    """Use reconstructed sample time, preserving the final sub-ms audio tail.
+
+    Streaming protocol/checkpoints use integer ms. Only a completed track may
+    pad its last fractional millisecond; an unfinished track waits for more PCM.
+    """
+    samples = report.get('timeline_end_samples')
+    if samples is None:
+        return int(report['end_ms'])
+    return (samples+15)//16 if report['complete'] else samples//16
 
 
 class DeepgramConfig:
@@ -33,7 +60,7 @@ class DeepgramConfig:
     model = 'nova-3'
     rate = .60  # Conservative estimate including diarization, not actual billing.
 
-    def __init__(self, *, api_key=None, connector=None, budget_usd=.15, max_requests=80):
+    def __init__(self, *, api_key=None, connector=None, batch_transport=None, budget_usd=.15, max_requests=80, write_timeout_s=5., quality=None):
         if not 0 < budget_usd <= 10 or not 1 <= max_requests <= 7200:
             raise ValueError('Invalid cloud budget')
         if api_key is None:
@@ -48,16 +75,22 @@ class DeepgramConfig:
                             api_key = api_key[1:-1]
             if not 16 <= len(api_key) <= 512 or not api_key.isascii() or any(c.isspace() for c in api_key):
                 api_key = ''
+        self.quality = TranscriptionQuality.model_validate(quality or {})
         self.api_key = api_key
         self.connector = connector or connect
+        self.batch_transport = batch_transport
         self.budget_usd, self.max_requests = budget_usd, max_requests
+        if not isinstance(write_timeout_s,(int,float)) or isinstance(write_timeout_s,bool) or not 0<write_timeout_s<=30:
+            raise ValueError('Invalid streaming write deadline')
+        self.write_timeout_s = write_timeout_s
 
     def public(self):
         return {'provider':self.provider, 'model':self.model, 'cloud':True,
             'configured':bool(self.api_key), 'speaker_labels':True, 'streaming':True,
-            'languages':{'auto':'Auto · multilingual',**{k:v for k,v in LANGUAGE_NAMES.items() if k in LANGUAGE_CHOICES}},
+            'languages':{'auto':'English + Tiếng Việt',**{k:v for k,v in LANGUAGE_NAMES.items() if k in LANGUAGE_CHOICES}},
             'default_language':'auto', 'auto_language':True,
-            'auto_languages':list(AUTO_LANGUAGES), 'language_hints':False,
+            'auto_languages':list(AUTO_LANGUAGES), 'language_hints':True,
+            'language_hints_restrict':False,
             'budget_usd':self.budget_usd, 'max_requests':self.max_requests,
             'nominal_usd_per_audio_hour':self.rate, 'updates':'streaming provisional and confirmed text'}
 
@@ -68,15 +101,15 @@ class StreamingBudget:
         self.requests, self.usd = prior.get('requests',0), prior.get('estimated_usd',0)
         self.lock = threading.Lock()
 
-    def reserve(self, stream, emit, cancelled):
+    def reserve(self, stream, emit, cancelled, *, seconds=10):
         with self.lock:
-            usd = 10/3600*self.config.rate
+            usd = seconds/3600*self.config.rate
             if self.requests >= self.config.max_requests or self.usd+usd > self.config.budget_usd+1e-12:
                 raise DeepgramError('Cloud audio budget reached; recording remains encrypted')
             ack = threading.Event()
             emit({'type':'cloud_request','ack':ack,'reservation':{
                 'provider':'deepgram','model':'nova-3','stream':stream,
-                'billed_audio_s':10,'estimated_usd':usd,'reserved_at_ms':round(time.time()*1000)}})
+                'billed_audio_s':seconds,'estimated_usd':usd,'reserved_at_ms':round(time.time()*1000)}})
             while not ack.wait(.05):
                 if cancelled.is_set():
                     raise InterruptedError('Cancelled before upload')
@@ -86,7 +119,7 @@ class StreamingBudget:
             self.usd += usd
 
 
-def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
+def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language, end_tolerance_ms=1):
     """Final-only rows, split at every speaker change; missing labels stay unknown."""
     alternative = event['channel']['alternatives'][0]
     groups = []
@@ -96,7 +129,7 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
                 or not isinstance(end,(int,float)) or not np.isfinite([start,end]).all()):
             raise DeepgramError('Invalid provider timestamps')
         a, b = base_ms+round(start*1000), base_ms+round(end*1000)
-        if not base_ms <= a < b <= sent_ms+1:
+        if not (base_ms <= a < min(b,sent_ms) and b <= sent_ms+end_tolerance_ms):
             raise DeepgramError('Provider transcript exceeds sent audio')
         b = min(b,sent_ms)
         speaker = word.get('speaker')
@@ -110,7 +143,8 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
         if language == 'multi' and detected is None:
             candidates = alternative.get('languages',[])
             detected = word_language(candidates[0]) if len(candidates) == 1 else None
-        if groups and groups[-1]['speaker_key'] == key and groups[-1]['language'] == detected:
+        if (groups and groups[-1]['speaker_key'] == key and groups[-1]['language'] == detected
+                and a-groups[-1]['end_ms'] < 1500 and len(groups[-1]['text'])+len(text) < 2000):
             groups[-1]['end_ms'] = max(groups[-1]['end_ms'],b)
             groups[-1]['text'] += ' '+text
         else:
@@ -125,6 +159,62 @@ def speaker_rows(event, *, stream, epoch, base_ms, sent_ms, language):
             'text':alternative['transcript'].strip(),'speaker_key':None,
             'is_final':True,'language':None if language == 'multi' else language,'confidence':None})
     return groups
+
+
+class StreamWrites:
+    """Interrupt blocked socket writes without waiting for the protocol mutex."""
+    def __init__(self, ws, cancelled, timeout):
+        self.ws, self.cancelled, self.timeout = ws, cancelled, timeout
+        self.stopped = threading.Event()
+        self.timed_out = threading.Event()
+        self.deadline = None
+
+    def __enter__(self):
+        self.worker = threading.Thread(target=self.watch, name='stream-write-deadline', daemon=True)
+        self.worker.start()
+        return self
+
+    def watch(self):
+        while not self.stopped.wait(.02):
+            deadline = self.deadline
+            expired = deadline is not None and wall_clock() >= deadline
+            if self.cancelled.is_set() or expired:
+                if expired:
+                    self.timed_out.set()
+                connection = getattr(self.ws,'socket',None)
+                if connection is not None:
+                    # close()/close_socket() can wait for a mutex held by sendall.
+                    # shutdown wakes the write and receiver without acquiring it.
+                    try:
+                        connection.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                elif callable(getattr(self.ws,'abort',None)):
+                    self.ws.abort()  # Injected transports implement the same abort contract.
+                return
+
+    def send(self, value):
+        if self.cancelled.is_set():
+            raise InterruptedError('Streaming cancelled; saved audio is preserved')
+        self.deadline = wall_clock()+self.timeout
+        try:
+            self.ws.send(value)
+        except Exception:
+            if self.cancelled.is_set():
+                raise InterruptedError('Streaming cancelled; saved audio is preserved') from None
+            if self.timed_out.is_set():
+                raise DeepgramError('Streaming upload timed out; saved audio is preserved; no retry was made') from None
+            raise
+        finally:
+            self.deadline = None
+        if self.timed_out.is_set():
+            raise DeepgramError('Streaming upload timed out; saved audio is preserved; no retry was made')
+        if self.cancelled.is_set():
+            raise InterruptedError('Streaming cancelled; saved audio is preserved')
+
+    def __exit__(self, *_):
+        self.stopped.set()
+        self.worker.join(.2)
 
 
 def stream_track(audio, sid, stream, emit, cancelled, done, **kwargs):
@@ -142,19 +232,19 @@ def stream_track(audio, sid, stream, emit, cancelled, done, **kwargs):
         return _stream_cursor(cursor,sid,stream,emit,cancelled,done,**kwargs)
 
 
-def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint):
+def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget, language, checkpoint, language_hints=None):
     sent = confirmed = base = checkpoint
     epoch = uuid4().hex
     frames=[]
     def remember(batch):
-        frames.extend(f for f in batch if f.t_ms+f.pcm.size/16>sent)
-        if len(frames)>16 or sum(f.pcm.size for f in frames)>10*16000:
+        frames.extend(f for f in batch if sample_position(f)+f.pcm.size>sent*16)
+        if len(frames)>64000 or sum(f.pcm.size for f in frames)>4*16000:
             raise DeepgramError('Encrypted audio frame timeline is not advancing')
     # Do not open a paid connection until there is recorded audio to send.
     while not cancelled.is_set():
         finished = done.is_set()
         try:
-            batch, report = cursor.read(durable=True)
+            batch, report = cursor.read(max_frames=64,max_samples=16000,durable=True)
             remember(batch)
         except FileNotFoundError:
             if done.is_set():
@@ -163,10 +253,10 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
             continue
         if finished and report['caught_up'] and not report['complete']:
             raise DeepgramError('Recover incomplete audio before resume')
-        if int(report['end_ms']) > sent:
+        if available_audio_ms(report) > sent:
             break
         if finished and report['complete']:
-            if checkpoint>int(report['end_ms']):
+            if checkpoint>available_audio_ms(report):
                 raise DeepgramError('Checkpoint exceeds authenticated audio')
             return
         if not report['caught_up']:
@@ -176,25 +266,31 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
         return
     budget.reserve(stream,emit,cancelled)
     reserved_until = sent+10000
-    params = {'model':'nova-3','language':language,'encoding':'linear16','sample_rate':16000,
-        'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1'}
-    url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params)
+    params = {'model':'nova-3',**deepgram_language_options(language,language_hints),'encoding':'linear16','sample_rate':16000,
+        'channels':1,'interim_results':'true','punctuate':'true','endpointing':300,'diarize_model':'v1',
+        **config.quality.deepgram_options()}
+    url = 'wss://api.deepgram.com/v1/listen?'+urlencode(params,doseq=True)
     # No redirect following: authorization must only reach this fixed host.
     from websockets.exceptions import SecurityError
     try:
         with config.connector(url,additional_headers={'Authorization':'Token '+config.api_key},
-                open_timeout=10,close_timeout=2,max_size=1_000_000,proxy=None) as ws:
+                open_timeout=10,close_timeout=2,max_size=1_000_000,proxy=None) as ws, StreamWrites(ws,cancelled,config.write_timeout_s) as writes:
             closing = None
             processed_ms = None
             provisional_end = None
             refresh = 0
+            progress_refresh = 0
             while not cancelled.is_set():
                 if closing is None and time.monotonic() >= refresh:
                     finished = done.is_set()
-                    if sent>=int(report['end_ms']) and not report['complete']:
-                        batch,report = cursor.read(durable=True)
+                    # Fill a duration-bounded window regardless of packet size.
+                    # Large packets may overshoot by one frame; memory stays bounded.
+                    while available_audio_ms(report)<sent+1000 and not report['complete'] and not cancelled.is_set():
+                        batch,report = cursor.read(max_frames=64,max_samples=16000,durable=True)
                         remember(batch)
-                    available = int(report['end_ms'])
+                        if report['caught_up']:
+                            break
+                    available = available_audio_ms(report)
                     emit({'type':'recorded_checkpoint','stream':stream,'end_ms':available})
                     refresh = time.monotonic()+.1
                     if finished and report['caught_up'] and not report['complete']:
@@ -203,15 +299,22 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
                     end = min(available,sent+1000,reserved_until)
                     if end > sent:
                         pcm = pcm_window(frames,sent,end)
-                        ws.send(np.clip(pcm*32767,-32768,32767).astype('<i2').tobytes())
+                        writes.send(np.clip(pcm*32767,-32768,32767).astype('<i2').tobytes())
                         sent = end
-                        frames[:]=[f for f in frames if f.t_ms+f.pcm.size/16>sent]
+                        frames[:]=[f for f in frames if sample_position(f)+f.pcm.size>sent*16]
                     if sent >= reserved_until and available > sent:
                         budget.reserve(stream,emit,cancelled)
                         reserved_until += 10000
                     if finished and report['complete'] and sent >= available:
-                        ws.send(json.dumps({'type':'CloseStream'}))
+                        writes.send(json.dumps({'type':'CloseStream'}))
                         closing = time.monotonic()
+                    if closing is None and (not report['caught_up'] or available>sent):
+                        refresh = 0  # Catch up promptly; recv below still gets a turn.
+                    if time.monotonic() >= progress_refresh:
+                        emit({'type':'transcription_progress','stream':stream,'mode':'streaming',
+                            'recorded_ms':available,'sent_ms':sent,'confirmed_ms':confirmed,
+                            'send_lag_ms':max(0,available-sent),'lag_ms':max(0,sent-confirmed)})
+                        progress_refresh = time.monotonic()+.5
                 if closing is not None and time.monotonic()-closing > 15:
                     raise DeepgramError('Provider did not finalize in time')
                 try:
@@ -243,16 +346,22 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
                     emit({'type':'partial','stream':stream,'segment':{'text':alt.get('transcript','')}})
                     continue
                 end = base+round((event['start']+event['duration'])*1000)
-                if not confirmed <= end <= sent+1:
+                # Final model word boundaries may slightly exceed the supplied
+                # clip after CloseStream (observed 20 ms). Permit only bounded
+                # closing-tail rounding; starts still must be inside sent audio.
+                end_tolerance = 100 if closing is not None else 1
+                if not confirmed <= end <= sent+end_tolerance:
                     raise DeepgramError('Invalid confirmation timeline')
                 end = min(end,sent)
-                rows = speaker_rows(event,stream=stream,epoch=epoch,base_ms=base,sent_ms=sent,language=language)
+                rows = speaker_rows(event,stream=stream,epoch=epoch,base_ms=base,sent_ms=sent,language=language,
+                                    end_tolerance_ms=end_tolerance)
                 if any(row['start_ms'] < confirmed or row['end_ms'] > end for row in rows):
                     raise DeepgramError('Overlapping final provider response')
                 emit({'type':'confirmed_window','stream':stream,'segments':rows,'end_ms':end})
                 confirmed = end
                 emit({'type':'transcription_progress','stream':stream,'mode':'streaming',
-                    'recorded_ms':available,'confirmed_ms':end,'lag_ms':max(0,available-end)})
+                    'recorded_ms':available,'sent_ms':sent,'confirmed_ms':end,
+                    'send_lag_ms':max(0,available-sent),'lag_ms':max(0,sent-end)})
     except InvalidStatus as exc:
         status = exc.response.status_code
         reason = {401:'Deepgram key was rejected',402:'Deepgram credits/budget unavailable',
@@ -262,7 +371,7 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
         raise DeepgramError('Deepgram connection security check failed') from None
 
 
-def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto',checkpoints=None,**_):
+def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto',checkpoints=None,language_hints=None,**_):
     if language not in LANGUAGE_CHOICES or not config.api_key:
         raise DeepgramError('Choose Auto or a supported language and configure Deepgram locally')
     if done.is_set():
@@ -272,9 +381,11 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
             checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0)
             if cancelled.is_set():
                 return
-            if not report['complete'] or type(checkpoint) is not int or not 0<=checkpoint<=int(report['end_ms']):
+            if not report['complete'] or type(checkpoint) is not int or not 0<=checkpoint<=available_audio_ms(report):
                 raise DeepgramError('Recover incomplete audio or invalid saved checkpoints before resume')
-    automatic = language == 'auto'
+    if language_hints is not None:
+        language_hints = validate_language_hints(language_hints)
+    automatic = language == 'auto' or language_hints is not None
     language = 'multi' if automatic else language
     emit({'type':'language_locked','language':language,'mode':'multilingual' if automatic else 'manual',
           'confidence':None,'sample_s':0})
@@ -288,7 +399,8 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
     def track(stream):
         try:
             stream_track(audio,sid,stream,emit,Cancel(),done,config=config,budget=budget,
-                language=language,checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0))
+                language=language,language_hints=language_hints,
+                checkpoint=(checkpoints or {}).get(stream,{}).get('confirmed_ms',0))
         except Exception:
             failed.set()
             raise
@@ -306,6 +418,8 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             raise TypeError('The streaming app requires a Deepgram configuration')
         super().__init__(*args,config=config,**kwargs)
         self.budget = StreamingBudget(config,{})
+        self.language_hints = None
+        self.quality = config.quality
 
     def _authorize(self,confirmed):
         if confirmed is not True:
@@ -314,13 +428,21 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             raise ValueError('Configure DEEPGRAM_API_KEY locally')
 
     def start(self,selection,metadata,title, *, consent_confirmed):
+        if self.closed or self.active_id or (self.task and not self.task.done()):
+            raise ValueError('Wait for recording and processing to finish')
         self._authorize(metadata.get('cloud_consent'))
         if metadata.get('language','auto') not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         self.budget = StreamingBudget(self.cloud,{})
         from .recording import RecordingRunner
-        return RecordingRunner.start(self,selection,{**metadata,'provider':'deepgram','model':'nova-3',
+        hints = metadata.get('language_hints')
+        hints = validate_language_hints(hints) if hints is not None else None
+        self.quality = TranscriptionQuality.model_validate(metadata.get('transcription_quality') or self.cloud.quality)
+        self.keep_raw_microphone = self.quality.asr_microphone_source == 'raw'
+        result = RecordingRunner.start(self,selection,{**metadata,'transcription_quality':self.quality.model_dump(),'provider':'deepgram','model':'nova-3',
             'cloud_budget_usd':self.cloud.budget_usd},title,consent_confirmed=consent_confirmed)
+        self.language_hints = hints
+        return result
 
     def _saved_authorization(self,sid,cloud_consent):
         self._saved(sid)
@@ -328,30 +450,61 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         self.store.grant_cloud(sid,'nova-3',provider='deepgram')
         self.budget = StreamingBudget(self.cloud,self.store.cloud_usage(sid))
 
-    def resume(self,sid, *, language='auto',cloud_consent=False):
+    def resume(self,sid, *, language='auto',cloud_consent=False,language_hints=None):
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         self._saved(sid)
         if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,'deepgram'}:
             raise ValueError('Saved transcript uses another provider; explicitly replace it instead of mixing backends')
-        return super().resume(sid,language=language,cloud_consent=cloud_consent)
+        hints = validate_language_hints(language_hints) if language_hints is not None else None
+        self.quality = TranscriptionQuality.model_validate(self.store.get(sid)['capture'].get('transcription_quality') or {}).model_copy(update={'final_transcription':False})
+        result = super().resume(sid,language=language,cloud_consent=cloud_consent)
+        self.language_hints = hints
+        return result
 
-    def reprocess(self,sid, *, language,cloud_consent=False):
+    def reprocess(self,sid, *, language,cloud_consent=False,language_hints=None):
+        self._saved(sid)
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
-        return super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        hints = validate_language_hints(language_hints) if language_hints is not None else None
+        self.quality = self.cloud.quality
+        result = super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        self.language_hints = hints
+        return result
 
     def _live(self,audio,sid,emit,cancelled,done,**kwargs):
-        return run_streaming(audio,sid,emit,cancelled,done,config=self.cloud,budget=self.budget,**kwargs)
+        return run_streaming(recognition_audio(audio,self.quality),sid,emit,cancelled,done,config=self._quality_config(),budget=self.budget,
+                             language_hints=self.language_hints,**kwargs)
 
     def _batch(self,audio,sid,emit,cancelled):
-        done = threading.Event()
-        done.set()
-        def convert(event):
-            if event['type'] == 'confirmed_window':
-                for row in event['segments']:
-                    emit(row)
-            else:
-                emit(event)
-        return run_streaming(audio,sid,convert,cancelled,done,config=self.cloud,budget=self.budget,
-                             language=self.language)
+        from .deepgram_batch import run_batch
+        return run_batch(recognition_audio(audio,self.quality),sid,emit,cancelled,config=self._quality_config(),budget=self.budget,
+                         language=self.language,language_hints=self.language_hints)
+
+    def _quality_config(self):
+        # Per-session snapshot: settings changed later must not alter resumed streams.
+        import copy
+        config = copy.copy(self.cloud)
+        config.quality = self.quality
+        return config
+
+    async def _complete_live(self, session_id):
+        if not self.quality.final_transcription or self.closed or not self.store.segments(session_id):
+            return await super()._complete_live(session_id)
+        await self.publish({'type':'transcription_stage','session_id':session_id,'stage':'finalizing'})
+        try:
+            replacement = await self._process(session_id,replace=True,finalize=False)
+            if not replacement:
+                raise DeepgramError('Empty final transcript')
+        except DATABASE_ERRORS:
+            raise
+        except Exception as exc:  # noqa: BLE001 - optional provider pass; retain live transcript
+            log.warning('Optional final transcription failed (%s)',type(exc).__name__)
+            self.store.record_final_transcription(session_id,'failed')
+            await self.publish({'type':'transcription_warning','session_id':session_id,
+                'message':'Final transcription could not finish. The live transcript is retained; no retry was made.'})
+        else:
+            # Storage/commit failures remain visible failures, never a provider fallback.
+            await self._replace_transcript(session_id,replacement)
+            self.store.record_final_transcription(session_id,'completed')
+        await self._finish(session_id)

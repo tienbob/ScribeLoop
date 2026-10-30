@@ -9,6 +9,7 @@ encryption, §6) is not needed.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -20,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 14
 
 DDL = """
 CREATE TABLE sessions (
@@ -124,6 +125,19 @@ def configure(conn) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
 
 
+def ensure_transcript_revision(conn,session_id,revision,*,origin='confirmed',created_at=None):
+    """Insert missing provenance without replacing an existing revision's history."""
+    if conn.execute('SELECT 1 FROM transcript_revisions WHERE session_id=? AND revision=?',
+                    (session_id,revision)).fetchone():
+        return
+    metadata=conn.execute("SELECT payload_json FROM events WHERE session_id=? AND type='recording_selection' ORDER BY id LIMIT 1",
+                          (session_id,)).fetchone()
+    provenance=json.loads(metadata[0]) if metadata else {}
+    conn.execute('INSERT OR IGNORE INTO transcript_revisions '
+        '(session_id,revision,origin,provider,model,created_at) VALUES (?,?,?,?,?,?)',
+        (session_id,revision,origin,provenance.get('provider'),provenance.get('model'),created_at))
+
+
 def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Apply additive migrations, preserving existing transcript rows."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
@@ -210,9 +224,61 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
         INSERT OR IGNORE INTO summary_usage(session_id,requests,input_bytes)
           SELECT session_id,SUM(attempts),SUM(attempts*input_bytes) FROM summary_jobs GROUP BY session_id;
         """)
-    if version < SCHEMA_VERSION:
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        conn.commit()
+    if version < 11:
+        # Streaming commits before v11 could omit provenance. Repair metadata only;
+        # preserve transcript/audio, revision identities and existing provenance.
+        with conn:
+            missing=conn.execute('SELECT DISTINCT g.session_id,g.revision,s.source,s.started_at '
+                'FROM segments g JOIN sessions s ON s.id=g.session_id '
+                'LEFT JOIN transcript_revisions r ON r.session_id=g.session_id AND r.revision=g.revision '
+                'WHERE r.session_id IS NULL').fetchall()
+            for row in missing:
+                ensure_transcript_revision(conn,row[0],row[1],
+                    origin='confirmed' if row[2]=='meeting' else 'legacy',created_at=row[3])
+    if version < 12:
+        conn.executescript('''
+        CREATE TABLE IF NOT EXISTS summary_source_versions (
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          bucket INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(session_id,bucket));
+        INSERT OR IGNORE INTO summary_source_versions(session_id,bucket,generation)
+          SELECT session_id,start_ms/900000,0 FROM segments GROUP BY session_id,start_ms/900000;
+        ''')
+        for action, references in [('INSERT',('NEW',)),('DELETE',('OLD',)),('UPDATE',('OLD','NEW'))]:
+            changes=''.join(f'''INSERT INTO summary_source_versions(session_id,bucket,generation)
+                VALUES ({ref}.session_id,{ref}.start_ms/900000,1)
+                ON CONFLICT(session_id,bucket) DO UPDATE SET generation=generation+1;'''
+                for ref in references)
+            conn.executescript(f'''CREATE TRIGGER IF NOT EXISTS summary_segments_{action.lower()}
+                AFTER {action} ON segments BEGIN {changes} END;''')
+        for table in ('revision_speaker_edits','person_links','session_speakers'):
+            for action, references in [('INSERT',('NEW',)),('DELETE',('OLD',)),('UPDATE',('OLD','NEW'))]:
+                condition=' OR '.join(f'session_id={ref}.session_id' for ref in references)
+                conn.executescript(f'''CREATE TRIGGER IF NOT EXISTS summary_{table}_{action.lower()}
+                    AFTER {action} ON {table} BEGIN
+                    UPDATE summary_source_versions SET generation=generation+1 WHERE {condition}; END;''')
+        conn.executescript('''CREATE TRIGGER IF NOT EXISTS summary_person_name_update
+            AFTER UPDATE ON speakers BEGIN
+            UPDATE summary_source_versions SET generation=generation+1 WHERE session_id IN
+              (SELECT session_id FROM person_links WHERE person_id=OLD.id OR person_id=NEW.id); END;''')
+    if version < 13:
+        # No executescript here: it commits pending transactions implicitly.
+        # Explicit BEGIN also makes the DDL transactional when entering from v12.
+        with conn:
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            conn.execute("DELETE FROM events WHERE type='recording_end' AND id NOT IN "
+                         "(SELECT MIN(id) FROM events WHERE type='recording_end' GROUP BY session_id)")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_recording_end "
+                         "ON events(session_id) WHERE type='recording_end'")
+            conn.execute("PRAGMA user_version=13")
+    if version < 14:
+        with conn:
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session_type_id "
+                         "ON events(session_id,type,id)")
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
 
 

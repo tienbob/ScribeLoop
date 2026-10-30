@@ -1,55 +1,34 @@
-# Browser meeting test — current Deepgram path
+# Controlled call acceptance — current native app
 
-Updated 2026-10-23. This test remains deferred until the user is ready for a real
-meeting. The app does not automatically start a recording or upload saved audio.
-See [launch instructions and acceptance matrix](PHASE_1_CLOSEOUT.md).
+Updated 2026-10-28. Real Teams/Slack/browser acceptance remains open. Use the
+[native app instructions](../packaging/macos/DESKTOP.md) and
+[current checklist](CURRENT_STATUS.md); the browser UI is a development client.
+Local MOSS selectors and separate per-upload checkboxes in older tests no longer
+represent the current app. Summaries and configurable duration presets are implemented.
 
-## Microphone-only recording
+## Silent checks completed
 
-For a voice note or in-room conversation, select **Microphone only · no app audio**
-under Recording source, choose the microphone, then Confirm source. No meeting
-app needs to be running. This scope uses microphone permission only; it does not
-open app/system audio capture or require Screen Recording permission.
+The October 28 generated transport and metadata checks opened no capture streams
+or playback devices. No real call, provider upload or physical alignment test was
+performed. The user explicitly chose silent checks/docs only. Speaker output must
+remain off; do not play test clips or change volume, mute, or output routing.
 
-Choose **Cloud · Deepgram Nova-3 — live**, confirm permission to record and the
-separate microphone upload consent, then **Record microphone**. Text and speaker
-labels appear while recording; Stop finalizes the encrypted audio. For
-**Local · MOSS Q6_K — after recording**, no upload consent is needed and the
-transcript appears after Stop. The five-minute development limit still applies.
-The microphone records all voices it can hear, including loudspeaker playback;
-this is not acoustic isolation. Saved recovery, Resume and Transcribe again work
-with this scope, preserving the selected model's behavior.
+## Later coordinated real-call test
 
-## Teams in Brave, with app audio and microphone
+1. Have the user join a short controlled call with consenting participants and speaker output kept off. Do not launch media or change output devices. Observe metadata first; no recording is needed to check whether one useful prompt appears.
+2. Check that idle app/notification activity does not prompt, Not now suppresses the episode, mute/brief silence does not create another prompt, and a later call can prompt. Browser candidates must identify only the browser, not a tab/service.
+3. For a separately coordinated recording check, confirm the intended source and microphone. Browser scope includes all tabs. Microphone-only captures no app audio and needs no Screen Recording permission. Obtain missing OS access through the app's explicit controls.
+4. Under the accepted first-use agreement, choose Record explicitly. Verify visible recording/Stop, provisional and confirmed words, anonymous speaker labels, and bounded duration. Stop finalizes the current stream without a second full transcription pass.
+5. Inspect transcript/notes and citations visually. Do not use Play to verify audio under the speaker-off constraint. Remote/local source and physical alignment acceptance remain open unless measured through a permitted silent method.
+6. Record detection delay, misses/false prompts, call-end grace, selected scope, capture faults and recovery. Reconnect/unknown metadata must not be counted as inactivity. Do not infer cross-source identity or overlap separation from anonymous labels.
 
-1. Start the encrypted server and open `http://127.0.0.1:8757/`; the demo requires no launch key. No public WAV is
-   required for the cloud app. If the database is in use, stop the older server
-   before restarting; do not delete lock files or start a second owner.
-2. Start a consented short Teams call in Brave. Choose/confirm Brave and the
-   intended microphone in ScribeLoop. Browser scope includes every Brave tab;
-   use headphones and close unrelated audio tabs.
-3. Select **Cloud · Deepgram Nova-3 — live**. Keep Auto for its ten supported languages, or choose a fixed language. Select
-   Tiếng Việt for Vietnamese. Auto follows supported language changes; it does
-   not apply hints or lock the first language.
-4. Confirm participant permission and the separate Deepgram upload consent,
-   then Record. Discovery only suggests a source; Record is explicit.
-5. Expect provisional text while speaking, followed by confirmed timestamped
-   rows with anonymous speaker badges, source labels and reported language.
-   Speaker labels are not verified names. Overlap can cause recognition and
-   identity errors; fresh connections do not establish prior person identity.
-6. Stop finalizes encrypted capture while remaining text completes. This test
-   stops automatically after five minutes. Provider errors preserve healthy
-   encrypted capture and never trigger another provider or a second pass.
-7. Inspect audio routing, known reference sentences, speaker changes and latency.
-   Transcript excerpts are available; generated summaries are later-phase work.
+Manual saved reruns explicitly upload retained audio again and can incur charges;
+they are not needed to test detection. The app retains the previous transcript
+until replacement succeeds. Saved playback, reruns and deletion are separate
+workflows; this plan does not require altering existing conversations.
 
-Saved recovery authenticates incomplete audio into fresh encrypted containers
-without capture or upload. Resume/Reprocess requires separate saved-audio cloud
-consent. Resume continues checkpoints; Reprocess retains the previous transcript
-until the replacement succeeds. Permanent deletion and retention cleanup require
-their explicit controls. See [storage](SECURE_STORAGE.md).
-
-Real Teams/Slack automatic detection reliability, physical alignment, current
-cloud call quality, Linux and packaged desktop distribution remain unverified or
-undelivered as listed in the closeout. Earlier MOSS/Groq and permission-debugging
-notes are historical and remain available in Git history and evaluation docs.
+Older controlled microphone/public-audio and real-provider evidence is in
+[the native UI log](MACOS_REAL_UI_TEST.md) and
+[October 27 audit](MACOS_APP_AUDIT_2026-10-27.md). Those tests do not establish
+Teams/Slack/browser compatibility, long-call stability, Linux parity or signed
+release acceptance.

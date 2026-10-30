@@ -9,6 +9,7 @@ import pytest
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.storage.audio import SessionAudioStore
 from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.keys import KeyUnavailable
 from scribeloop_core.storage.retained_audio import RetainedAudio
 from scribeloop_core.storage.sessions import SessionStore
 from test_recording import Keys
@@ -88,10 +89,32 @@ async def test_failed_key_first_cleanup_is_retryable(retained,monkeypatch):
     with pytest.raises(OSError):
         await retained.cleanup()
     assert retained.store.audio_policy(sid)['expired_at'] is None
-    assert not retained.status(sid)['available']
+    # Status is metadata only; leftover ciphertext is not proof of an unlocked key.
+    assert retained.status(sid)['available']
+    with pytest.raises(KeyUnavailable):
+        await retained.playback(sid,'mic')
     assert retained.store.notes(sid)
     monkeypatch.setattr(retained.audio,'delete_session',original)
     assert await retained.cleanup()==[sid]
+
+
+@pytest.mark.asyncio
+async def test_browsing_records_never_reads_keys_but_playback_requires_them(retained,monkeypatch):
+    ids = [seed(retained,old=False), seed(retained,old=False)]
+    retained.audio.clear_unlocked_keys()  # Cold recordings, not this app's new captures.
+    calls = []
+    def locked(account):
+        calls.append(account)
+        raise KeyUnavailable('Locked')
+    monkeypatch.setattr(retained.audio.keys,'get',locked)
+    for sid in ids * 3:
+        assert retained.status(sid)['available']
+        retained.require(sid)
+    assert calls == []
+    with pytest.raises(KeyUnavailable):
+        await retained.playback(ids[0],'mic')
+    assert calls == ['audio:'+ids[0]]
+    assert not retained.busy
 
 
 @pytest.mark.asyncio
@@ -212,25 +235,29 @@ async def test_playback_rejects_audio_beyond_preview_bound(retained):
 
 @pytest.mark.parametrize('fail',[False,True])
 def test_explicit_rerun_replaces_transcript_then_generates_notes_once(tmp_path,require_sqlcipher,fail):
+    import httpx
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
     from scribeloop_core.llm.schemas import GroundedSummary
     from scribeloop_core.pipeline.deepgram_meeting import DeepgramConfig
     from scribeloop_core.pipeline.model_selection import CloudRecordingRouter
-    from test_deepgram_meeting import Socket
     from test_recording_api import connection, receive
 
-    sockets=[]
+    requests=[]
     summaries=[]
+    def batch(request):
+        requests.append(request)
+        words=[{'word':'fresh','start':0,'end':.1,'speaker':0},
+               {'word':'topic','start':.2,'end':.3,'speaker':1}]
+        return httpx.Response(429 if fail else 200,json={'results':{
+            'channels':[{'alternatives':[{'words':words}]} for _ in range(2)]}})
     def connector(*args,**kwargs):
-        sock=Socket(fail=fail)
-        sockets.append(sock)
-        return sock
+        raise AssertionError('Saved reruns must use the prerecorded endpoint')
     def recording(store,audio,source,publish):
         def never_capture(*args,**kwargs):
             raise AssertionError('A saved rerun must not open capture')
         return CloudRecordingRouter(store,audio,never_capture,publish,
-            cloud_config=DeepgramConfig(api_key='test-key',connector=connector))
+            cloud_config=DeepgramConfig(api_key='test-key',connector=connector,batch_transport=httpx.MockTransport(batch)))
     def draft(text):
         row=app.state.store.segments(sid)[0]
         return GroundedSummary.model_validate({'title':{'text':text,'segment_ids':[row['id']]},
@@ -259,7 +286,7 @@ def test_explicit_rerun_replaces_transcript_then_generates_notes_once(tmp_path,r
         client.portal.call(app.state.store.accept_agreement,app.state.store.AGREEMENT_VERSION)
         ws.send_text(token)
         ws.receive_json()
-        assert not sockets and not summaries, 'Opening history never runs providers'
+        assert not requests and not summaries, 'Opening history never runs providers'
         ws.send_json({'action':'reprocess','session_id':sid,'language':'en'})
         if fail:
             receive(ws,'session','failed')
@@ -269,7 +296,7 @@ def test_explicit_rerun_replaces_transcript_then_generates_notes_once(tmp_path,r
         else:
             receive(ws,'summary_ready')
             assert len(summaries)==1
-            assert len(sockets)==2, 'Explicit rerun streams each saved track once'
+            assert len(requests)==1, 'Explicit rerun uploads the whole multichannel file once'
             current=client.portal.call(app.state.store.get,sid)
             assert current['transcript_revision']==2
             assert current['title']=='Fresh topic'
@@ -279,7 +306,7 @@ def test_explicit_rerun_replaces_transcript_then_generates_notes_once(tmp_path,r
                     "SELECT COUNT(*) FROM events WHERE session_id=? AND type='manual_rerun_summary_attempt'",
                     (sid,)).fetchone()[0]
             assert client.portal.call(attempts)==1
-        assert all(sock.closed for sock in sockets) if not fail else len(sockets)<=2
+        assert len(requests)==1
 
 
 @pytest.mark.asyncio
@@ -318,3 +345,61 @@ def test_recovery_preserves_original_audio_expiry_deadline(retained):
     assert retained.store.get(sid)['status']=='interrupted'
     assert retained.store.audio_policy(sid)['expires_at']==before
     assert sid in retained.store.audio_retention_candidates()
+
+
+@pytest.mark.asyncio
+async def test_repeated_playback_unlocks_once_across_tracks_and_windows(retained,monkeypatch):
+    sid=seed(retained,old=False)
+    retained.audio.clear_unlocked_keys()  # Simulate an older recording after launch.
+    original=retained.audio.keys.get
+    reads=[]
+    def get(account):
+        reads.append(account)
+        return original(account)
+    monkeypatch.setattr(retained.audio.keys,'get',get)
+    await retained.describe(sid)
+    await retained.seek(sid,'conversation',0)
+    await retained.seek(sid,'mic',100)
+    await retained.seek(sid,'loopback',0)
+    await retained.describe(sid)
+    assert reads == ['audio:'+sid]
+
+
+@pytest.mark.asyncio
+async def test_new_recording_playback_needs_no_keychain_reread(retained,monkeypatch):
+    sid=seed(retained,old=False)
+    def denied(account): raise AssertionError('New recording key already unlocked')
+    monkeypatch.setattr(retained.audio.keys,'get',denied)
+    await retained.describe(sid)
+    assert await retained.seek(sid,'conversation',0)
+
+
+def test_parallel_audio_readers_share_one_unlock(retained,monkeypatch):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    sid=seed(retained,old=False)
+    retained.audio.clear_unlocked_keys()
+    original=retained.audio.keys.get
+    reads=[]
+    def get(account):
+        reads.append(account)
+        time.sleep(.02)
+        return original(account)
+    monkeypatch.setattr(retained.audio.keys,'get',get)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        keys=list(pool.map(retained.audio._key,[sid]*8))
+    assert len(set(keys)) == 1
+    assert reads == ['audio:'+sid]
+
+
+def test_failed_unlock_not_cached_and_deletion_evicts_unlocked_key(retained,monkeypatch):
+    sid=seed(retained,old=False)
+    retained.audio.clear_unlocked_keys()
+    original=retained.audio.keys.get
+    def denied(account): raise KeyUnavailable('Denied')
+    monkeypatch.setattr(retained.audio.keys,'get',denied)
+    with pytest.raises(KeyUnavailable): retained.audio._key(sid)
+    monkeypatch.setattr(retained.audio.keys,'get',original)
+    assert retained.audio._key(sid)
+    retained.audio.delete_session(sid)
+    with pytest.raises(KeyUnavailable): retained.audio._key(sid)

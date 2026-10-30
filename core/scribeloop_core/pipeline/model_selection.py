@@ -64,8 +64,10 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         if duration not in {300,3600,10800} or self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Invalid duration or busy recorder')
         self.cloud=(self.base_config if duration==300 else DeepgramConfig(api_key=self.base_config.api_key,
-            connector=self.base_config.connector,budget_usd=3 if duration==3600 else 8,
-            max_requests=1800 if duration==3600 else 4800))
+            connector=self.base_config.connector,batch_transport=self.base_config.batch_transport,
+            budget_usd=3 if duration==3600 else 8,
+            max_requests=1800 if duration==3600 else 4800,
+            write_timeout_s=self.base_config.write_timeout_s, quality=self.base_config.quality))
         self.max_s=duration
 
     def _saved_duration(self,sid):
@@ -81,12 +83,12 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         return super().start(selection,{**metadata,'engine':'deepgram'},title,
                              consent_confirmed=consent_confirmed)
 
-    def resume(self,sid,*,language='auto',cloud_consent=False):
+    def resume(self,sid,*,language='auto',cloud_consent=False,language_hints=None):
         self._saved_duration(sid)
         if self.store.segments(sid) and self.store.transcript_provider(sid) != 'deepgram':
             raise ValueError('Use Transcribe again to replace a historical local transcript')
-        return super().resume(sid,language=language,cloud_consent=cloud_consent)
+        return super().resume(sid,language=language,cloud_consent=cloud_consent,language_hints=language_hints)
 
-    def reprocess(self,sid,*,language,cloud_consent=False):
+    def reprocess(self,sid,*,language,cloud_consent=False,language_hints=None):
         self._saved_duration(sid)
-        return super().reprocess(sid,language=language,cloud_consent=cloud_consent)
+        return super().reprocess(sid,language=language,cloud_consent=cloud_consent,language_hints=language_hints)

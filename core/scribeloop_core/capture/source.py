@@ -36,6 +36,19 @@ class AudioFrame:
     stream: str  # 'loopback' | 'mic'
     t_ms: int  # ms since session start (recorder timeline)
     wall_ts: float  # time.monotonic() at capture (device-change handling)
+    sample_offset: int | None = None  # Exact reconstructed position; t_ms stays compatible.
+
+
+def sample_position(frame: AudioFrame) -> int:
+    return frame.sample_offset if frame.sample_offset is not None else round(frame.t_ms*SAMPLE_RATE/1000)
+
+
+def aligned_sample(t_ms: int, previous_end: int | None) -> int:
+    """Undo integer-ms packet jitter while preserving real gaps over 1 ms."""
+    start = round(t_ms*SAMPLE_RATE/1000)
+    if previous_end is not None and abs(start-previous_end) <= SAMPLE_RATE//1000:
+        return previous_end
+    return start
 
 
 @runtime_checkable

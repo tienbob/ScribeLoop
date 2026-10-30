@@ -175,3 +175,17 @@ def test_session_key_crypto_shred_prevents_future_reads(tmp_path):
     assert store.path(SID,'loopback').exists()
     with pytest.raises(KeyUnavailable): store.frames(SID,'loopback')
     with pytest.raises(ValueError): store.path('../escape','mic')
+
+
+def test_delete_session_does_not_unlock_key_when_native_cleanup_available(tmp_path):
+    class Keys:
+        def get(self, account): raise AssertionError('Unexpected secret read')
+        def delete_if_present(self, account):
+            assert account == 'audio:' + SID
+            assert path.exists(), 'Key removal must precede file removal'
+    store = SessionAudioStore(tmp_path, Keys())
+    path = store.original_path(SID,'mic')
+    path.parent.mkdir()
+    path.write_bytes(b'encrypted-test-artifact')
+    store.delete_session(SID)
+    assert not path.parent.exists()

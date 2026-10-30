@@ -34,3 +34,8 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+
+# macOS desktop local build artifacts
+shell/macos/DerivedData/
+*.xcuserstate
+xcuserdata/
