@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import numpy as np
 from websockets.asyncio.client import connect
 
+from ..async_compat import timeout
 from ..pipeline.languages import validate_language_hints
 from ..pipeline.transcription_quality import TranscriptionQuality
 from .metrics import score_words
@@ -63,7 +64,7 @@ async def stream_trial(provider, pcm, *, api_key, languages, vocabulary=(), conn
     result={'provider':provider,'status':'started','sent_audio_s':0}
     began=time.monotonic(); words=[]; texts=[]; received=0; finished=False
     try:
-        async with asyncio.timeout(duration+25):
+        async with timeout(duration+25):  # noqa: SIM117 - keep deadline separate from transport
             async with connector(url,additional_headers=headers,open_timeout=10,close_timeout=2,
                                  max_size=1_000_000,proxy=None) as ws:
                 if provider=='soniox':

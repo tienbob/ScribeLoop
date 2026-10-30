@@ -97,9 +97,8 @@ class SqliteVecIndex:
     def search(self, vector: bytes, k: int = 8) -> list[dict]:
         """KNN search: returns top-k chunks joined with their metadata.
 
-        Note: vec0 requires a *literal* LIMIT (a bound ``?`` is rejected with
-        "A LIMIT or 'k = ?' constraint is required"), so k is inlined after
-        clamping to a sane positive integer.
+        Use vec0's explicit k constraint: Ubuntu 22.04's SQLite cannot pass
+        LIMIT constraints to virtual tables. The same query works on newer SQLite.
         """
         k = max(1, int(k))
         rows = self._conn.execute(
@@ -107,9 +106,9 @@ class SqliteVecIndex:
             " m.segment_ids, m.chunk_text, v.distance"
             " FROM ("
             "   SELECT id, distance FROM embeddings_chunks_vec"
-            f"  WHERE vec MATCH ? ORDER BY distance LIMIT {k}"
+            "  WHERE vec MATCH ? AND k = ? ORDER BY distance"
             " ) v JOIN embeddings_chunks m ON m.rowid = v.id ORDER BY v.distance",
-            (vector,),
+            (vector, k),
         ).fetchall()
         # Positional access supports both tuples and sqlite3.Row connections.
         return [

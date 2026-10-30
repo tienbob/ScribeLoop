@@ -25,6 +25,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..async_compat import timeout
 from ..capture.source import AudioFrame
 from ..storage.audio import SessionAudioStore
 from ..storage.encrypted import encrypted_database
@@ -188,7 +189,7 @@ async def serve(bootstrap):
         server=uvicorn.Server(config)
         task=asyncio.create_task(server.serve(sockets=[sock]))
         try:
-            async with asyncio.timeout(30):
+            async with timeout(30):
                 while not server.started:
                     if task.done():
                         await task

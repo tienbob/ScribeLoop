@@ -12,6 +12,7 @@ from pathlib import Path
 
 import uvicorn
 
+from ..async_compat import timeout
 from .desktop_contract import PROTOCOL, DesktopContract
 from .desktop_fixture import read_control
 from .desktop_settings import DesktopSettings
@@ -76,7 +77,7 @@ async def serve(request, *, app_factory=make_app, helpers=None):
             ws='websockets', ws_max_size=16384, timeout_graceful_shutdown=5))
         task = asyncio.create_task(server.serve(sockets=[sock]))
         try:
-            async with asyncio.timeout(30):
+            async with timeout(30):
                 while not server.started:
                     if stop.is_set():
                         server.should_exit=True

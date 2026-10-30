@@ -1,6 +1,6 @@
 """Authenticated local replay and opt-in encrypted native meeting test workspace.
 
-Native recording requires SQLCipher, macOS, explicit recording choice and an app agreement.
+Native recording requires SQLCipher, an explicit platform source and a recording agreement.
 Cloud processing uses the durable first-use agreement; credentials stay in the backend.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..async_compat import timeout
 from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
@@ -173,7 +174,7 @@ class DismissCandidate(BaseModel):
 def create_app(*, database=None, fixtures=None, backend_factory=None,
                storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
                require_launch_key=True, summary_provider=None, desktop=None, launch_token=None,
-               source_factory=None, permission_request=None) -> tuple[FastAPI, str]:
+               source_factory=None, permission_request=None, settings=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -379,7 +380,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False, automatic=False):
         nonlocal summary_task
         try:
-            async with asyncio.timeout(3600):
+            async with timeout(3600):
                 engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
                 value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,
                     retry=retry,repair_invalid=automatic)
@@ -427,7 +428,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.storage = storage
             app.state.recording = None
             app.state.audio = None
-            if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
+            if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory or source_factory):
                 from ..capture.macos_client import MacOSMeetingAudioSource
                 from ..pipeline.model_selection import CloudRecordingRouter
                 from ..storage.audio import SessionAudioStore
@@ -509,6 +510,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         if desktop:
             return HTMLResponse('Desktop API only', status_code=404)
         html = (STATIC/'index.html').read_text(encoding='utf-8')
+        if settings:
+            html = html.replace('LOCAL DEVELOPMENT', 'UBUNTU PREVIEW').replace(
+                'Local development notebook', 'Ubuntu meeting notebook')
+            html = html.replace('Open your call. We’ll ask before taking notes.',
+                                'Choose your source and start a recording.')
+            html = html.replace('Approved calls stop after app audio activity ends, then notes are prepared automatically.',
+                                'Start and stop manually in this Ubuntu preview.')
+            html = html.replace('OS microphone and Screen Recording permissions are still required.',
+                                'A working desktop sound server and microphone are still required.')
         return HTMLResponse(html.replace('<html lang="en">',
             '<html lang="en" data-require-launch-key="'+str(require_launch_key).lower()+'">'))
 
@@ -569,6 +579,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 history = store.list()
                 await send({'type': 'snapshot', 'fixtures': fixture_rows,
                     'agreement':store.agreement(),
+                    'settings':settings.value.public() if settings else None,
                     'people':SpeakerRegistry(store).list(),
                     'summary_budgets':{row['id']:RollingNotes(store,summary_provider).public(row['id']) for row in history},
                     'rolling_notes':{row['id']:RollingNotes(store,summary_provider).latest(row['id']) for row in history if row['source']=='meeting'},
@@ -680,6 +691,20 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                         action = command.get('action')
+                        if settings and not desktop and action == 'save_settings':
+                            if (recording_busy() or summary_task is not None or auto_tasks
+                                    or set(command) != {'action', 'settings'}):
+                                raise ValueError('Wait for processing before changing providers')
+                            await asyncio.to_thread(settings.save, command['settings'])
+                            summary_provider = settings.value.summary()
+                            if app.state.recording:
+                                app.state.recording.base_config = settings.cloud()
+                                app.state.recording.cloud = app.state.recording.base_config
+                            await publish({'type':'settings', 'settings':settings.value.public(),
+                                'summary_provider':summary_provider.public(),
+                                'transcription':app.state.recording.cloud.public()
+                                    if app.state.recording else {}})
+                            continue
                         retained = app.state.audio
                         if retained and retained.busy and action in {'record','accept_call','resume','reprocess','recover','delete','retention','archive_audio','play_audio'}:
                             raise ValueError('Wait for the audio reader or cleanup')

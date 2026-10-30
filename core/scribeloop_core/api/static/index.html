@@ -7,12 +7,23 @@
 <section id="recording-bar" class="recording-bar" aria-label="Active session controls" hidden>
 <div><div class="recording-summary"><strong id="recording-state" role="status">Recording off</strong><span id="elapsed-time" aria-label="Elapsed session time" aria-live="off"></span></div><p id="active-scope"></p></div><div class="bar-actions"><span id="auto-end-status" role="status"></span><button id="keep-recording" type="button" hidden>Keep recording</button><button id="reconnect" type="button" hidden>Reconnect</button><button id="stop" type="button" hidden>Stop recording</button></div>
 </section>
+
 <main>
 <aside><div class="section-label">YOUR NOTEBOOK</div><button id="new-session" class="new-session">Recording preferences</button><nav id="history" aria-label="Session history"></nav><div class="sidebar-foot"><span class="local-dot" aria-hidden="true"></span> <span id="storage-status">Storage pending</span><br><small>Local development notebook</small></div></aside>
 <section id="workspace" class="workspace" tabindex="-1">
 <div class="eyebrow">YOUR CONVERSATIONS <span>—</span> KEPT CLOSE</div>
 <div class="heading"><h1>Keep the thread.</h1><div class="page-number" aria-hidden="true">01<span> / NOTEBOOK</span></div></div>
 <p class="intro">Open your call. We’ll ask before taking notes.</p>
+<details id="provider-settings" class="meeting-panel" hidden><summary>Provider settings</summary>
+<p>API keys are saved in your desktop secret store. Leave key fields blank to keep existing keys.</p>
+<form id="provider-settings-form">
+<label>Deepgram API key<input id="provider-deepgram-key" type="password" autocomplete="off"></label>
+<label>Notes provider name<input id="provider-name" maxlength="80"></label>
+<label>Notes API base URL<input id="provider-endpoint" type="url" required></label>
+<label>Notes model<input id="provider-model" maxlength="100" required></label>
+<label>Notes API key<input id="provider-summary-key" type="password" autocomplete="off"></label>
+<button type="submit">Save provider settings</button><p id="provider-save-status" role="status"></p>
+</form></details>
 <section class="watch-panel" aria-labelledby="watch-heading"><div class="section-label">CALL ASSISTANT</div><h2 id="watch-heading">Ready for your next conversation.</h2><p id="watch-status" role="status">Connecting to call detection…</p><p class="scope">Nothing is recorded until you agree. Approved calls stop after app audio activity ends, then notes are prepared automatically.</p><p class="scope">Five-minute development preset; longer limits are available in preferences. Browser capture includes all tabs.</p></section>
 <details id="manual-recording" class="meeting-panel"><summary>Recording preferences &amp; manual recording</summary><p id="agreement-status" class="scope"></p><button id="revoke-agreement" type="button">Revoke app agreement</button>
 <div class="meeting-heading"><div><div class="section-label">NEW MEETING</div><h2 id="meeting-heading">Set up your recording.</h2></div><span class="preview-tag">Cloud streaming</span></div>

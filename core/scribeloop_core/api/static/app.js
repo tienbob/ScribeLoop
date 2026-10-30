@@ -161,7 +161,7 @@ function renderCallAssistant() {
   const processing=[...sessions.values()].some(s=>s.status === 'processing');
   const current=discovery.candidates.find(c=>c.id === promptCandidate?.id && c.selectable);
   if(promptCandidate && (!current || !agreement.accepted || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
-  text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs the encrypted macOS app.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
+  text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs encrypted desktop storage.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
   const ending=autoCallState?.session_id === activeId && autoCallState?.state === 'ending';
   $('keep-recording').hidden=!ending;
   $('keep-recording').disabled=!authenticated;
@@ -193,7 +193,7 @@ function renderDiscovery() {
   text('transcript-feature','Live transcript');
   text('transcript-feature-help','Words arrive while you speak');
   const reason = !authenticated ? 'Reconnect to set up recording.' :
-    !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
+    !recordingAvailable ? 'Meeting recording requires encrypted desktop storage.' :
     activeId ? 'Stop the active session before starting another.' :
     !transcription.configured ? (transcription.cloud ? `Configure ${transcription.provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'GROQ_API_KEY'} in your local .env, then restart ScribeLoop.` : transcription.setup || 'Install the local model before recording.') :
     processing ? 'Wait for transcription to finish.' :
@@ -514,7 +514,16 @@ function connect() {
     if (data.type === 'agreement') {
       agreement=data.agreement; render(); return;
     }
+    if (data.type === 'settings') {
+      providerSettings(data.settings);
+      summaryProvider=data.summary_provider;
+      transcription=data.transcription;
+      modelProfiles.deepgram={...modelProfiles.deepgram,...transcription};
+      text('provider-save-status','Settings saved.');
+      render(); return;
+    }
     if (data.type === 'snapshot') {
+      providerSettings(data.settings);
       agreement=data.agreement || {accepted:false,version:null};
       audioStates=new Map(Object.entries(data.audio_states || {})); audioPending=false;
       people=data.people || []; personPending=false;
@@ -822,3 +831,21 @@ $('unlink-person').onclick=()=>{if(!$('unlink-person').disabled) linkPerson(null
 $('forget-person').onclick=()=>{if(!$('forget-person').disabled) personCommand({action:'forget_person',person_id:$('person-select').value,confirmed:true});};
 
 function personCommand(command) { personPending=send(command); renderPeople(); }
+
+function providerSettings(value) {
+  if (!value || !$('provider-settings')) return;
+  $('provider-settings').hidden=false;
+  $('provider-name').value=value.summary_provider;
+  $('provider-endpoint').value=value.summary_endpoint;
+  $('provider-model').value=value.summary_model;
+}
+if ($('provider-settings-form')) $('provider-settings-form').onsubmit = event => {
+  event.preventDefault();
+  const settings={summary_provider:$('provider-name').value,
+    summary_endpoint:$('provider-endpoint').value,summary_model:$('provider-model').value};
+  for (const [field,id] of [['deepgram_key','provider-deepgram-key'],['summary_key','provider-summary-key']]) {
+    if ($(id).value) settings[field]=$(id).value;
+    $(id).value='';
+  }
+  text('provider-save-status',send({action:'save_settings',settings}) ? 'Saving…' : 'Reconnect to save settings.');
+};

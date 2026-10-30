@@ -5,6 +5,7 @@ import tracemalloc
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.deepgram_meeting import DeepgramConfig
 from scribeloop_core.pipeline.model_selection import CloudRecordingRouter
@@ -110,7 +111,7 @@ async def test_three_hour_resume_uses_cloud_once_per_track_without_full_pcm(stat
         pass
     runner=CloudRecordingRouter(store,audio,None,publish,cloud_config=DeepgramConfig(api_key='test',connector=connector))
     runner.resume(sid,language='en',cloud_consent=True)
-    async with asyncio.timeout(5):
+    async with timeout(5):
         await runner.task
     assert len(sockets)==2
     assert all(s.sent_ms==1000 for s in sockets)
@@ -139,7 +140,7 @@ async def test_resume_scans_past_more_than_one_batch_before_sending_tail(state):
         pass
     runner=CloudRecordingRouter(store,audio,None,publish,cloud_config=DeepgramConfig(api_key='test',connector=connector))
     runner.resume(sid,language='en',cloud_consent=True)
-    async with asyncio.timeout(5):
+    async with timeout(5):
         await runner.task
     assert len(sockets)==2 and all(s.sent_ms==1000 for s in sockets)
     assert all(c['confirmed_ms']==20000 for c in store.checkpoints(sid).values())

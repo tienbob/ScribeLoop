@@ -1,0 +1,47 @@
+name: Ubuntu desktop preview
+on:
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'packaging/linux/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - '.github/workflows/linux-desktop.yml'
+  workflow_dispatch:
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build target Ubuntu runtime
+        run: docker build -f packaging/linux/Dockerfile --build-arg UBUNTU_VERSION=${{ matrix.ubuntu }} -t scribeloop-linux packaging/linux
+      - name: Build release-specific package
+        run: |
+          mkdir -p dist/linux
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist/linux:/output" scribeloop-linux --output /output
+      - name: Check installed app and generated capture
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist/linux:/output:ro" \
+            --entrypoint /bin/sh scribeloop-linux -ec '
+              apt-get update
+              apt-get install -y /output/*.deb pulseaudio
+              SCRIBELOOP_DISPOSABLE_TEST=1 xvfb-run -a dbus-run-session -- /src/packaging/linux/check_installed.sh
+            '
+      - name: Python 3.10 and current Ubuntu core regressions
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/dist/linux:/output:ro" --entrypoint /bin/sh scribeloop-linux -ec '
+            apt-get update
+            apt-get install -y /output/*.deb
+            cd /tmp
+            PYTHONPATH=/usr/lib/scribeloop /build-env/bin/python -m pytest -q -p no:cacheprovider /src/tests
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scribeloop-ubuntu-${{ matrix.ubuntu }}-${{ matrix.runner }}
+          path: dist/linux/*.deb

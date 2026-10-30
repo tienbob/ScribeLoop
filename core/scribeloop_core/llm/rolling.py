@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 
+from ..async_compat import timeout
 from .grounded import summary_messages, transcript_hash, validate_summary
 
 MAX_CALLS=128
@@ -125,7 +126,7 @@ class RollingNotes:
                 "state='dispatched',attempts=attempts+1",
                 (identity,sid,revision,key,transcript_hash(rows),self.provider.provider,self.provider.model,endpoint,size))
         try:
-            async with asyncio.timeout(70):
+            async with timeout(70):
                 value=await self.provider.generate(messages)
             try:
                 summary=validate_summary(value,rows)

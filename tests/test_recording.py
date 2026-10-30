@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.recording import RecordingRunner
 from scribeloop_core.storage.audio import MAGIC, SessionAudioStore
@@ -60,7 +61,7 @@ def setup(tmp_path):
 
 
 async def wait_for(predicate):
-    async with asyncio.timeout(3):
+    async with timeout(3):
         while not predicate():
             await asyncio.sleep(.01)
 

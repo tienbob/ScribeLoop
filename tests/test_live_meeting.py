@@ -7,6 +7,7 @@ import threading
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.diar import NearOnlineChunked, SpeakerMatcher, attribution
 from scribeloop_core.pipeline.live import LocalAgreement, timeline_pcm, transcribe_live
@@ -147,7 +148,7 @@ def test_live_uses_one_shared_language_lock_and_rejects_bad_timestamps(state):
 
 
 async def wait_for(predicate):
-    async with asyncio.timeout(5):
+    async with timeout(5):
         while not predicate():
             await asyncio.sleep(.01)
 

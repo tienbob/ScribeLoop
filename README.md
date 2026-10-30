@@ -6,6 +6,9 @@ ScribeLoop records your microphone and meeting audio, transcribes the conversati
 
 The app is currently available for **internal testing on Apple Silicon Macs running macOS 13 or later**. Python and the runtime are included—there is no terminal setup or additional app to install.
 
+An **Ubuntu 22.04+ preview** is under development on a separate Linux packaging path.
+See [Ubuntu installation, build instructions and limitations](packaging/linux/README.md).
+
 ## What you can do
 
 - **Record your way.** Capture your microphone, a selected meeting app or browser plus your microphone, or system audio plus your microphone.

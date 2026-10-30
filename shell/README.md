@@ -14,3 +14,6 @@ and the [implementation history](../docs/MACOS_APP_IMPLEMENTATION_PLAN.md).
 Developer ID signing, notarization, installer/upgrade acceptance and public
 distribution credential protection remain open. The private-demo bundle is
 ad-hoc signed. See the [current checklist](../docs/CURRENT_STATUS.md).
+
+Ubuntu uses the GTK/WebKit host in `core/scribeloop_core/api/linux.py` with the shared
+notebook UI. See [Linux packaging](../packaging/linux/README.md).
