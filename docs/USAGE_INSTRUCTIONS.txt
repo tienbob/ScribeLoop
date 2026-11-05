@@ -1,0 +1,146 @@
+ScribeLoop — Installation & Usage
+Internal test build 0.1.33 (34) · 4 November 2026
+
+1. INSTALL
+
+Requires an Apple Silicon Mac (M1 or newer), running macOS 13 Ventura or later.
+Download ScribeLoop-latest-arm64.dmg from this folder (currently 0.1.33, build 34).
+Open the DMG, drag ScribeLoop into Applications, then eject the disk image.
+Open ScribeLoop from Applications. Python, Homebrew and Xcode are not required.
+
+This internal build is not Apple-notarized. If macOS blocks it, first confirm the
+download came from your trusted distributor, then follow Apple's app-specific
+Open Anyway instructions: https://support.apple.com/102445
+Company-managed Macs may require IT approval. Do not disable Gatekeeper.
+
+Updating? Quit ScribeLoop completely, including its menu-bar app, before replacing
+the copy in Applications. Keep only one installed copy. Updates normally preserve
+your workspace; do not downgrade an existing database.
+
+2. FIRST SETUP
+
+Open Settings/Preferences using the gear icon. Most configuration lives here.
+
+Cloud setup (simplest):
+- Models: choose Deepgram for transcription and enter your own Deepgram API key.
+- Choose a supported notes provider, model and its API key.
+- Recording: search and check the languages you expect, such as English and
+  Vietnamese. Select a few relevant languages rather than every available one.
+- Add useful names or vocabulary one phrase per line, spelled as spoken.
+- Save changes. Provider usage is billed to your own account.
+
+Local setup (optional):
+- Install Ollama separately and choose Ollama · Local under Models.
+- Enter an audio-capable local model; text-only models cannot transcribe.
+- Use Check Ollama and wait for its result. Model downloads can be several GB.
+- Choose Ollama for notes too if you want all model processing on your Mac.
+- Prepare/download the models while online before using the app offline.
+- Local transcription starts AFTER recording ends; there is no live transcript.
+- Optional local speaker labeling requires a separate diarization add-on.
+
+Grant microphone access when requested. Capturing meeting-app/system audio also
+requires Screen Recording / Screen & System Audio Recording permission in macOS
+System Settings → Privacy & Security. Use Check capture access without recording
+to check access silently. Calendar permission is optional.
+
+3. RECORD AN ONLINE CALL
+
+- Get permission from everyone whose audio you will capture.
+- Choose New recording, then select the meeting app/browser and microphone.
+- Review the processing agreement and press Record & take notes.
+- On macOS 14.2+, ScribeLoop can suggest a possible call; approve its recording
+  popup to start. On macOS 13–14.1, start and stop manually.
+- Browser capture may include sound from other tabs in that browser.
+- Use Pause and Continue to suspend and resume capture.
+- Press Stop recording when finished. Call-end detection may first show a
+  60-second countdown. Choose Keep recording if the meeting is still active.
+- If a browser remains active after a call ends, stop manually.
+
+For an in-person meeting, choose a microphone-only recording instead.
+In call transcripts, microphone bubbles appear on the right and meeting audio
+on the left. Speaker labels are anonymous; you can rename people manually.
+Pause/Continue, speaker bubbles and language selection are also available for
+supported recording flows.
+
+4. REVIEW TRANSCRIPT AND NOTES
+
+Wait for transcription and notes processing to finish after Stop. Open the saved
+conversation and use Notes, Transcript or Audio. Review important names, numbers
+and decisions: recognition and generated notes can be wrong.
+
+Use Latest in the Transcript tab to return to the newest speech after scrolling
+back. Name people to make the conversation easier to follow. Notes include source
+links that lead back to the supporting transcript.
+
+If notes fail but the transcript is saved, use Generate notes to retry after
+checking the configured notes model/API key. Retrying cloud processing may cost
+money. You can customize the notes prompt in Settings.
+
+Audio playback is optional and produces sound when you press Play.
+Recording/exporting alone does not play audio.
+
+5. CALENDAR
+
+- First add your work calendar account to Apple's Calendar app on this Mac.
+- In ScribeLoop, open Settings → Calendar, connect, allow access and select the
+  calendars to display. No calendars are selected by default.
+- Open Calendar in the sidebar to see Today/Upcoming meetings.
+- Open meeting launches a supported meeting link in its normal app/browser;
+  it does not join a call for you or begin recording.
+- An event needs a supported meeting URL in its URL, location or notes. Events
+  without a meeting link can still be used for in-person meetings.
+- To associate a saved recording, use Meeting → Link calendar event….
+- Calendar selection, refresh and Disconnect Calendar are in Settings → Calendar.
+
+6. SHARE BY EMAIL
+
+Finish recording/processing, then open the conversation and choose Email or
+Meeting → Share by email….
+
+- Summary is selected by default and goes into the message body.
+- Check Transcript to attach the text transcript.
+- Check Audio to attach the retained recording. Both attachments can be selected.
+- Include source references is OFF by default for a clean summary. Turn it on
+  to include citation numbers and a Sources section. In-app sources stay intact.
+- Edit the subject and optionally use Preview.
+- Click Open email draft once. Your mail app opens with the selected content
+  attached automatically. Choose recipients, review, then press Send yourself.
+
+A working mail account must be configured in your mail app. If handoff fails,
+use Save… or Copy text. Attachments above 15 MB combined must be saved and shared
+using your mail app's own options. Exported/shared copies are readable files.
+Copies handed to the mail app are kept for seven days, then cleaned up on a
+later app use; copies you explicitly save remain where you save them.
+
+7. PERMISSIONS & TROUBLESHOOTING
+
+Capture denied even though its toggle is on after an update?
+Quit ScribeLoop. In macOS Privacy & Security, refresh ONLY ScribeLoop's recording
+permission entry for /Applications/ScribeLoop.app, approve locally, and reopen.
+Never send anyone your Mac password or API keys.
+
+Calendar missing? Connect/request access inside ScribeLoop first, choose calendars,
+and confirm that Apple's Calendar app has synced the events. If denied, review
+Calendar access in macOS Privacy & Security.
+
+Poor transcript? Check the input microphone and level/noise settings, select the
+expected languages, and add specific names/phrases. Optional Refine transcript
+after recording adds a billed Deepgram pass; it does not guarantee correctness.
+
+This is an internal preview. Automatic call detection/stopping depends on the
+meeting app and macOS. Manual New recording and Stop remain available.
+
+8. DATA & BUG REPORTS
+
+Each Mac has its own encrypted workspace and Keychain credentials. The installer
+does not include another user's recordings or API keys. There is no account sync
+or supported workspace transfer. Cloud transcription sends audio to the selected
+provider; cloud notes send transcript text to the notes provider. Fully local
+processing requires local models for BOTH transcription and notes.
+
+Audio normally expires after 30 days unless archived; transcripts/notes remain.
+Email attachments and saved exports are outside the encrypted workspace.
+
+Report: app version, Mac model/macOS version, audio source/call app, exact error,
+and steps to reproduce. Mention whether you pressed Stop or it stopped itself.
+Do not include passwords, API keys or private recordings without prior agreement.

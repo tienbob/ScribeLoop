@@ -105,10 +105,11 @@ def test_mic_release_policy_uses_known_input_even_when_output_is_unknown():
     assert observe('unknown')[0]['state']=='unknown'
 
 
-@pytest.mark.parametrize('speech,manual,invalid_first,busy',[
-    (True,False,False,False),(False,False,False,False),
-    (True,True,True,False),(True,False,False,True),(True,True,'always',False)])
-def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sqlcipher,speech,manual,invalid_first,busy):
+@pytest.mark.parametrize('speech,manual,invalid_first,busy,transcription_failed',[
+    (True,False,False,False,False),(False,False,False,False,False),
+    (True,True,True,False,False),(True,False,False,True,False),(True,True,'always',False,False),
+    (True,True,False,False,True)])
+def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sqlcipher,speech,manual,invalid_first,busy,transcription_failed):
     state = {'activity':'active','dismissed':False,'calls':0,'summaries':0}
     class Discovery:
         def __init__(self,publish):
@@ -152,7 +153,9 @@ def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sq
                 self.store.append(sid,{'text':'We decided to launch the garden project.','is_final':True,'start_ms':0,'end_ms':1000})
             await self.publish({'type':'session','session':self.store.transition(sid,'processing')})
             self.store.create_transcript_notes(sid)
-            await self.publish({'type':'session','session':self.store.transition(sid,'completed')})
+            if transcription_failed:
+                self.store.record_failure(sid,{'stage':'transcription','code':'transcription_failed','message':'Synthetic provider failure'})
+            await self.publish({'type':'session','session':self.store.transition(sid,'failed' if transcription_failed else 'completed')})
             self.active_id=None
         def stop(self,sid,*,reason='manual_stop'):
             assert sid == self.active_id
@@ -241,6 +244,8 @@ def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sq
             snapshot=ws.receive_json()
             current=next(row for row in snapshot['sessions'] if row['id']==sid)
             assert current['end_reason'] == ('manual_stop' if manual else 'auto_app_inactive')
+            if transcription_failed:
+                assert current['status']=='failed' and 'confirmed speech only' in current['notes_status']
             if speech:
                 if invalid_first=='always':
                     assert current['summary_failure']['code']=='summary_invalid_output'

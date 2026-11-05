@@ -59,7 +59,9 @@ class DesktopContract:
     def snapshot(self, app, summary_provider, active_id, summary_id):
         return {'type':'snapshot', 'agreement':app.state.store.agreement(),
             'settings':self.settings.value.public(), 'discovery':app.state.discovery.snapshot(),
+            'account':app.state.account.public() if getattr(app.state,'account',None) else {'configured':False,'phase':'setup_required'},
             'active_id':active_id, 'summary_active_id':summary_id,
+            'recording_paused':bool(getattr(app.state.recording,'paused',False)),
             'processing_id':(getattr(app.state.recording,'reprocess_id',None) or
                              getattr(app.state.recording,'processing_id',None)),
             'summary_provider':summary_provider.public(),
@@ -99,13 +101,26 @@ class DesktopContract:
         if offset == -1:
             offset = max(0, ((count-1)//100)*100)
         rows = store.segments(sid, revision=revision, limit=100, offset=offset) if revision else []
+        original = store.cleanup_originals(sid,revision,limit=100,offset=offset) if revision else []
+        for row,before in zip(rows,original):
+            if all(row[k]==before[k] for k in ('start_ms','end_ms','stream')):
+                row['cleanup_needs_review']=before.get('cleanup_needs_review',False)
+                if row['text']!=before['text']:
+                    row['cleanup_original_text']=before['text'][:1000]
+                    row['cleanup_original_truncated']=len(before['text'])>1000
         roster=store.speaker_roster(sid,revision) if revision else []
         numbers={row['id']:row['person_number'] for row in roster}
+        labels={row['id']:row['name'] for row in roster}
         for row in rows:
             row['person_number']=numbers.get(row.get('display_speaker_id'))
+            if row.get('display_speaker_id') in labels:
+                row['speaker_label']=labels[row['display_speaker_id']]
         # Notes are bounded at their original provider limits; no full transcript.
         summary = store.grounded_summary(sid)
+        from .calendar_links import read_link
         return {'type':'meeting_page', 'session':session, 'revision':revision, 'offset':offset,
+            'calendar_event':read_link(store,sid),
+            'transcript_provider':store.transcript_provider(sid),
             'total':count, 'segments':rows, 'speakers':roster, 'notes':store.notes(sid)[:100000], 'summary':summary,
             'audio':app.state.audio.status(sid) if app.state.audio and session['source']=='meeting' else {},
             'rolling':RollingNotes(store,summary_provider).latest(sid),

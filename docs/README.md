@@ -9,6 +9,22 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Google sign-in/account implementation and deployment setup](GOOGLE_ACCOUNT_IMPLEMENTATION.md)
+
+- [Product roadmap for review — November 3](PRODUCT_ROADMAP_REVIEW_2026-11-03.md)
+
+- [Manual Stop, automatic notes, and default microphone handoff](MANUAL_STOP_AND_DEVICE_HANDOFF.md)
+
+- [Pause/Continue and transcript chat bubbles](RECORDING_PAUSE_AND_CHAT.md)
+
+- [Local Ollama transcription (batch-only after recording)](LOCAL_TRANSCRIPTION.md)
+- [Ollama functional fixes and validation](OLLAMA_FLOW_2026-11-03.md)
+- [macOS Calendar: upcoming events, meeting links and conversation association](MACOS_CALENDAR.md)
+- [Email sharing: Summary, Transcript or Audio](EMAIL_SHARING.md)
+- [Security & performance audit of the current change set — November 4](SECURITY_PERFORMANCE_AUDIT_2026-11-04.md)
+- [Calendar feature review and roadmap — November 4](CALENDAR_REVIEW_AND_ROADMAP_2026-11-04.md)
+- [Email sharing review and roadmap — November 4](EMAIL_SHARING_REVIEW_AND_ROADMAP_2026-11-04.md)
+
 - [Gemini summary HTTP 400 regression fix — October 30](GEMINI_SUMMARY_400_FIX_2026-10-30.md)
 
 - [Recognition controls and six-way accuracy comparison — October 30](TRANSCRIPTION_ACCURACY_CONTROLS_2026-10-30.md)
@@ -27,7 +43,7 @@ capture/release acceptance gates.
 
 - [Internal Mac distribution and installation](INTERNAL_MAC_DISTRIBUTION.md)
 
-- [Pricing: $1 app, self-hosted models or customer API keys](PRICING_AND_MODEL_ACCESS.md)
+- [Pricing: $3 one-time Local / $5 monthly Cloud](PRICING_AND_MODEL_ACCESS.md)
 
 - [Shared 256 MB memory cache](MEMORY_CACHE_256MB.md)
 

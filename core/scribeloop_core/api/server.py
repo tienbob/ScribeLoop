@@ -27,7 +27,7 @@ from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
 from ..pipeline.languages import LanguageChoice, LanguageHints
-from ..pipeline.recording import automatic_notes_eligible
+from ..pipeline.recording import automatic_notes_eligible, recording_ready_for_notes
 from ..pipeline.replay import ReplayRunner
 from ..speakers.registry import SpeakerRegistry
 from ..storage.db import DATABASE_ERRORS, connect, migrate
@@ -75,7 +75,7 @@ class StartRecording(SelectSource):
     language_hints: LanguageHints | None = None
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
-    model: Literal['deepgram'] = 'deepgram'
+    model: Literal['deepgram','ollama'] = 'deepgram'
     duration_s: Literal[300,3600,10800] = 300
 
     @field_validator('title')
@@ -94,7 +94,7 @@ class ReprocessRecording(BaseModel):
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
     language_hints: LanguageHints | None = None
-    model: Literal['deepgram'] = 'deepgram'
+    model: Literal['deepgram','ollama'] = 'deepgram'
 
 
 class SavedMeeting(BaseModel):
@@ -105,7 +105,7 @@ class SavedMeeting(BaseModel):
     language_hints: LanguageHints | None = None
     confirmed: bool = False
     cloud_consent: bool = False
-    model: Literal['deepgram'] = 'deepgram'
+    model: Literal['deepgram','ollama'] = 'deepgram'
 
 
 class SpeakerCorrection(BaseModel):
@@ -141,7 +141,7 @@ class AcceptCall(BaseModel):
     candidate_id: str = Field(min_length=1,max_length=600)
     app_id: str = Field(min_length=1,max_length=256)
     microphone_id: str = Field(default='default',min_length=1,max_length=256)
-    model: Literal['deepgram'] = 'deepgram'
+    model: Literal['deepgram','ollama'] = 'deepgram'
     duration_s: Literal[300,3600,10800] = 300
     language: LanguageChoice = 'auto'
     language_hints: LanguageHints | None = None
@@ -173,7 +173,8 @@ class DismissCandidate(BaseModel):
 def create_app(*, database=None, fixtures=None, backend_factory=None,
                storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
                require_launch_key=True, summary_provider=None, desktop=None, launch_token=None,
-               source_factory=None, permission_request=None) -> tuple[FastAPI, str]:
+               source_factory=None, permission_request=None, local_config=None, account=None, email_exports=None,
+               cleanup_provider=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -221,7 +222,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         if (session.get('source') == 'meeting' and session.get('status') in {'completed','failed','interrupted'}
                 and app.state.audio):
             await publish({'type':'audio_state','session_id':session['id'],'audio':app.state.audio.status(session['id'])})
-        if (not closing and session.get('status') == 'completed' and
+        if (not closing and recording_ready_for_notes(session) and
                 session.get('capture',{}).get('auto_workflow') and session['id'] not in automatic_scheduled):
             automatic_scheduled.add(session['id'])
             recorder_task = getattr(app.state.recording,'task',None)
@@ -320,6 +321,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         recorder = app.state.recording
         sid = recorder.active_id if recorder else None
         return {'type':'recording_state','active_id':sid,
+            'paused':bool(sid and getattr(recorder,'paused',False)),
             'stopping':bool(sid and recorder.stop_requested.is_set()),
             'processing_id':(getattr(recorder,'reprocess_id',None) or
                              getattr(recorder,'processing_id',None)) if recorder else None}
@@ -433,8 +435,17 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 from ..storage.audio import SessionAudioStore
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           workspace_keys,memory_cache=store.memory_cache)
-                app.state.recording = (recording_factory(store,audio,MacOSMeetingAudioSource,publish)
-                    if recording_factory else CloudRecordingRouter(store,audio,(source_factory or MacOSMeetingAudioSource),publish,cloud_config=cloud_config))
+                if recording_factory:
+                    recording = recording_factory(store,audio,MacOSMeetingAudioSource,publish)
+                elif desktop is not None or local_config is not None:
+                    from ..pipeline.model_selection import TranscriptionRouter
+                    recording = TranscriptionRouter(store,audio,source_factory or MacOSMeetingAudioSource,
+                        publish,cloud_config=cloud_config,local_config=local_config,
+                        cleanup_provider=cleanup_provider)
+                else:
+                    recording = CloudRecordingRouter(store,audio,(source_factory or MacOSMeetingAudioSource),publish,
+                        cloud_config=cloud_config,cleanup_provider=cleanup_provider)
+                app.state.recording = recording
                 from ..storage.retained_audio import RetainedAudio
                 app.state.audio = RetainedAudio(store,audio)
             app.state.discovery = (discovery_factory or DiscoveryService)(publish)
@@ -450,6 +461,14 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 yield
             finally:
                 closing = True
+                pending_settings = getattr(app.state,'settings_task',None)
+                if pending_settings is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(pending_settings)
+                for task in list(getattr(app.state,'ollama_checks',set())):
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
                 if rolling_task is not None:
                     rolling_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -467,6 +486,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
                 try:
+                    if account is not None:
+                        await account.cancel()
                     if summary_task is not None:
                         summary_task.cancel()
                         with contextlib.suppress(asyncio.CancelledError):
@@ -487,6 +508,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     app = FastAPI(title='ScribeLoop', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
     app.state.desktop_contract = desktop
+    app.state.account = account
+    app.state.settings_saving = False
+    app.state.settings_task = None
+    app.state.email_exports = email_exports
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]'])
 
     @app.middleware('http')
@@ -553,6 +578,22 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 desktop.check_size(event)
             await asyncio.wait_for(ws.send_json(event), timeout=SEND_TIMEOUT_S)
 
+        def resync_cleanup(recorder):
+            """Re-sync idle cleanup engines with the latest saved settings.
+
+            A Preferences save reconfigures the recorder too, but a save that
+            was rejected as busy would otherwise leave engines validating
+            against the rules from before the change (for example the
+            Experience skip-validation toggle).
+            """
+            if desktop is None or recorder is None:
+                return
+            refresh = getattr(recorder,'refresh_cleanup',None)
+            if refresh is not None:
+                refresh(desktop.settings.value.cleanup())
+            elif hasattr(recorder,'cleanup_provider'):
+                recorder.cleanup_provider = desktop.settings.value.cleanup()
+
         try:
             if require_launch_key:
                 message = await asyncio.wait_for(text_frame(256), timeout=AUTH_TIMEOUT_S)
@@ -581,7 +622,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         (app.state.recording.active_id if app.state.recording else None),
                     'recording_available': app.state.recording is not None,
                     'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
-                    'transcription_models': {'deepgram':app.state.recording.profiles()['deepgram']} if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
+                    'transcription_models': app.state.recording.profiles() if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
                     'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
                     'replay_available': not app.state.runner.unavailable,
                     'replay_enabled': explicit_replay_backend, 'storage': app.state.storage,
@@ -628,7 +669,34 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put({**response,'response_to':dispatch_id})
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
+                            if app.state.settings_saving and action not in {'stop','stop_recording','revoke_agreement'}:
+                                raise ValueError('Wait for the settings save to finish')
                             desktop.receipt(dispatch_id,'dispatching')
+                            if action in {'account_sign_in','account_cancel','account_refresh','account_sign_out'}:
+                                try:
+                                    if set(command)!={'action'} or account is None or not account.config.configured:
+                                        raise ValueError('Account service is not configured')
+                                    if recording_busy():
+                                        raise ValueError('Finish recording and processing before changing accounts')
+                                    if action == 'account_sign_in':
+                                        url = await account.begin(publish)
+                                        await queue.put({'type':'account_authorize','url':url})
+                                    elif action == 'account_cancel':
+                                        await account.cancel()
+                                    elif action == 'account_refresh':
+                                        await account.refresh()
+                                    else:
+                                        await account.sign_out()
+                                    await publish({'type':'account_state',**account.public()})
+                                    await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                except Exception:  # noqa: BLE001 - account/provider errors must not expose tokens
+                                    if account is not None:
+                                        account.error = 'Account action could not finish. Check account-service setup or connection and try again.'
+                                        await publish({'type':'account_state',**account.public()})
+                                    await queue.put({'type':'error','context':'account',
+                                        'message':'Account action could not finish. Check setup or connection and try again; saved meetings are unchanged.'})
+                                    await queue.put(desktop.receipt(dispatch_id,'rejected'))
+                                continue
                             if action == 'check_capture_access':
                                 if recording_busy() or set(command)!={'action'}:
                                     raise ValueError('Wait for capture to finish')
@@ -637,6 +705,38 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put({'type':'capture_access',**result})
                                 await app.state.discovery.refresh()
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                            elif action == 'check_ollama':
+                                from ..pipeline.local_transcription import (
+                                    LocalTranscriptionConfig,
+                                    ensure_model_ready,
+                                )
+                                checks = getattr(app.state,'ollama_checks',None)
+                                if checks is None:
+                                    checks = app.state.ollama_checks = set()
+                                try:
+                                    if (recording_busy() or summary_task is not None
+                                            or set(command) not in ({'action'},{'action','model'})):
+                                        raise ValueError('Wait for active work to finish before checking Ollama.')
+                                    if any(not task.done() for task in checks):
+                                        raise ValueError('A local model check is already running.')
+                                    model = command.get('model',local_config.model if local_config else '')
+                                    if not isinstance(model,str) or len(model)>128:
+                                        raise ValueError('Enter a valid local audio model name.')
+                                    check_config = LocalTranscriptionConfig(model=model,
+                                        endpoint=(desktop.settings.value.local_transcription_endpoint if desktop
+                                                  else local_config.base_url if local_config else None))
+                                    if not check_config.configured:
+                                        raise ValueError('Choose a local Ollama audio model in Preferences first.')
+                                except ValueError as exc:
+                                    await queue.put({'type':'local_model_status','state':'unavailable','status':str(exc),'message':str(exc)})
+                                    if desktop:
+                                        await queue.put(desktop.receipt(dispatch_id,'rejected'))
+                                    continue
+                                task = asyncio.create_task(ensure_model_ready(check_config,publish))
+                                checks.add(task)
+                                task.add_done_callback(checks.discard)
+                                if desktop:
+                                    await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             if action == 'name_speaker':
                                 if (recording_busy() or summary_task is not None or
@@ -663,14 +763,66 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if action == 'save_settings':
                                 if recording_busy() or summary_task is not None or auto_tasks or set(command)!={'action','settings'}:
                                     raise ValueError('Wait for all processing before changing providers')
-                                desktop.settings.save(command['settings'])
-                                summary_provider = desktop.settings.value.summary()
-                                if app.state.recording:
-                                    app.state.recording.base_config = desktop.settings.cloud()
-                                    app.state.recording.cloud = app.state.recording.base_config
-                                await publish({'type':'settings','settings':desktop.settings.value.public(),
-                                    'summary_provider':summary_provider.public(),
-                                    'transcription':app.state.recording.cloud.public() if app.state.recording else {}})
+                                candidate = desktop.settings.prepare(command['settings'])
+                                app.state.settings_saving = True
+                                async def commit_settings(candidate=candidate,rid=dispatch_id):
+                                    nonlocal summary_provider
+                                    try:
+                                        await asyncio.to_thread(desktop.settings.persist,candidate)
+                                        desktop.settings.value = candidate
+                                        summary_provider = candidate.summary()
+                                        if app.state.recording:
+                                            configure = getattr(app.state.recording,'configure',None)
+                                            if configure is not None:
+                                                configure(cloud_config=desktop.settings.cloud(),
+                                                    local_config=candidate.local_transcription(),
+                                                    cleanup_provider=candidate.cleanup())
+                                            else:
+                                                app.state.recording.base_config = desktop.settings.cloud()
+                                                app.state.recording.cloud = app.state.recording.base_config
+                                                app.state.recording.cleanup_provider = candidate.cleanup()
+                                        await publish({'type':'settings','settings':candidate.public(),
+                                            'summary_provider':summary_provider.public(),
+                                            'transcription':app.state.recording.cloud.public() if app.state.recording else {}})
+                                        await publish(desktop.receipt(rid,'accepted'))
+                                    except Exception:
+                                        await publish(desktop.receipt(rid,'rejected'))
+                                        raise
+                                    finally:
+                                        app.state.settings_saving = False
+                                task = app.state.settings_task = asyncio.create_task(commit_settings())
+                                # Owned by the app: disconnecting a window cannot abandon
+                                # a completed Keychain write or lose its retained receipt.
+                                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+                                await asyncio.shield(task)
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action == 'link_calendar_event':
+                                from .calendar_links import save_link
+                                await publish(save_link(store,command))
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action == 'prepare_email_export':
+                                if recording_busy() or summary_task is not None:
+                                    raise ValueError('Finish recording and processing before sharing')
+                                if app.state.email_exports is None:
+                                    from .email_exports import EmailExports
+                                    app.state.email_exports = EmailExports()
+                                try:
+                                    result = await app.state.email_exports.prepare(store,app.state.audio,command)
+                                except asyncio.CancelledError:
+                                    # Reconnecting clients must not remain stuck on a
+                                    # dispatching receipt after a canceled local export.
+                                    await publish(desktop.receipt(dispatch_id,'rejected'))
+                                    raise
+                                await queue.put({**result,'response_to':dispatch_id})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action == 'discard_email_exports':
+                                if set(command)!={'action','export_ids'}:
+                                    raise ValueError('Invalid export cleanup')
+                                if app.state.email_exports is not None:
+                                    await asyncio.to_thread(app.state.email_exports.discard,command['export_ids'])
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             if action == 'set_detection':
@@ -680,6 +832,21 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                         action = command.get('action')
+                        if desktop and action in {'resume','reprocess'}:
+                            sid = command.get('session_id')
+                            if not isinstance(sid,str) or not store.get(sid):
+                                raise ValueError('Select a saved conversation')
+                            expected = desktop.settings.value.transcription_engine
+                            if action == 'resume':
+                                previous = store.transcript_provider(sid)
+                                known = {'deepgram':'deepgram','local-ollama':'ollama'}
+                                if previous in known:
+                                    expected = known[previous]
+                                elif store.segments(sid):
+                                    raise ValueError('Use Transcribe again to replace an unsupported transcript')
+                            if command.get('model',expected) != expected:
+                                raise ValueError('Transcription engine changed; review and try again')
+                            command['model'] = expected
                         retained = app.state.audio
                         if retained and retained.busy and action in {'record','accept_call','resume','reprocess','recover','delete','retention','archive_audio','play_audio'}:
                             raise ValueError('Wait for the audio reader or cleanup')
@@ -739,6 +906,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             session = app.state.runner.start(request.fixture, request.title,
                                                               fixtures[request.fixture])
                             await publish({'type': 'session', 'session': session})
+                        elif action == 'set_recording_paused':
+                            if (not desktop or set(command) != {'action','session_id','paused'}
+                                    or type(command.get('paused')) is not bool):
+                                raise ValueError('Invalid recording pause command')
+                            recorder = app.state.recording
+                            if not recorder or not command.get('session_id'):
+                                raise ValueError('No active recording')
+                            recorder.set_paused(command['session_id'],command['paused'])
+                            await publish(recording_state())
                         elif action == 'stop_recording':
                             if not desktop or set(command) != {'action'}:
                                 raise ValueError('Invalid recording Stop command')
@@ -880,6 +1056,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             request = ReprocessRecording.model_validate(command)
                             if not app.state.recording or app.state.runner.active_id or summary_task is not None:
                                 raise ValueError('Cloud rerun is unavailable or notes are still processing')
+                            # Re-sync the cleanup engine with the latest saved settings so a
+                            # provider captured earlier cannot re-validate against old rules.
+                            resync_cleanup(app.state.recording)
                             if hasattr(app.state.recording,'select_model'):
                                 app.state.recording.select_model(request.model)
                             previous_revision = store.get(request.session_id)['transcript_revision']
@@ -903,6 +1082,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             elif request.action == 'resume':
                                 if hasattr(recorder,'select_model'):
                                     recorder.select_model(request.model)
+                                resync_cleanup(recorder)
                                 recorder.resume(request.session_id, language=request.language,
                                     **({'language_hints':request.language_hints} if request.language_hints is not None else {}),
                                     **({'cloud_consent':request.cloud_consent} if hasattr(recorder,'cloud') else {}))
@@ -1006,12 +1186,18 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
+                                    'Pause or Continue could not be confirmed. Reconnect to check the active recording; Stop remains available.'
+                                    if action=='set_recording_paused' else
                                     'Could not rename this conversation. Choose a saved record, use a single-line name of 1–160 characters, and wait for processing to finish.'
                                     if action=='rename_conversation' else
+                                    'Calendar link was not saved. Choose an available conversation and try again.'
+                                    if action=='link_calendar_event' else
+                                    'Could not prepare this attachment. Use a saved conversation with an up-to-date summary or retained audio, and finish any active processing.'
+                                    if action in {'prepare_email_export','discard_email_exports'} else
                                     'Could not play this audio. Check its availability or recover interrupted audio before trying again.'
                                     if action in {'audio_info','audio_window'} else
                                     'Name was not saved. Reopen the current transcript and choose a speaker; no partial person was created.'
@@ -1023,7 +1209,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
                             continue
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person','check_ollama'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
                             'message': ('Summary/export rejected. Select the current saved transcript, check configuration and the first-use agreement, and wait for any summary request to finish.'
@@ -1036,6 +1222,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if action in {'recover','resume','delete','retention'} else
                             'Saved audio is unavailable or busy. Check its expiry and try again.'
                             if action in {'archive_audio','play_audio','reprocess'} else
+                            'Local model check could not run. Set the Ollama endpoint and model in Preferences and wait for active work to finish.'
+                            if action == 'check_ollama' else
                             'Source unavailable or suggestion expired. Choose again manually.')
                             if meeting else
                             'Request rejected. Check authorization, fixture, and active replay.'})

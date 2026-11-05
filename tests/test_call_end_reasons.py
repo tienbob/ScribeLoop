@@ -61,6 +61,19 @@ def test_stop_first_writer_and_validation():
     with pytest.raises(ValueError): runner.stop('s',reason='duration_limit')
 
 
+@pytest.mark.parametrize('session,expected',[
+    ({'status':'completed'},True),
+    ({'status':'interrupted'},False),
+    ({'status':'failed','failure':None},False),
+    ({'status':'failed','failure':{'stage':'transcription'},'end_reason':'manual_stop','transcript_revision':1},True),
+    ({'status':'failed','failure':{'stage':'transcription'},'end_reason':'manual_stop','transcript_revision':None},False),
+    ({'status':'failed','failure':{'stage':'capture'},'end_reason':'manual_stop','transcript_revision':1},False),
+])
+def test_notes_readiness_retains_failures_but_uses_confirmed_manual_stop_text(session,expected):
+    from scribeloop_core.pipeline.recording import recording_ready_for_notes
+    assert recording_ready_for_notes(session) is expected
+
+
 def test_record_end_is_first_writer_logs_duplicates_and_propagates_constraints(caplog):
     conn = migrate(connect(':memory:')); store = SessionStore(conn)
     sid = store.create_recording('Fixture',{})['id']
@@ -88,7 +101,7 @@ def legacy():
 def test_migration_dedupes_first_row():
     assert sqlite3.sqlite_version_info >= (3,24,0)
     conn = legacy(); migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 15
     rows = conn.execute("SELECT payload_json FROM events WHERE type='recording_end'").fetchall()
     assert len(rows) == 1 and json.loads(rows[0][0])['end_reason'] == 'manual_stop'
     with pytest.raises(sqlite3.IntegrityError):

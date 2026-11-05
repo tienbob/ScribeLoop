@@ -83,10 +83,12 @@ only; no real-call acceptance was attempted.
 
 ## Remaining acceptance work
 
-- [ ] Implement the [commercial model](PRICING_AND_MODEL_ACCESS.md): $1 one-time
-  purchase, no recurring ScribeLoop usage fee, customer-configured ASR/LLM API
-  keys and fully self-hosted ASR/LLM options. These are release requirements,
-  not all implemented capabilities of the current bundle.
+- [ ] Implement the [commercial model](PRICING_AND_MODEL_ACCESS.md), revised
+  3 November: $3 one-time Local purchase for on-device ASR and notes/LLM (Ollama
+  accepted), or $5/month Cloud subscription, with Google login and verified
+  purchase/subscription tracking. Cloud usage allowances/provider funding versus
+  BYOK still need definition. Authentication and billing remain planned work;
+  see the [reviewed roadmap](PRODUCT_ROADMAP_REVIEW_2026-11-03.md).
 - [ ] Real Teams/Slack/browser calls: start/mute/receive-only behavior, notification false positives, one prompt per episode, dismissal/repeated calls, call-end grace and manual fallback. Slack is absent from this host's detected installations; installed app identity alone is not compatibility evidence.
 - [ ] Consented physical capture: intended source scope, microphone/output separation and alignment, device removal/change, interruptions, sleep/wake, network faults and multi-hour use. Do not enable speaker output for this work under the user's current constraint.
 - [ ] Representative WER/speaker accuracy, streaming latency and human-reviewed summary quality/cost. Public AMI evidence is limited, not target sign-off. Gemini has successful real notes evidence; OpenAI live summary acceptance remains unresolved after the recorded HTTP 429, with no current retry.

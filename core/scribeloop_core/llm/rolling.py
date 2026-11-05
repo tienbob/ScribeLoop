@@ -17,6 +17,9 @@ class InvalidSummaryOutput(ValueError):
 
 
 def summary_failure_code(exc):
+    from .summary_provider import IncompleteSummaryOutput
+    if isinstance(exc,IncompleteSummaryOutput):
+        return 'summary_incomplete_output'
     if isinstance(exc,InvalidSummaryOutput):
         return 'summary_invalid_output'
     if isinstance(exc,asyncio.CancelledError):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from uuid import uuid4
@@ -112,7 +113,7 @@ class SessionStore:
         if key is None:
             return None
         import re
-        if not re.fullmatch(r'(deepgram|moss):[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
+        if not re.fullmatch(r'(deepgram|moss|ollama):[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
             raise ValueError('Invalid speaker identity scope')
         identity = session_id+':'+key
         existing = self.conn.execute('SELECT id FROM session_speakers WHERE id=?',(identity,)).fetchone()
@@ -192,12 +193,21 @@ class SessionStore:
                 'scope','name','kind','app_id','microphone_id','microphone_name',
                 'duration_s','provider','model','engine','cloud_consent','cloud_budget_usd','language','language_hints','microphone_processing','transcription_quality')}
             session['capture'].update({key:capture.get(key) for key in ('auto_workflow','auto_title','auto_summary')})
-            provider = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+            provider = self.conn.execute("SELECT id,payload_json FROM events WHERE session_id=? "
                 "AND type='transcript_provider' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
-            session['transcript_provider'] = json.loads(provider[0])['provider'] if provider else capture.get('provider')
-            failure = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
+            session['transcript_provider'] = json.loads(provider['payload_json'])['provider'] if provider else capture.get('provider')
+            failure = self.conn.execute("SELECT id,payload_json FROM events WHERE session_id=? "
                 "AND type='recording_failure' ORDER BY id DESC LIMIT 1",(session['id'],)).fetchone()
-            session['failure'] = json.loads(failure[0]) if failure else None
+            session['failure'] = json.loads(failure['payload_json']) if failure else None
+            # A provider event commits atomically with a replacement revision.
+            # Keep historical failures, but stop presenting a recovered ASR error.
+            if (failure and provider and provider['id']>failure['id']
+                    and (session['failure'] or {}).get('stage')=='transcription'):
+                session['failure'] = None
+            if (session['status'] == 'failed' and session['end_reason'] == 'manual_stop'
+                    and (session['failure'] or {}).get('stage') == 'transcription'
+                    and session['transcript_revision']):
+                session['notes_status'] = 'Transcript incomplete. Notes use confirmed speech only; resume transcription to recover missing speech.'
             audio = self.conn.execute(
                 "SELECT payload_json FROM events WHERE session_id=? AND type='recording_complete' "
                 'ORDER BY id DESC LIMIT 1', (session['id'],)).fetchone()
@@ -287,6 +297,8 @@ class SessionStore:
         query = """WITH identities AS (
             SELECT s.id,s.stream,s.local_label,ROW_NUMBER() OVER (ORDER BY s.rowid) AS number
             FROM session_speakers s WHERE s.session_id=?
+            AND EXISTS (SELECT 1 FROM segments current WHERE current.session_id=s.session_id
+                        AND current.revision=? AND current.local_speaker_id=s.id)
         ), utterances AS (
             SELECT COALESCE(e.merge_target,g.local_speaker_id) AS identity,g.text,g.start_ms,g.rowid AS position
             FROM segments g LEFT JOIN revision_speaker_edits e ON e.session_id=g.session_id
@@ -294,6 +306,7 @@ class SessionStore:
             WHERE g.session_id=? AND g.revision=? AND g.local_speaker_id IS NOT NULL
         ) SELECT i.id,i.stream,i.number AS person_number,
             COALESCE(p.canonical_name,e.label,i.local_label) AS name,l.person_id,
+            CASE WHEN p.canonical_name IS NULL AND e.label IS NULL THEN i.local_label END AS auto_label,
             (SELECT text FROM utterances u WHERE u.identity=i.id ORDER BY start_ms,position LIMIT 1) AS sample,
             (SELECT MIN(start_ms) FROM utterances u WHERE u.identity=i.id) AS start_ms
         FROM identities i LEFT JOIN revision_speaker_edits e ON e.session_id=? AND e.revision=? AND e.speaker_id=i.id
@@ -302,10 +315,13 @@ class SessionStore:
         WHERE EXISTS (SELECT 1 FROM utterances u WHERE u.identity=i.id)
         ORDER BY i.number LIMIT 2001"""
         rows=[dict(row) for row in self.conn.execute(query,
-            (session_id,session_id,revision,session_id,revision,session_id,revision))]
+            (session_id,revision,session_id,revision,session_id,revision,session_id,revision))]
         if len(rows)>2000:
             raise ValueError('Speaker roster exceeds bounds')
         for row in rows:
+            automatic=row.pop('auto_label',None)
+            if automatic and re.fullmatch(r'Speaker [0-9]+',automatic):
+                row['name']=f"Speaker {row['person_number']}"
             row['sample']=(row['sample'] or '')[:180]
         self.memory_cache.put(('roster',key),[dict(row) for row in rows],owner=session_id)
         return rows
@@ -500,6 +516,59 @@ class SessionStore:
         except BaseException:
             self.conn.execute('ROLLBACK TO SAVEPOINT transcript_revision')
             self.conn.execute('RELEASE SAVEPOINT transcript_revision')
+            raise
+        return revision
+
+    def cleanup_originals(self, session_id, revision, *, limit=100, offset=0):
+        """Bounded source page for a cleanup revision; earlier ASR stays encrypted."""
+        events = self.conn.execute('SELECT payload_json FROM events WHERE session_id=? '
+            "AND type='local_transcript_cleanup' ORDER BY rowid DESC LIMIT 64",(session_id,)).fetchall()
+        for event in events:
+            value = json.loads(event[0])
+            if value.get('revision')==revision and (value.get('changed_segments',0)>0 or value.get('review_source_ids')):
+                rows = self.segments(session_id,revision=value['source_revision'],limit=limit,offset=offset)
+                review = set(value.get('review_source_ids',[]))
+                return [{**row,'cleanup_needs_review':row['id'] in review} for row in rows]
+        return []
+
+    def save_transcript_cleanup(self, session_id, expected_revision, edits, *, asr_model, cleanup_model,
+                                provenance_provider='local-ollama', review_ids=()):
+        rows = self.segments(session_id)
+        if (not rows or rows[0]['revision'] != expected_revision
+                or set(edits) != {row['id'] for row in rows}):
+            raise ValueError('Transcript changed during local cleanup')
+        if all(edits[row['id']]==row['text'] for row in rows):
+            with self.conn:
+                self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                    (session_id,self._now(),'info','local_transcript_cleanup',json.dumps({
+                        'source_revision':expected_revision,'revision':expected_revision,
+                        'model':cleanup_model,'changed_segments':0,'review_source_ids':list(review_ids)})))
+            return None
+        chunks = [{**row,'text':edits[row['id']],'is_final':True,'confidence':None,
+            'speaker_key':row['local_speaker_id'].partition(':')[2] if row['local_speaker_id'] else None}
+            for row in rows]
+        self.conn.execute('SAVEPOINT local_cleanup')
+        try:
+            revision = self.revise_transcript(session_id,chunks,provider=provenance_provider,model=asr_model)
+            self.conn.execute('INSERT INTO revision_speaker_edits '
+                '(session_id,revision,speaker_id,label,merge_target) '
+                'SELECT session_id,?,speaker_id,label,merge_target FROM revision_speaker_edits '
+                'WHERE session_id=? AND revision=?',(revision,session_id,expected_revision))
+            self.conn.execute('INSERT INTO person_links(session_id,revision,speaker_id,person_id) '
+                'SELECT session_id,?,speaker_id,person_id FROM person_links WHERE session_id=? AND revision=?',
+                (revision,session_id,expected_revision))
+            self.conn.execute('INSERT INTO person_link_history(session_id,revision,speaker_id,person_id) '
+                'SELECT session_id,revision,speaker_id,person_id FROM person_links WHERE session_id=? AND revision=?',
+                (session_id,revision))
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'info','local_transcript_cleanup',json.dumps({
+                    'source_revision':expected_revision,'revision':revision,'model':cleanup_model,
+                    'changed_segments':sum(edits[row['id']]!=row['text'] for row in rows),
+                    'review_source_ids':list(review_ids)})))
+            self.conn.execute('RELEASE SAVEPOINT local_cleanup')
+        except BaseException:
+            self.conn.execute('ROLLBACK TO SAVEPOINT local_cleanup')
+            self.conn.execute('RELEASE SAVEPOINT local_cleanup')
             raise
         return revision
 

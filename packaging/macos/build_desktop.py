@@ -21,6 +21,19 @@ def run(*args):
     subprocess.run([str(arg) for arg in args], cwd=ROOT, env=ENV, check=True)
 
 
+def reset_local_capture_permission(app, *, fixture=False):
+    """Refresh this Mac's grant after replacing its canonical ad-hoc app."""
+    if fixture or Path(app).resolve() != APP.resolve():
+        return False
+    # Never reset All, another app, Microphone, or the user's Keychain grants.
+    # A reset requires fresh local approval; it does not grant access.
+    # Calendar is Apple's tccutil service name for EventKit event access.
+    for service in ('ScreenCapture', 'Calendar'):
+        run('/usr/bin/tccutil', 'reset', service, 'ai.scribeloop.desktop')
+    print('ScribeLoop Screen Recording and Calendar permissions reset. Approve access locally for this build when needed.')
+    return True
+
+
 def main(*, app=APP, fixture=False):
     app = Path(app)
     if fixture and app.resolve() == APP.resolve():
@@ -54,6 +67,9 @@ def main(*, app=APP, fixture=False):
         ROOT / 'shell/macos/Desktop/MeetingPlayback.swift',
         ROOT / 'shell/macos/Desktop/PlaybackSmoke.swift',
         ROOT / 'shell/macos/Desktop/Appearance.swift',
+        ROOT / 'shell/macos/Desktop/TranscriptScrolling.swift',
+        ROOT / 'shell/macos/Desktop/Calendar.swift',
+        ROOT / 'shell/macos/Desktop/EmailSharing.swift',
         ROOT / 'shell/macos/Desktop/DesktopApp.swift',
         ROOT / 'shell/macos/Desktop/Preferences.swift',
         '-o', contents / 'MacOS/ScribeLoop')
@@ -61,6 +77,12 @@ def main(*, app=APP, fixture=False):
     if fixture:
         (contents/'Resources/Core'/frozen_name).rename(contents/'Resources/Core/scribeloop-core')
     shutil.copy2(ROOT/'shell/macos/Assets/ScribeLoop.icns',contents/'Resources/ScribeLoop.icns')
+    if not fixture:
+        from scribeloop_core.accounts.contracts import AccountConfig
+        account_config = AccountConfig(
+            api_url=os.environ.get('SCRIBELOOP_ACCOUNT_API_URL',''),
+            entitlement_public_key=os.environ.get('SCRIBELOOP_ENTITLEMENT_PUBLIC_KEY',''))
+        (contents/'Resources/account-config.json').write_text(account_config.model_dump_json()+'\n')
     for kind in ('meeting', 'observer'):
         run(python, ROOT / 'scripts/build_capture.py', '--kind', kind,
             '--minimum-macos', MINIMUM_MACOS,
@@ -81,10 +103,12 @@ def main(*, app=APP, fixture=False):
         plistlib.dump({'CFBundleExecutable': 'ScribeLoop', 'CFBundleName': 'ScribeLoop Preview' if fixture else 'ScribeLoop',
             'CFBundleIdentifier': 'ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop', 'CFBundlePackageType': 'APPL',
             'CFBundleIconFile': 'ScribeLoop.icns',
-            'CFBundleShortVersionString': '0.1.12', 'CFBundleVersion': '13',
+            'CFBundleShortVersionString': '0.1.41', 'CFBundleVersion': '42',
             'LSMinimumSystemVersion': MINIMUM_MACOS, 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': 'Record your microphone only when you choose Record for a conversation.',
             'NSAudioCaptureUsageDescription': 'Record selected meeting audio only when you choose Record.',
+            'NSCalendarsUsageDescription': 'Show events from calendars you select and link them to your conversations. ScribeLoop does not change calendar events.',
+            'NSCalendarsFullAccessUsageDescription': 'Show events from calendars you select and link them to your conversations. ScribeLoop does not change calendar events.',
             'NSAppTransportSecurity': {'NSAllowsLocalNetworking': True}}, f)
     run('codesign', '--force', '--sign', '-', app)
     run('codesign', '--verify', '--deep', '--strict', app)
@@ -95,6 +119,7 @@ def main(*, app=APP, fixture=False):
     (BUILD / ('preview-manifest.json' if fixture else 'desktop-manifest.json')).write_text(json.dumps({'fixture': fixture, 'host_macos': version,
         'architecture': os.uname().machine, 'app': str(app), 'signing': 'ad-hoc',
         'minimum_macos': MINIMUM_MACOS, 'release_signed': False}, indent=2) + '\n')
+    reset_local_capture_permission(app, fixture=fixture)
     print(app)
 
 

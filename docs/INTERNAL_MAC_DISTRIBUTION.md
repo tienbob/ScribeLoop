@@ -1,5 +1,16 @@
 # Internal Mac distribution
 
+## Local development permission refresh
+
+After each successful rebuild of the canonical `dist/macos/ScribeLoop.app`,
+`build_desktop.py` resets `ScreenCapture` and `Calendar` only for
+`ai.scribeloop.desktop` with `tccutil`. Quit the app before rebuilding, then
+approve Screen Recording and Calendar access locally for the new build as needed.
+Run the silent capture-access check before recording. The reset
+does not grant access. Preview/custom-destination builds skip the reset, and
+Microphone, Keychain, and other apps' permissions remain unchanged. Reset errors
+are surfaced by the build instead of claiming that the refresh succeeded.
+
 Updated October 30, 2026. Internal build **0.1.12 (13)** targets **Apple Silicon
 (M1 and newer), macOS 13 Ventura or later**. This is the build deployment target,
 verified against native dependency metadata. Runtime acceptance on an actual

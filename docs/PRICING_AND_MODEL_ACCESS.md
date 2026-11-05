@@ -1,51 +1,67 @@
-# Pricing and customer-provided models
+# Pricing, Google login, and model access
 
-Product decision recorded October 28, 2026.
+Product decision updated 3 November 2026. This replaces the earlier $1 one-time
+BYOK/no-subscription plan. These are approved target prices, not implemented
+checkout or entitlements in the current internal build.
 
-## Purchase model
+## Plans
 
-ScribeLoop costs **US$1 as a one-time app purchase**. After purchase, there is
-no recurring ScribeLoop subscription or ScribeLoop usage fee. Distribution is
-planned outside the Mac App Store; the storefront has not been selected.
-
-The purchase pays for the app. It does not include hosted transcription or LLM
-credits. Customers choose how to run both speech recognition (ASR) and the LLM
-used for notes and summaries.
-
-| Mode | How it works | Ongoing cost |
+| Plan | Price | Processing |
 | --- | --- | --- |
-| Self-hosted | Connect the app to customer-operated ASR and LLM models. | No ScribeLoop usage fee or external API bill when both models run entirely on the customer's own infrastructure. Hardware, electricity and any hosting costs remain the customer's responsibility. |
-| Own API keys | Configure the customer's own ASR and LLM provider accounts and API keys. | The customer pays those providers directly under their pricing. ScribeLoop adds no usage charge. |
-| Mixed | Self-host one component and use a paid API for the other. | The customer pays only the applicable provider and infrastructure costs. |
+| Local | **US$3 one-time purchase**; no recurring Local-plan fee | All ASR and notes/LLM models run on the user’s device. The existing Ollama path and its separate runtime are accepted. |
+| Cloud | **US$5 per month** | Cloud-model processing. Included services/usage allowances and provider funding versus BYOK remain to be defined. |
 
-Self-hosted use must support both ASR and LLM processing without requiring a
-ScribeLoop-operated model service. Provider availability and model licenses still
-apply to the customer's chosen setup.
+Treat these as alternative options; do not assume an additional $3 upfront charge
+for the Cloud subscription. A separately owned Local purchase survives Cloud
+subscription cancellation. Cloud subscription ownership alone does not grant a
+permanent Local purchase.
 
-## Intended customer-facing description
+The Local plan covers on-device processing, not a remote self-hosted model server.
+Proposed eligibility for mixed local/cloud processing is the Cloud plan; confirm
+this and remote-server rules before enforcing billing. A Local-only configuration
+must not silently fall back to cloud.
 
-> Buy ScribeLoop once for $1. Use it without an ongoing ScribeLoop fee. Connect
-> your own self-hosted speech and language models, or bring your own ASR and LLM
-> API keys and pay your providers directly. AI services are not included in the
-> purchase price.
+## Google login and ownership
 
-## Required implementation before release
+Add Google OAuth/OpenID Connect login to associate purchases and subscriptions
+with a stable internal user identity. Verify Google identity server-side; use its
+verified subject identifier rather than an email address as the ownership key.
+Signed payment webhooks determine paid entitlements, not successful login or a
+client-side paid flag.
 
-This document defines the intended commercial model; it is not a claim that all
-three modes are available in the current app.
+Initial login, purchase, activation, and restore on a new Mac require internet.
+After activation, a signed perpetual Local entitlement permits offline use
+without monthly checks or repeated Google login. Account and purchase metadata
+can reach Google/the billing service; Local audio, transcripts and model
+processing stay on-device. Sign-in does not grant Gmail or Google Calendar access.
 
-- Done for internal build 0.1.1: remove the bundled operator transcription
-  credential and add customer-owned Deepgram API-key configuration alongside LLM
-  configuration. Other ASR providers and self-hosted ASR remain future work.
-- Add and validate supported self-hosted ASR and LLM connections, including
-  endpoint configuration and any required authentication.
-- Allow ASR and LLM choices to be configured independently for mixed use.
-- Store customer credentials securely and keep them out of logs and exports.
-- Make setup, connection failures and provider charges clear before processing.
-- Verify that fully self-hosted processing does not require an external model
-  service; explain where audio and transcript data go for each selected mode.
+Cloud renewal, expiration, cancellation and payment recovery need server-backed
+entitlement tracking and a defined cache/grace policy. Saved recordings and notes
+remain readable/exportable after expiration; owned Local access remains valid.
+Google login restores purchases on another Mac, not the contents of its workspace.
 
-The current native app uses Deepgram cloud ASR and configurable cloud notes
-providers. Local-model experiments in the repository do not establish complete
-self-hosted support in the packaged app. General release requirements remain in
-the [current acceptance checklist](CURRENT_STATUS.md).
+## Open Cloud offer details
+
+- Does $5/month include ScribeLoop-funded ASR/LLM usage, or is it an app subscription while users separately fund their own provider API keys?
+- Which models, usage/minute caps, cost ceilings and overage behavior apply if model usage is included? Unlimited use is not assumed.
+- Confirm mixed-mode/remote-hosting classification, activation/device limits, subscription grace and refund rules.
+- Select an eligible payment provider and verify the economics before checkout goes live.
+
+No included AI credits, unlimited processing, or shared provider credentials are
+promised by the price decision alone. If ScribeLoop funds cloud models, an
+authenticated, metered model gateway needs a separate design; provider secrets
+must remain outside the desktop bundle.
+
+## Implementation and acceptance
+
+The current internal app has Deepgram cloud ASR, configurable notes providers,
+and a local Ollama batch transcription path. The Local plan needs both local ASR
+and a local notes model configured and accepted with the network disconnected.
+First-time model downloads happen before that offline test. The Google account
+foundation is implemented, with hosting and live sign-in acceptance pending;
+payment checkout and entitlement enforcement remain planned work. See
+[account implementation and setup](GOOGLE_ACCOUNT_IMPLEMENTATION.md).
+
+See the [reviewed implementation plan](PRODUCT_ROADMAP_REVIEW_2026-11-03.md) for
+Google login, account records, checkout/webhook handling, offline license
+verification, acceptance checks and the pending commercial details.

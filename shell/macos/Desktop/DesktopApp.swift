@@ -111,32 +111,67 @@ struct OutsideClickFocusDismissal: NSViewRepresentable {
 struct ScribeLoopApp: App {
     @NSApplicationDelegateAdaptor(DesktopDelegate.self) private var delegate
     @StateObject private var core = DesktopClient()
+    @StateObject private var calendar = CalendarCoordinator()
     @Environment(\.openWindow) private var openWindow
     var body: some Scene {
         Window("ScribeLoop",id:"notebook") {
-            Notebook(core:core).onAppear { delegate.core = core; core.onCandidate = { [weak controller = delegate] row in controller?.showCall(row) }; if !core.running { core.start() } }
+            Notebook(core:core,calendar:calendar).onAppear { delegate.core = core; core.onCandidate = { [weak controller = delegate] row in controller?.showCall(row) }; if !core.running { core.start() } }
         }.defaultSize(width:1160,height:780)
         MenuBarExtra {
             Text(core.activeID == nil ? (core.summaryID == nil ? core.monitorLabel : "Preparing notes") : "Recording · microphone and selected source")
             if core.activeID != nil { Button("Stop recording",role:.destructive) { core.stopRecording() } }
             if !objects(core.discovery["candidates"]).isEmpty { Text("Possible call detected · open ScribeLoop to review") }
             Button("Open ScribeLoop") { openWindow(id:"notebook"); NSApp.activate(ignoringOtherApps:true) }
-            Button(core.detection ? "Pause call detection" : "Resume call detection") {
-                core.send(["action":"set_detection","enabled":!core.detection])
-            }.disabled(core.activeID != nil || !core.connected)
+            Button("Settings…") {
+                if !NSApp.sendAction(Selector(("showSettingsWindow:")),to:nil,from:nil) {
+                    NSApp.sendAction(Selector(("showPreferencesWindow:")),to:nil,from:nil)
+                }
+                NSApp.activate(ignoringOtherApps:true)
+            }
             Divider()
             Button("Quit ScribeLoop") { NSApp.terminate(nil) }
         } label: { Image(systemName:core.activeID == nil ? "waveform" : "record.circle.fill").accessibilityLabel(core.activeID == nil ? "ScribeLoop" : "ScribeLoop recording") }
-        Settings { Preferences(core:core).frame(width:620,height:690) }
+        Settings { Preferences(core:core,calendar:calendar).frame(width:650,height:720) }
+    }
+}
+
+struct SettingsDestination:Identifiable { let id:String }
+
+/// Chat-style floating jump buttons for the transcript box. Shown only while
+/// reading away from the live bottom; hidden again once following resumes.
+private struct TranscriptJumpButton: View {
+    let icon:String
+    let label:String
+    var badge = false
+    let action:() -> Void
+    var body: some View {
+        Button(action:action) {
+            ZStack(alignment:.topTrailing) {
+                Image(systemName:icon).font(.system(size:13,weight:.semibold))
+                    .foregroundStyle(ScribeTheme.accent)
+                    .frame(width:32,height:32)
+                    .background(ScribeTheme.panel,in:Circle())
+                    .overlay { Circle().strokeBorder(ScribeTheme.border.opacity(0.65),lineWidth:1) }
+                if badge { Circle().fill(ScribeTheme.accent).frame(width:9,height:9).offset(x:2,y:2) }
+            }
+            .shadow(color:.black.opacity(0.10),radius:3,y:1)
+        }.buttonStyle(.plain)
+            .help(label)
+            .accessibilityLabel(label)
     }
 }
 
 struct Notebook: View {
     @ObservedObject var core: DesktopClient
+    @ObservedObject var calendar:CalendarCoordinator
+    @State private var showCalendar = false
+    @State private var calendarConversation:Record?
+    @State private var emailSharing:EmailSharingContext?
     @State private var recording = false
     @State private var candidate: Record?
     @State private var retryCapture: Object?
-    @State private var showPreferences = false
+    @State private var preferencesRequest:SettingsDestination?
+    @State private var calendarSettingsRequested = false
     @State private var showPeople = false
     @State private var tab = "Notes"
     @State private var confirmed: String?
@@ -156,6 +191,7 @@ struct Notebook: View {
                 }.padding(.bottom,6)
                 Button { candidate = nil; retryCapture = nil; recording = true } label: { Label("New recording",systemImage:"plus").frame(maxWidth:.infinity).padding(.vertical,5) }.buttonStyle(.borderedProminent).tint(ScribeTheme.action)
                     .disabled(!core.accepted || !core.connected || core.busy)
+                Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
@@ -202,14 +238,17 @@ struct Notebook: View {
                         Text(core.monitorLabel).font(.system(size:11)).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button { NSApp.activate(ignoringOtherApps:true); showPreferences = true } label: { Image(systemName:"gearshape").padding(4) }.buttonStyle(.borderless).help("Preferences").disabled(!core.connected)
+                    Button { NSApp.activate(ignoringOtherApps:true); preferencesRequest = SettingsDestination(id:"Recording") } label: { Image(systemName:"gearshape").padding(4) }.buttonStyle(.borderless).help("Preferences").disabled(!core.connected)
                 }.padding(10).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:12))
             }.padding(18).background(ScribeTheme.sidebar)
             .navigationSplitViewColumnWidth(min:260,ideal:290,max:380)
         } detail: {
             VStack(spacing:0) {
                 if let message = core.message, !message.isEmpty {
-                    HStack(alignment:.top) { Image(systemName:"info.circle"); Text(message).textSelection(.enabled); Spacer(); Button("Dismiss") { core.message = nil }; if core.uncertainActions { Button("I reviewed the current state") { core.acknowledgeUncertainActions() } } }.font(.callout).padding(14).background(Color.orange.opacity(0.09))
+                    HStack(alignment:.top) { Image(systemName:"info.circle"); Text(message).textSelection(.enabled); Spacer(); Button("Dismiss") { core.message = nil } }.font(.callout).padding(14).background(Color.orange.opacity(0.09))
+                }
+                if core.uncertainActions {
+                    HStack { Spacer(); Button("I reviewed the current state") { core.acknowledgeUncertainActions() } }.font(.callout).padding(.horizontal,14).padding(.vertical,6)
                 }
                 if !core.accepted && core.connected { agreementView }
                 else if let current = candidates.first, core.activeID == nil {
@@ -219,10 +258,18 @@ struct Notebook: View {
                     }.padding(18).background(Color.green.opacity(0.08))
                 }
                 if let activeID = core.activeID {
-                    HStack { Image(systemName:"record.circle.fill").foregroundStyle(.red); Text(core.captureStopping ? "Stopping capture…" : "Recording · Cloud / Deepgram")
+                    HStack { Image(systemName:core.recordingPaused ? "pause.circle.fill" : "record.circle.fill").foregroundStyle(core.recordingPaused ? .orange : .red); Text(core.captureStopping ? "Stopping capture…" : core.recordingPaused ? "Paused · New audio is excluded" : "Recording")
                         if let row = core.sessions.first(where: { $0.id == activeID }) { TimelineView(.periodic(from:.now,by:1)) { _ in Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),style:.timer).monospacedDigit() } }
-                        Spacer(); Button("Stop recording",role:.destructive) { core.stopRecording() }.keyboardShortcut(".",modifiers:.command)
+                        Spacer()
+                        Button { core.toggleRecordingPause() } label: {
+                            Label(core.recordingPaused ? "Continue" : "Pause",systemImage:core.recordingPaused ? "play.fill" : "pause.fill")
+                        }.disabled(!core.connected || core.captureStopping)
+                        Button("Stop recording",role:.destructive) { core.stopRecording() }.keyboardShortcut(".",modifiers:.command)
                     }.padding(18)
+                    if core.recordingPaused {
+                        Text("Continue to include new audio. Microphone access stays active; the recording time limit still applies.")
+                            .font(.caption).foregroundStyle(.secondary).padding(.horizontal,18).padding(.bottom,10)
+                    }
                 }
                 if let streamingLabel = core.streamingLabel {
                     HStack { Image(systemName:"text.bubble"); Text(streamingLabel); Spacer() }
@@ -250,6 +297,9 @@ struct Notebook: View {
                                 if !selected.text("notes_status").isEmpty {
                                     Text(selected.text("notes_status")).font(.callout).foregroundStyle(.secondary)
                                 }
+                                if let event = core.detail["calendar_event"] as? Object {
+                                    Button { calendarConversation = selected; showCalendar = true } label: { Label(text(event["title"]),systemImage:"calendar") }.buttonStyle(.borderless).font(.callout)
+                                }
                                 if !selected.text("transcription_warning").isEmpty {
                                     Label(selected.text("transcription_warning"),systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning)
                                 }
@@ -269,6 +319,8 @@ struct Notebook: View {
                             Spacer(minLength:0)
                             HStack(spacing:8) {
                             Button("Name people",systemImage:"person.crop.circle.badge.plus") { core.send(["action":"people_page"]); showPeople = true }.disabled(!core.connected || core.busy || core.revision == 0)
+                            Button("Email",systemImage:"envelope") { emailSharing = EmailSharingContext(conversation:selected,detail:core.detail) }
+                                .disabled(!canShare(selected))
                             Menu("Meeting") { meetingActions(selected) }.disabled(!core.connected)
                             }.controlSize(.regular).font(.callout)
                         }
@@ -294,8 +346,12 @@ struct Notebook: View {
         .tint(ScribeTheme.accent)
         .background(InteractiveWindowActivation())
         .onChange(of:core.selectedID) { value in if let value { core.select(value) } }
+        .sheet(isPresented:$showCalendar,onDismiss:{
+            if calendarSettingsRequested { calendarSettingsRequested = false; preferencesRequest = SettingsDestination(id:"Calendar") }
+        }) { CalendarPanel(core:core,calendar:calendar,conversation:calendarConversation,onOpenSettings:{ calendarSettingsRequested = true; showCalendar = false }) }
+        .sheet(item:$emailSharing) { context in EmailSharingPanel(core:core,context:context) }
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate,initialCapture:retryCapture) }
-        .sheet(isPresented:$showPreferences) { Preferences(core:core).frame(width:650,height:720) }
+        .sheet(item:$preferencesRequest) { destination in Preferences(core:core,calendar:calendar,initialPage:destination.id).frame(width:650,height:720) }
         .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
         .sheet(item:$renaming) { row in RenameConversation(core:core,conversation:row) }
         .alert("Delete this conversation permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
@@ -308,20 +364,26 @@ struct Notebook: View {
             Text("Before your first recording").font(.title2)
             Text("Record only with permission from everyone captured. You choose Record / Not now for each call. Browser recording captures all tabs in that browser.")
             Text("Audio streams to Deepgram; transcript text and speaker labels go to your configured summary endpoint (OpenAI by default). Provider charges apply. Longer meetings use section notes and a final summary, limited to 128 requests and 8 MB of request text per meeting across retries, with up to 4,000 output tokens per request. Recording presets cap estimated audio spending.")
-            Text("Saved audio, transcripts and notes are encrypted locally. Unarchived audio expires after 30 days while the app is running and idle. Archive to keep it. Manual reruns upload retained audio again. Exports are readable plaintext. Naming a speaker never enables voice recognition. Revoke this agreement in Preferences to stop processing; saved meetings remain.")
+            Text("Saved audio, transcripts and notes are encrypted locally. Unarchived audio expires after 30 days while the app is running and idle. Archive to keep it. Manual reruns upload retained audio again. Exports are readable plaintext. Naming a speaker never enables voice recognition. Use Stop recording to end capture, or quit ScribeLoop to stop pending processing. Saved meetings remain.")
             Button("Agree and continue") { core.send(["action":"accept_agreement","version":text(core.agreement["version"])]) }.buttonStyle(.borderedProminent)
         }.font(.callout).padding(24).background(Color.green.opacity(0.06))
     }
     @ViewBuilder private func meetingActions(_ row: Record) -> some View {
         Button("Rename conversation…",systemImage:"pencil") { renaming = row }.disabled(core.busy)
+        Button("Link calendar event…",systemImage:"calendar") { calendarConversation = row; showCalendar = true }
         Divider()
         Button("Generate summary") { summarize(row) }.disabled(core.busy || core.revision == 0 || !core.accepted || core.summaryProvider["configured"] as? Bool != true)
         Button("Export Markdown…") { core.send(["action":"export_markdown","session_id":row.id,"revision":core.revision]) }.disabled(core.revision == 0)
+        Button("Share by email…",systemImage:"envelope") { emailSharing = EmailSharingContext(conversation:row,detail:core.detail) }.disabled(!canShare(row))
         Button("People…") { core.send(["action":"people_page"]); showPeople = true }
         Divider()
         Button("Recover interrupted audio") { core.send(["action":"recover","session_id":row.id]) }.disabled(core.busy || !["failed","interrupted"].contains(row.text("status")))
-        Button("Resume transcription") { core.send(["action":"resume","session_id":row.id,"language":core.settings["language"] ?? "auto","language_hints":core.settings["language_hints"] ?? ["en","vi"]]) }.disabled(core.busy || !core.accepted || !["failed","interrupted"].contains(row.text("status")))
+        Button("Resume transcription") { core.resumeTranscription(row.id) }.disabled(core.busy || !core.accepted || !["failed","interrupted"].contains(row.text("status")))
         Button("Delete conversation…",systemImage:"trash",role:.destructive) { confirmed = row.id }.disabled(core.busy)
+    }
+    private func canShare(_ row:Record) -> Bool {
+        core.connected && !core.busy && row.text("source") == "meeting" && ["completed","failed","interrupted"].contains(row.text("status"))
+            && text((core.detail["session"] as? Object)?["id"]) == row.id
     }
     private func summarize(_ row: Record) {
         core.send(["action":"summarize","session_id":row.id,"revision":core.revision,
@@ -333,20 +395,45 @@ struct Notebook: View {
                 Button("Earlier") { core.loadPage(max(0,core.offset-100)) }.disabled(core.offset == 0)
                 Text("\(core.total == 0 ? 0 : core.offset+1)–\(min(core.offset+100,core.total)) of \(core.total)").font(.caption).monospacedDigit()
                 Button("Later") { core.loadPage(core.offset+100) }.disabled(core.offset+100 >= core.total)
-                Spacer(); Button("Latest") { core.loadPage(-1) }
+                Spacer()
+                Text(core.transcriptFollow.following ? (core.activeID == core.selectedID ? "Following live" : "At latest") : "Reading earlier")
+                    .font(.caption).foregroundStyle(.secondary)
             }.padding(.horizontal,28).padding(.vertical,12)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment:.leading,spacing:22) {
-                        ForEach(core.rows) { row in TranscriptRow(core:core,row:row).padding(10).background(row.id == core.citationID ? Color.accentColor.opacity(0.13) : Color.clear).clipShape(RoundedRectangle(cornerRadius:8)).id(row.id) }
+                    LazyVStack(alignment:.leading,spacing:14) {
+                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn) }
                         ForEach(core.partials.keys.sorted(),id:\.self) { stream in
-                            if let value = core.partials[stream], !value.isEmpty { Text("\(stream == "mic" ? "Microphone" : "Meeting audio") · \(value)").italic().foregroundStyle(.secondary) }
+                            if let value = core.partials[stream], !value.isEmpty { Text("Recognizing speaker… · \(value)").italic().foregroundStyle(.secondary)
+                                .frame(maxWidth:.infinity,alignment:["application","system"].contains(core.transcriptCaptureScope) && stream == "mic" ? .trailing : .leading) }
                         }
                         if core.rows.isEmpty { Text("Confirmed speech appears here while recording. Speaker labels are anonymous until you name them.").foregroundStyle(.secondary) }
+                        Color.clear.frame(height:1).id("transcript-bottom")
                     }.padding(28)
+                        .background(TranscriptScrollTracking(following:core.transcriptFollow.following,
+                            onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
                 }
-                .onChange(of:core.pageSerial) { _ in if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) } else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) } }
+                .onChange(of:core.pageSerial) { _ in
+                    if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) }
+                    else if core.pageScrollToLatest { proxy.scrollTo("transcript-bottom",anchor:.bottom) }
+                    else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) }
+                }
             }
+            .overlay(alignment:.bottomTrailing) {
+                if !core.transcriptFollow.following {
+                    VStack(spacing:10) {
+                        if !(core.offset == 0 && core.transcriptFollow.nearTop) {
+                            TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript") { core.loadPage(0) }
+                        }
+                        TranscriptJumpButton(icon:"chevron.down",
+                            label:core.transcriptFollow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
+                            badge:core.transcriptFollow.unread) { core.loadPage(-1) }
+                    }
+                    .padding(.trailing,28).padding(.bottom,20)
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration:0.15),value:core.transcriptFollow)
         }
     }
     private var notes: some View {
@@ -393,17 +480,33 @@ struct RecordingReview: View {
             Picker("Microphone",selection:$microphone) { ForEach(objects(core.discovery["microphones"])) { row in Text(row.text("name")).tag(row.id) } }
             Text("Browser capture includes every tab in the selected browser. Check that everyone captured has agreed to recording.").font(.callout).foregroundStyle(.secondary)
             VStack(alignment:.leading,spacing:8) {
-                Label("Deepgram · Cloud transcription with speaker separation",systemImage:"waveform")
+                if text(core.settings["transcription_engine"]) == "ollama" {
+                    Label("Ollama · Local transcription after the recording ends",systemImage:"waveform")
+                } else {
+                    Label("Deepgram · Cloud transcription with speaker separation",systemImage:"waveform")
+                }
                 Label("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"])) notes",systemImage:"note.text")
             }.font(.callout).notebookCard()
             let duration = core.settings["duration_s"] as? Int ?? 3600
-            Text("Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Languages: \(core.transcriptionLanguageLabel)").font(.callout)
-            if core.settings["final_transcription"] as? Bool == true {
-                Text("Includes an extra billed Deepgram pass after Stop before notes are generated.").font(.caption).foregroundStyle(.secondary)
+            let localEngine = text(core.settings["transcription_engine"]) == "ollama"
+            Text(localEngine
+                ? "Limit: \(duration/60) minutes · Languages: \(core.transcriptionLanguageLabel). Transcription and notes run on this Mac after the recording ends; nothing is uploaded or charged."
+                : "Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Languages: \(core.transcriptionLanguageLabel)").font(.callout)
+            if localEngine {
+                Text("Transcription starts after you press Stop — there is no live transcript while recording.\(core.settings["local_speaker_labels"] as? Bool == true ? " Anonymous speaker labels are generated locally." : "")").font(.caption).foregroundStyle(.secondary)
+                if core.settings["local_transcription_configured"] as? Bool != true {
+                    Label("Choose an Ollama transcription model in Preferences before recording.",systemImage:"cpu").foregroundStyle(.orange)
+                }
+            } else {
+                if core.settings["final_transcription"] as? Bool == true {
+                    Text("Includes an extra billed Deepgram pass after Stop before notes are generated.").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Microphone transcription: \(core.settings["asr_microphone_source"] as? String == "raw" ? "original audio" : "processed audio") · \((core.settings["vocabulary"] as? [String] ?? []).count) vocabulary hints").font(.caption).foregroundStyle(.secondary)
+                if core.transcription["configured"] as? Bool != true {
+                    Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange)
+                }
             }
-            Text("Microphone transcription: \(core.settings["asr_microphone_source"] as? String == "raw" ? "original audio" : "processed audio") · \((core.settings["vocabulary"] as? [String] ?? []).count) vocabulary hints").font(.caption).foregroundStyle(.secondary)
             Text(candidate == nil && scope != "application" ? "Press Stop to end this recording. Notes follow automatically." : (core.settings["stop_on_microphone_release"] as? Bool == true ? "Recording stops after 60 seconds of known app inactivity or after the app releases its microphone. Muted calls may also trigger the countdown; choose Keep recording to continue. Stop is always available." : "Recording stops after 60 seconds of known app inactivity. Other browser tabs can keep audio active; press Stop if the call has ended. Unknown activity keeps recording.")).font(.caption).foregroundStyle(.secondary)
-            if core.transcription["configured"] as? Bool != true { Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange) }
             if let recordError { Label(recordError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning) }
             HStack {
                 Button("Not now") { if let candidate { core.send(["action":"dismiss_candidate","candidate_id":candidate.id]) }; closeReview() }.keyboardShortcut(.cancelAction)
@@ -414,7 +517,11 @@ struct RecordingReview: View {
                     if pendingRecord == nil { recordError = core.message ?? "Recording could not be requested. Reconnect and try again." }
                 }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(pendingRecord != nil || !core.accepted || !core.connected || core.busy || core.transcription["configured"] as? Bool != true || (candidate == nil && scope == "application" && app.isEmpty))
+                    .disabled(pendingRecord != nil || !core.accepted || !core.connected || core.busy
+                        || (text(core.settings["transcription_engine"]) == "ollama"
+                            ? core.settings["local_transcription_configured"] as? Bool != true
+                            : core.transcription["configured"] as? Bool != true)
+                        || (candidate == nil && scope == "application" && app.isEmpty))
             }
         }.padding(32).frame(width:580)
         .onAppear {

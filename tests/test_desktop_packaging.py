@@ -14,6 +14,21 @@ def builder():
     return module
 
 
+def test_permission_reset_is_scoped_to_local_production_rebuild(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
+    build = builder()
+    target = tmp_path/'ScribeLoop.app'
+    monkeypatch.setattr(build,'APP',target)
+    calls = []
+    monkeypatch.setattr(build,'run',lambda *args:calls.append(args))
+    assert not build.reset_local_capture_permission(target,fixture=True)
+    assert not build.reset_local_capture_permission(tmp_path/'Other.app')
+    assert calls == []
+    assert build.reset_local_capture_permission(target)
+    assert calls == [('/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop')
+                     for service in ('ScreenCapture','Calendar')]
+
+
 @pytest.mark.parametrize('fixture',[True,False])
 def test_build_has_no_credentials_and_custom_destination_preserves_existing_app(tmp_path,monkeypatch,fixture):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
@@ -59,6 +74,9 @@ def test_build_has_no_credentials_and_custom_destination_preserves_existing_app(
     info = plistlib.loads((preview/'Contents/Info.plist').read_bytes())
     assert info['CFBundleIdentifier'] == ('ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop')
     assert info['LSMinimumSystemVersion'] == '13.0'
+    assert 'NSCalendarsUsageDescription' in info
+    assert 'NSCalendarsFullAccessUsageDescription' in info
+    assert 'NSRemindersUsageDescription' not in info
     assert (work/('preview-manifest.json' if fixture else 'desktop-manifest.json')).is_file()
     for path in preview.rglob('*'):
         if path.is_file(): assert b'must-never-be-bundled' not in path.read_bytes()

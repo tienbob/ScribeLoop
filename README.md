@@ -12,7 +12,8 @@ The app is currently available for **internal testing on Apple Silicon Macs runn
 - **Follow a live transcript.** See text during the conversation, with anonymous speaker labels that you can name manually.
 - **Use multiple languages.** Search and select expected conversation languages, including English and Vietnamese, to guide recognition.
 - **Get notes with sources.** Generate an overview, key points, decisions, action items, open questions, and uncertainties where the transcript supports them. Follow citations back to the transcript.
-- **Revisit and share.** Browse saved conversations, play retained audio, and export notes and transcripts as Markdown.
+- **See upcoming meetings.** Opt into macOS Calendar, choose calendars, open a meeting link, and explicitly link an event to a conversation. The existing recording popup still asks before capture starts. See [Calendar setup](docs/MACOS_CALENDAR.md).
+- **Revisit and share.** Browse saved conversations, play retained audio, export Markdown, or prepare an email draft with a summary, transcript or audio attachment. Summary is selected by default; you review and send from your mail app. See [email sharing](docs/EMAIL_SHARING.md).
 - **Control recognition settings.** Adjust microphone sensitivity and noise filtering, add vocabulary hints, and choose whether transcription uses original or processed microphone audio.
 
 ## Requirements
@@ -21,11 +22,16 @@ The app is currently available for **internal testing on Apple Silicon Macs runn
 | --- | --- |
 | Mac | Apple Silicon: M1 or newer |
 | macOS | 13 Ventura or later; automatic call detection requires 14.2 or later |
-| Transcription | Your own Deepgram API key and an internet connection |
+| Transcription | Your own Deepgram API key and an internet connection, or a local Ollama server (optional) |
 | Conversation notes | A supported cloud provider/model and your own API key, or an existing compatible local model server |
-| Permissions | Microphone access; Screen Recording access for meeting-app or system audio |
+| Permissions | Microphone access; Screen Recording access for meeting-app or system audio; optional Calendar access for upcoming events |
 
 Intel Macs and macOS 11–12 are not supported by the current installer. Python, Homebrew, Xcode, and Ollama are not prerequisites for using cloud transcription and notes.
+
+## Transcription engines
+
+- **Deepgram (cloud, default)** — live transcript while recording, word-level speaker labels, and an optional extra refinement pass. Audio is sent to Deepgram.
+- **Ollama (local)** — transcription runs on your Mac **after the conversation has ended**: there is no live transcript while recording. ScribeLoop opens Ollama automatically, downloads the model name you type once if it is available in the Ollama library, and never uploads audio. Anonymous speaker labels are available as an opt-in add-on when the local diarization model is installed. See [local transcription](docs/LOCAL_TRANSCRIPTION.md).
 
 ## Install
 
@@ -40,8 +46,8 @@ See the [full installation guide](packaging/macos/INTERNAL_INSTALL.txt) for setu
 ## Your first recording
 
 1. Open **Preferences** using the gear icon.
-2. Enter your **Deepgram API key**. Choose a notes provider and model, then enter its API key. Save with **Done**.
-3. Select the languages you expect to hear. English and Vietnamese can be selected together.
+2. In **Models**, enter your **Deepgram API key**. Choose a notes provider and model, then enter its API key. Use **Save changes** when finished.
+3. In **Recording**, select the languages you expect to hear. English and Vietnamese can be selected together.
 4. Grant microphone access and, when needed, macOS Screen Recording access. Use **Check capture access without recording** to verify permissions silently.
 5. Review the processing agreement, choose **New recording**, select your audio source, and press **Record & take notes**.
 6. Press **Stop recording** when finished. Transcription can continue processing after capture stops; notes follow when the transcript is ready.
@@ -52,7 +58,7 @@ On macOS 13–14.1, start and stop recordings manually.
 
 ## Make it fit your conversations
 
-In Preferences, you can choose recording duration limits, adjust microphone gain and background-noise filtering, and customize the instructions used to generate notes.
+In Preferences, you can choose recording duration limits, adjust microphone gain and background-noise filtering, and customize the instructions used to generate notes. You can also choose the transcription engine: Deepgram cloud or local Ollama transcription that runs after the conversation ends.
 
 Under **Recognition accuracy**, you can:
 
@@ -74,9 +80,9 @@ Opening the app does not start recording or play audio. Recording a selected bro
 
 ## Pricing
 
-The planned public price is **US$1 as a one-time app purchase**, with no recurring ScribeLoop subscription or usage fee. Transcription and language-model services are not included; you pay your providers directly using your own keys.
+The planned **Local** price is **US$3 as a one-time purchase**, with no recurring Local-plan fee, when all transcription and notes models run on your device. The planned **Cloud** price is **US$5 per month**. Cloud usage allowances and whether provider costs are included or paid through your own API keys are still being defined.
 
-The current build uses Deepgram cloud transcription and configurable notes providers. Fully self-hosted ASR and bundled local transcript-correction models are not included. See [pricing and model access](docs/PRICING_AND_MODEL_ACCESS.md) for the product plan and current availability.
+The Google sign-in/account foundation is implemented, with live sign-in awaiting account-service deployment. Checkout and paid-feature enforcement remain planned. The current internal app supports Deepgram cloud transcription and the local Ollama path. See [account setup](docs/GOOGLE_ACCOUNT_IMPLEMENTATION.md) and [pricing and model access](docs/PRICING_AND_MODEL_ACCESS.md).
 
 ## Internal testing status
 

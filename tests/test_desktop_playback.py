@@ -138,3 +138,19 @@ def test_numbered_roster_includes_other_pages_and_name_links_atomically(retained
     assert store.segments(sid,offset=200,limit=1)[0]['speaker_label']=='Alice'
     store.correct_speaker(sid,1,roster[1]['id'],merge_target=roster[0]['id'])
     assert [r['person_number'] for r in store.speaker_roster(sid,1)]==[1,3]
+
+
+def test_rerun_numbers_only_speakers_in_current_revision(retained):
+    store=retained.store
+    sid,old=speakers(store)
+    first=store.append(sid,{'text':'Fresh first speaker','start_ms':0,'end_ms':100,
+        'is_final':True,'speaker_key':f'deepgram:{"b"*32}:mic:0'},stream='mic',revision=2)
+    store.append(sid,{'text':'Fresh second speaker','start_ms':100,'end_ms':200,
+        'is_final':True,'speaker_key':f'deepgram:{"b"*32}:mic:1'},stream='mic',revision=2)
+    roster=store.speaker_roster(sid,2)
+    assert [r['person_number'] for r in roster]==[1,2]
+    assert [r['name'] for r in roster]==['Speaker 1','Speaker 2']
+    store.correct_speaker(sid,2,first['local_speaker_id'],label='Alice')
+    assert store.speaker_roster(sid,2)[0]['name']=='Alice'
+    assert len(store.segments(sid,revision=1))==len(old)
+    assert store.segments(sid,revision=1)[0]['local_speaker_id']==old[0]['local_speaker_id']

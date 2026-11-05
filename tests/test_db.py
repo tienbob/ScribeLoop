@@ -25,7 +25,7 @@ def test_migrate_creates_schema(db):
         "words", "summaries", "embeddings_chunks", "events", "transcript_revisions",
     }
     assert expected <= tables
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 def test_pragmas_on(db):
@@ -60,7 +60,7 @@ def test_event_index_upgrades_v13_and_serves_history_queries(db):
     db.execute('PRAGMA user_version=13')
     db.commit()
     migrate(db)
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 14
+    assert db.execute('PRAGMA user_version').fetchone()[0] == 15
     for direction in ('ASC', 'DESC'):
         plan = db.execute('EXPLAIN QUERY PLAN SELECT payload_json FROM events '
                           f'WHERE session_id=? AND type=? ORDER BY id {direction} LIMIT 1',
@@ -86,3 +86,21 @@ def test_event_index_migration_rolls_back_ddl_and_version(db):
         migrate(FailVersion())
     assert db.execute('PRAGMA user_version').fetchone()[0] == 13
     assert db.execute("SELECT 1 FROM sqlite_master WHERE name='idx_events_session_type_id'").fetchone() is None
+
+
+def test_roster_covering_index_migration_and_rollback(db):
+    db.execute('DROP INDEX idx_segments_revision_speaker')
+    db.execute('PRAGMA user_version=14');db.commit()
+    class FailVersion:
+        def __getattr__(self,name):return getattr(db,name)
+        def __enter__(self):db.__enter__();return self
+        def __exit__(self,*args):return db.__exit__(*args)
+        def execute(self,sql,*args):
+            if sql=='PRAGMA user_version=15':raise sqlite3.OperationalError('injected')
+            return db.execute(sql,*args)
+    with pytest.raises(sqlite3.OperationalError):migrate(FailVersion())
+    assert db.execute('PRAGMA user_version').fetchone()[0]==14
+    assert db.execute("SELECT 1 FROM sqlite_master WHERE name='idx_segments_revision_speaker'").fetchone() is None
+    migrate(db)
+    plan=' '.join(str(tuple(r)) for r in db.execute('EXPLAIN QUERY PLAN SELECT id FROM segments WHERE session_id=? AND revision=? AND local_speaker_id=?',('s',1,'speaker')))
+    assert 'idx_segments_revision_speaker' in plan and 'SEARCH' in plan
