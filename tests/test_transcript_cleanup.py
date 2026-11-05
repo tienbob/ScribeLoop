@@ -119,12 +119,12 @@ def test_cleanup_provider_selection_covers_cloud_and_local():
 async def test_cleanup_accepts_local_and_cloud_providers():
     class LMStudio(Editor):
         provider = 'LM Studio'
-    edits,rejects = await clean_transcript([{'id':'a','text':'Hello'}],LMStudio(),threading.Event())
+    edits,rejects,_ = await clean_transcript([{'id':'a','text':'Hello'}],LMStudio(),threading.Event())
     assert edits == {'a':'Hello.'} and rejects == []
     # A cloud cleanup provider is equally valid; only an unconfigured one is refused.
     cloud = LMStudio()
     cloud.cloud = True
-    edits,rejects = await clean_transcript([{'id':'a','text':'Hello'}],cloud,threading.Event())
+    edits,rejects,_ = await clean_transcript([{'id':'a','text':'Hello'}],cloud,threading.Event())
     assert edits == {'a':'Hello.'} and rejects == []
     unconfigured = LMStudio()
     unconfigured.configured = False
@@ -144,7 +144,7 @@ async def test_validation_off_keeps_the_raw_model_result():
                 {'id':'c','text':'Completely rewritten text'}]})
     rows = [{'id':'a','text':'Buy 25 apples yesterday'},{'id':'b','text':'We will attend'},
             {'id':'c','text':'Original text'},{'id':'d','text':'The model dropped me'}]
-    edits,rejects = await clean_transcript(rows,Raw(),threading.Event(),validate=False)
+    edits,rejects,_ = await clean_transcript(rows,Raw(),threading.Event(),validate=False)
     assert edits == {'a':'Buy 15 apples tomorrow','b':'We will not attend',
         'c':'Completely rewritten text','d':'The model dropped me'}
     assert rejects == []
@@ -152,7 +152,7 @@ async def test_validation_off_keeps_the_raw_model_result():
     # its original text, so the save never fails for missing coverage.
     assert set(edits) == {'a','b','c','d'}
     # Validation on rejects the same batch per segment, keeping originals.
-    edits,rejects = await clean_transcript(rows,Editor(),threading.Event())
+    edits,rejects,_ = await clean_transcript(rows,Editor(),threading.Event())
     assert edits == {'a':'Buy 25 apples yesterday.','b':'We will attend.',
         'c':'Original text.','d':'The model dropped me.'}
     assert rejects == []
@@ -363,7 +363,7 @@ async def test_cleanup_runs_before_completion_and_preserves_source_and_speaker(s
 
 
 @pytest.mark.asyncio
-async def test_failed_second_batch_keeps_all_original_text(saved):
+async def test_failed_part_keeps_its_original_text_and_the_rest_is_still_saved(saved):
     store,sid,raw = saved
     for i in range(4):
         store.append(sid,{'text':'Keep this original sentence','start_ms':2000+i*1000,
@@ -375,9 +375,75 @@ async def test_failed_second_batch_keeps_all_original_text(saved):
         config=LocalTranscriptionConfig(model='audio',cleanup_provider=Editor(fail_at=2)))
     await runner._finish(sid)
     assert store.get(sid)['status']=='completed'
-    assert len(store.revisions(sid))==1
+    current = store.segments(sid)
+    # The failed second part keeps its original wording; the first part is saved.
+    assert len(store.revisions(sid))==2
+    assert current[0]['text']==raw['text']+'.'
+    assert current[-1]['text']=='Keep this original sentence'
+    assert any(event['type']=='transcription_warning'
+               and '1 of 2 part(s)' in event.get('message','') for event in events)
+    recorded = store.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND "
+        "type='local_transcript_cleanup_failed'",(sid,)).fetchall()
+    assert len(recorded)==1
+    assert json.loads(recorded[0][0])['failed'][0]['batch']==2
+
+
+@pytest.mark.asyncio
+async def test_partial_batch_503_saves_cleaned_parts_and_persists_status(saved):
+    import httpx
+    from scribeloop_core.llm.transcript_cleanup import apply_cleanup
+    store,sid,raw = saved
+    for i in range(4):
+        store.append(sid,{'text':f'Part two sentence {i+1}','start_ms':2000+i*1000,
+            'end_ms':2500+i*1000,'is_final':True},stream='mic')
+    class Flaky(Editor):
+        async def generate(self,messages,*,schema):
+            self.calls.append((messages,schema))
+            if len(self.calls)==2:
+                request=httpx.Request('POST','https://provider.example/v1/chat/completions')
+                raise httpx.HTTPStatusError('Unavailable',request=request,
+                    response=httpx.Response(503,request=request))
+            rows = json.loads(messages[1]['content'])['untrusted_transcript']
+            return json.dumps({'segments':[{'id':row['id'],'text':row['text']+'.'} for row in rows]})
+    events = []
+    async def publish(event): events.append(event)
+    await apply_cleanup(store,sid,Flaky(),asr_model='test',publish=publish,cancelled=threading.Event())
+    current = store.segments(sid)
+    assert current[0]['text']==raw['text']+'.' and current[0]['revision']==2
+    assert current[-1]['text']=='Part two sentence 4'
+    assert any('1 of 2 part(s)' in e.get('message','') and 'HTTP 503' in e.get('message','') for e in events)
+    recorded = store.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND "
+        "type='local_transcript_cleanup_failed'",(sid,)).fetchall()
+    payload = json.loads(recorded[0][0])
+    assert payload['batches_total']==2 and payload['failed'][0]['http_status']==503
+    assert payload['revision']==2 and payload['model']=='local-text'
+
+
+@pytest.mark.asyncio
+async def test_total_batch_failure_records_event_and_keeps_transcript(saved):
+    import httpx
+    from scribeloop_core.llm.transcript_cleanup import apply_cleanup
+    store,sid,raw = saved
+    for i in range(4):
+        store.append(sid,{'text':f'Part two sentence {i+1}','start_ms':2000+i*1000,
+            'end_ms':2500+i*1000,'is_final':True},stream='mic')
+    class Unavailable(Editor):
+        async def generate(self,messages,*,schema):
+            request=httpx.Request('POST','https://provider.example/v1/chat/completions')
+            raise httpx.HTTPStatusError('Unavailable',request=request,
+                response=httpx.Response(503,request=request))
+    events = []
+    async def publish(event): events.append(event)
+    await apply_cleanup(store,sid,Unavailable(),asr_model='test',publish=publish,cancelled=threading.Event())
     assert store.segments(sid)[0]['text']==raw['text']
-    assert any(event['type']=='transcription_warning' for event in events)
+    assert len(store.revisions(sid))==1
+    assert any('temporarily unavailable (HTTP 503)' in e.get('message','') for e in events)
+    recorded = store.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND "
+        "type='local_transcript_cleanup_failed'",(sid,)).fetchall()
+    assert len(recorded)==1
+    payload = json.loads(recorded[0][0])
+    assert payload['outcome']=='failed' and payload['error']=='HTTPStatusError'
+    assert payload['http_status']==503
 
 
 def test_cleanup_commit_is_atomic(saved):
@@ -421,7 +487,7 @@ async def test_skip_validation_accepts_schema_deviations_without_content_checks(
                 {'id':'d','text':'More text'},
                 {'id':'e','text':'Even more text'}]})+'\n```'
     rows=[{'id':'a','text':'Send 25 reports'},{'id':'b','text':'We will attend'}]
-    edits,rejects=await clean_transcript(rows,Raw(),threading.Event(),validate=False)
+    edits,rejects,_=await clean_transcript(rows,Raw(),threading.Event(),validate=False)
     assert edits=={'a':'Completely different wording','b':'No, we now need 900 reports'}
     assert rejects==[]
 

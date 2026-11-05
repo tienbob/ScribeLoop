@@ -166,3 +166,36 @@ rendering compiled successfully and source retrieval/persistence are covered by 
 regression tests, but no successful physical disclosure expansion is claimed here.
 Initial automatic approval reviews timed out before execution; the permitted single
 retries succeeded, including the one synthetic API request above.
+
+## Cleanup provider resilience and durable failure trace — 5 November evening
+
+A real reprocess run (Deepgram multichannel, revision 24 of the Vietnamese
+capability meeting) saved raw ASR text and the run log showed only a notes
+failure. The stored event history and a reproduction establish two independent
+provider-side causes, not a cleanup logic error:
+
+- The Gemini OpenAI-compatible cleanup endpoint intermittently returned HTTP 503
+  (reproduced twice with the four fictional sentences: a 503, then an identical
+  request succeeding seconds apart). The same flapping hit Gemini notes at
+  14:47–15:10. Cleanup succeeded five times earlier that afternoon, so settings,
+  credentials and the request path were correct.
+- Local Ollama was not running at 17:33, so Ollama notes failed immediately with
+  `summary_failed` (connection refused) — the only failure the run log persisted.
+
+Two code weaknesses turned that into a silent no-op, both fixed here:
+
+1. **One failed request aborted the whole cleanup pass.** Parts are requested
+   independently, so a failed request now keeps only its own part on the original
+   wording while the remaining parts are still cleaned and saved atomically. No
+   automatic retry was added: the no-repeat-billable-requests rule stands, and a
+   failed part is never re-requested in the same pass. Cancellation still aborts
+   the pass, and a pass where every part failed keeps the established whole-pass
+   failure semantics (503-unavailable vs request/decode/validation messaging).
+2. **Cleanup failures left no durable trace** (a transient UI warning only).
+   Both partial and total failures now record a sanitized
+   `local_transcript_cleanup_failed` event — error names, HTTP status codes, part
+   counts and affected revision; never transcript text, provider bodies or keys.
+
+The partial-failure warning names the failed parts and states that their segments
+kept the original wording. `cleanup_originals` and the `local_transcript_cleanup`
+provenance event are unchanged; original ASR revisions remain stored.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import unicodedata
@@ -9,6 +10,8 @@ from difflib import SequenceMatcher
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
+
+from ..storage.db import DATABASE_ERRORS
 
 
 class EditedSegment(BaseModel):
@@ -137,6 +140,14 @@ def call_context(rows, *, title='', vocabulary=()):
 
 
 async def clean_transcript(rows,provider,cancelled,*,validate=True,title=''):
+    """Batched copy-editing pass over the saved transcript.
+
+    Parts of at most four segments / 8 KB are requested independently; one
+    failed request keeps only its own segments on their original wording and
+    never discards the parts that succeeded. Returns (edits, rejects, failures)
+    where failures counts parts; raises for cancellation, an unconfigured
+    provider, oversized input or when every part failed.
+    """
     if not provider.configured:
         raise ValueError('Cleanup requires a configured text model (on-device or cloud)')
     groups,current,size = [],[],0
@@ -154,6 +165,8 @@ async def clean_transcript(rows,provider,cancelled,*,validate=True,title=''):
     if len(groups)>64:
         raise ValueError('Transcript exceeds local cleanup request budget')
     edits,rejects = {},[]
+    failures = {'total':len(groups),'failed':[]}
+    first_failure = None
     context = call_context(rows,title=title,vocabulary=getattr(provider,'cleanup_vocabulary',()))
     context_ids = {r['id'] for r in context['source_excerpts']}
     for index,group in enumerate(groups):
@@ -184,17 +197,31 @@ async def clean_transcript(rows,provider,cancelled,*,validate=True,title=''):
                 'context_before':[{'id':r['id'],'text':r['text'][:400]} for r in groups[index-1][-2:]] if index else [],
                 'context_after':[{'id':r['id'],'text':r['text'][:400]} for r in groups[index+1][:2]] if index+1<len(groups) else []},
                 ensure_ascii=False)}]
-        async with asyncio.timeout(70):
-            raw = await provider.generate(messages,schema=schema)
         neighbors = ({r['id'] for r in groups[index-1][-2:]} if index else set()) | \
             ({r['id'] for r in groups[index+1][:2]} if index+1<len(groups) else set())
-        batch_edits,batch_rejects = checked_edits(raw,group,context_ids=context_ids|neighbors) if validate \
-            else unchecked_edits(raw,group)
+        try:
+            async with asyncio.timeout(70):
+                raw = await provider.generate(messages,schema=schema)
+            batch_edits,batch_rejects = checked_edits(raw,group,context_ids=context_ids|neighbors) if validate \
+                else unchecked_edits(raw,group)
+        except (InterruptedError,asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - one failed request keeps only that part's original text
+            if first_failure is None:
+                first_failure = exc
+            failures['failed'].append({'batch':index+1,'error':type(exc).__name__,
+                'http_status':getattr(getattr(exc,'response',None),'status_code',None)})
+            edits.update({row['id']:row['text'] for row in group})
+            continue
         edits.update(batch_edits)
         rejects.extend(batch_rejects)
     if cancelled.is_set():
         raise InterruptedError('Local cleanup cancelled')
-    return edits,rejects
+    if len(failures['failed'])==failures['total'] and first_failure is not None:
+        # Every part failed: keep the established whole-pass failure semantics
+        # so the caller still distinguishes 503, decode and validation errors.
+        raise first_failure
+    return edits,rejects,failures
 
 
 async def apply_cleanup(store, session_id, provider, *, asr_model,
@@ -202,8 +229,11 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
     """Optional post-transcription cleanup stage; never discards the ASR transcript.
 
     Shared by the local and cloud recording engines. Rejects keep their original
-    wording per segment and are reported; a failed request or validation error
-    keeps the whole transcript and still lets notes run.
+    wording per segment and are reported; one failed request keeps only its own
+    part on the original wording while the remaining parts are still saved, and
+    both partial and total failures are recorded in the events table as
+    local_transcript_cleanup_failed. A total failure keeps the whole transcript
+    and still lets notes run.
     """
     rows = store.segments(session_id)
     if not rows:
@@ -213,7 +243,7 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
     validate = getattr(provider,'cleanup_validate',True)
     stage = 'response'
     try:
-        edits,rejects = await clean_transcript(rows,provider,cancelled,validate=validate,
+        edits,rejects,failures = await clean_transcript(rows,provider,cancelled,validate=validate,
             title=store.get(session_id).get('title',''))
         stage = 'storage'
         revision = store.save_transcript_cleanup(session_id,rows[0]['revision'],edits,
@@ -224,6 +254,20 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
             await publish({'type':'transcript_replaced','session_id':session_id,
                 'segments':store.segments(session_id),
                 'transcript_revisions':store.revisions(session_id)})
+        if failures['failed']:
+            detail = '; '.join('part '+str(item['batch'])+': '+item['error']
+                +(f' (HTTP {item["http_status"]})' if item['http_status'] is not None else '')
+                for item in failures['failed'])
+            # Durable trace: transient provider failures stay visible after the
+            # fact, sanitized to error names and status codes.
+            with contextlib.suppress(*DATABASE_ERRORS):
+                store.record_cleanup_failure(session_id,{'source_revision':rows[0]['revision'],
+                    'revision':revision,'model':provider.model,'batches_total':failures['total'],
+                    'failed':failures['failed']})
+            await publish({'type':'transcription_warning','session_id':session_id,
+                'message':'Cleanup request failed for '+str(len(failures['failed']))+' of '
+                    +str(failures['total'])+' part(s): '+detail
+                    +'. Those parts kept their original wording; the other parts were cleaned and saved.'})
         if not validate:
             await publish({'type':'transcription_warning','session_id':session_id,
                 'message':'Transcript cleanup ran with validation skipped (Experience setting). '
@@ -236,6 +280,10 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
                     +'. The original wording was kept for those segments.'})
     except Exception as exc:  # noqa: BLE001 - optional cleanup never discards the ASR transcript
         if not cancelled.is_set():
+            status = getattr(getattr(exc,'response',None),'status_code',None)
+            with contextlib.suppress(*DATABASE_ERRORS):
+                store.record_cleanup_failure(session_id,{'outcome':'failed',
+                    'error':type(exc).__name__,'http_status':status})
             if isinstance(exc,httpx.HTTPStatusError) and exc.response.status_code==503:
                 await publish({'type':'transcription_warning','session_id':session_id,
                     'message':'The transcript cleanup provider is temporarily unavailable (HTTP 503). '

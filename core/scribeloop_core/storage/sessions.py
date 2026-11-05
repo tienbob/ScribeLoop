@@ -572,6 +572,12 @@ class SessionStore:
             raise
         return revision
 
+    def record_cleanup_failure(self, session_id, payload):
+        """Durable sanitized trace of failed cleanup requests; never transcript text."""
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'warning','local_transcript_cleanup_failed',json.dumps(payload)))
+
     def set_language_lock(self, session_id, lock):
         from ..pipeline.languages import LANGUAGE_NAMES
         if lock.get('language') not in {*LANGUAGE_NAMES,'multi'} or lock.get('mode') not in {'auto','manual','multilingual'}:
