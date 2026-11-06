@@ -29,6 +29,7 @@ import numpy as np
 import soundfile as sf
 
 from ..capture.source import SAMPLE_RATE, AudioFrame, sample_position
+from ..llm.ollama_lifecycle import KEEP_ALIVE, release_if_small
 from .recording import RecordingRunner
 
 log = logging.getLogger(__name__)
@@ -203,6 +204,24 @@ def _warm(config,cancelled):
     transcribe_local(np.zeros(1600,dtype=np.float32),config=config,language='en',cancelled=cancelled)
 
 
+def _persist_warm(config,cancelled):
+    """Hold the warmed model for the idle window; small models unload at task end.
+
+    The compatibility transcription endpoint cannot carry keep_alive, so the
+    residency policy is (re)applied with one native empty-prompt request.
+    """
+    if cancelled.is_set():
+        return False
+    try:
+        with config.client_factory(timeout=httpx.Timeout(10,connect=2),
+                                   trust_env=False,follow_redirects=False) as client:
+            response = client.post(_api_root(config)+'/api/generate',
+                json={'model':config.model,'keep_alive':KEEP_ALIVE})
+        return response.status_code == 200
+    except (httpx.HTTPError,OSError):
+        return False
+
+
 def _validate_audio_model(config):
     """A local server can proxy cloud models; reject those before sending audio."""
     try:
@@ -241,6 +260,8 @@ def ensure_ollama(config,emit,cancelled):
     emit({'state':'loading','status':'Loading the transcription model…','percent':None})
     _validate_audio_model(config)
     _warm(config,cancelled)
+    with contextlib.suppress(Exception):
+        _persist_warm(config,cancelled)
     emit({'state':'ready','status':f'Ollama is ready with {config.model}.','percent':None})
 
 
@@ -437,6 +458,10 @@ class LocalRecordingRunner(RecordingRunner):
             await apply_cleanup(self.store,session_id,provider,asr_model=self.config.model,
                 publish=self.publish,cancelled=self.cancel_processing)
         await super()._finish(session_id)
+        # The transcription task is over: free small models immediately; larger
+        # ones remain for the idle window and the shutdown release.
+        with contextlib.suppress(Exception):
+            await release_if_small(self.config.base_url,self.config.model)
 
     async def _prepare(self,session_id):
         # Preparation overlaps capture: probe/start/pull/load while the user talks.

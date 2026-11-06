@@ -73,6 +73,8 @@ class OllamaServer:
             return httpx.Response(200, content=('\n'.join(lines())+'\n').encode())
         if path.endswith('/audio/transcriptions'):
             return self.transcribe(request)
+        if path == '/api/generate':
+            return httpx.Response(200, json={'done':True})
         raise AssertionError(path)
     def client_factory(self, **kwargs):
         return httpx.Client(transport=httpx.MockTransport(self.handler), **kwargs)

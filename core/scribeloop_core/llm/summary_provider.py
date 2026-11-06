@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .ollama_lifecycle import KEEP_ALIVE
+
 
 class IncompleteSummaryOutput(ValueError):
     """Provider explicitly stopped before completing its structured response."""
@@ -91,6 +93,14 @@ def gemini_summary_schema():
     return _simplify_schema(GroundedSummary.model_json_schema())
 
 
+def ollama_request_body(messages,schema,*,model):
+    """Native Ollama chat body: no-thinking, bounded context and idle keep-alive."""
+    return {'model':model,'messages':messages,'stream':False,'think':False,
+        'keep_alive':KEEP_ALIVE,
+        'format':schema if schema is not None else ollama_summary_schema(messages),
+        'options':{'num_ctx':16384,'num_predict':4000,'temperature':0.2}}
+
+
 class SummaryProvider:
     def __init__(self, *, settings=None, request=None):
         settings = settings if settings is not None else summary_settings(
@@ -157,9 +167,9 @@ class SummaryProvider:
             # The compatibility endpoint can ignore think=False and inherit a
             # 4K context, consuming the answer budget on hidden reasoning. Native
             # options make the context/output budgets and no-thinking explicit.
-            body = {'model':self.model,'messages':messages,'stream':False,'think':False,
-                'format':schema if schema is not None else ollama_summary_schema(messages),
-                'options':{'num_ctx':16384,'num_predict':4000,'temperature':0.2}}
+            # keep_alive bounds residency for large models; small models are
+            # unloaded explicitly when their task finishes.
+            body = ollama_request_body(messages,schema,model=self.model)
         headers = {'Authorization':'Bearer '+self._api_key} if self._api_key else {}
         async with httpx.AsyncClient(timeout=httpx.Timeout(120 if self.provider=='Ollama' else 60,connect=10),
                                      trust_env=False,follow_redirects=False) as client:

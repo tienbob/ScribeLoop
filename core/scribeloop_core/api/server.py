@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..llm.ollama_lifecycle import release_all, release_if_small, session_targets
 from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
@@ -390,6 +391,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.store.record_summary_outcome(session_id)
             await publish({'type':'summary_ready','session_id':session_id,'summary':saved,
                 'session':app.state.store.get(session_id),'budget':engine.public(session_id)})
+            if summary_provider.provider == 'Ollama' and not summary_provider.cloud:
+                # The notes task is over: free small local models immediately.
+                with contextlib.suppress(Exception):
+                    await release_if_small(summary_provider.base_url,summary_provider.model)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - redact provider bodies and transcript
@@ -499,6 +504,11 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await app.state.recording.close()
                         await app.state.runner.close()
                     finally:
+                        # Quitting releases local Ollama models; small ones are
+                        # usually already gone after their tasks. Bounded and
+                        # best-effort so shutdown never stalls on a stuck server.
+                        if storage == 'encrypted':
+                            await release_all(session_targets(summary_provider,app.state.recording))
                         if app.state.audio is not None:
                             app.state.audio.audio.clear_unlocked_keys()
                         store.memory_cache.clear()

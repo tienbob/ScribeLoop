@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..storage.db import DATABASE_ERRORS
+from .ollama_lifecycle import release_if_small
 
 
 class EditedSegment(BaseModel):
@@ -278,6 +279,11 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
                 'message':'Cleanup left '+str(len(rejects))+' segment(s) unchanged: '
                     +'; '.join(item['id']+': '+item['reason'] for item in rejects)
                     +'. The original wording was kept for those segments.'})
+        base_url = getattr(provider,'base_url',None)
+        if base_url and getattr(provider,'provider','') == 'Ollama' and not getattr(provider,'cloud',True):
+            # The cleanup task is over: free small local models immediately.
+            with contextlib.suppress(Exception):
+                await release_if_small(base_url,provider.model)
     except Exception as exc:  # noqa: BLE001 - optional cleanup never discards the ASR transcript
         if not cancelled.is_set():
             status = getattr(getattr(exc,'response',None),'status_code',None)

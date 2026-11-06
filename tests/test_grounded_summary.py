@@ -224,6 +224,7 @@ async def test_ollama_notes_check_local_model_and_request_structured_output(monk
         assert request.url.path == '/api/chat'
         assert body['think'] is False
         assert body['stream'] is False
+        assert body['keep_alive'] == '15m'
         assert body['options']=={'num_ctx':16384,'num_predict':4000,'temperature':0.2}
         assert body['format']['$defs']['CitedText']['properties']['segment_ids']['minItems']==1
         return httpx.Response(200,json={'done':True,'done_reason':'stop','message':{'content':'{}'}})
