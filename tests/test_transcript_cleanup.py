@@ -566,6 +566,57 @@ def test_unclear_cleanup_keeps_original_for_review():
     assert 'review' in rejects[0]['reason']
 
 
+def test_self_citation_does_not_unlock_contextual_repairs():
+    rows=[{'id':'a','language':'vi','text':'Chúng ta sẽ sửa con bọ trong phần mềm trước ngày 15.'},
+          {'id':'b','language':'vi','text':'Nhóm đang bàn về các lỗi phần mềm này.'}]
+    # Citing only the row being edited is not evidence: the strict checks apply.
+    raw=json.dumps({'segments':[
+        {'id':'a','text':'Chúng ta sẽ sửa lỗi trong phần mềm trước ngày 15.','context_segment_ids':['a']},
+        {'id':'b','text':'Nhóm đang bàn về các lỗi phần mềm này.'}]})
+    edits,rejects=checked_edits(raw,rows)
+    assert edits['a']==rows[0]['text']
+    assert edits['b']=='Nhóm đang bàn về các lỗi phần mềm này.'
+    assert rejects==[{'id':'a','reason':'Cleanup changed a Vietnamese word, not only its spelling'}]
+    # A sibling citation still unlocks the contextual checks.
+    raw=json.dumps({'segments':[
+        {'id':'a','text':'Chúng ta sẽ sửa lỗi trong phần mềm trước ngày 15.','context_segment_ids':['b']},
+        {'id':'b','text':'Nhóm đang bàn về các lỗi phần mềm này.'}]})
+    edits,rejects=checked_edits(raw,rows)
+    assert edits['a']=='Chúng ta sẽ sửa lỗi trong phần mềm trước ngày 15.'
+    assert edits['b']=='Nhóm đang bàn về các lỗi phần mềm này.' and rejects == []
+
+
+def test_word_count_slack_allows_merged_words_but_still_bounds_growth():
+    rows=[{'id':'a','language':'vi','text':'Ke hoach chung toi gom nhieu ngânhàng khac nhau trong nam'}]
+    merged='Kế hoạch chung tôi gồm nhiều ngân hàng khác nhau trong năm'
+    edits,rejects=checked_edits(json.dumps({'segments':[
+        {'id':'a','text':merged,'context_segment_ids':['ctx']}]}),rows,context_ids={'ctx'})
+    assert edits['a']==merged and rejects == []
+    grown='Kế hoạch chung của tôi gồm nhiều ngân hàng và nhiều mảng khác nhau trong năm nay'
+    edits,rejects=checked_edits(json.dumps({'segments':[
+        {'id':'a','text':grown,'context_segment_ids':['ctx']}]}),rows,context_ids={'ctx'})
+    assert edits['a']==rows[0]['text']
+    assert rejects==[{'id':'a','reason':'Cleanup changed the segment length too much'}]
+
+
+def test_whitespace_only_edit_is_rejected():
+    rows=[{'id':'a','text':'Send reports'}]
+    edits,rejects=checked_edits(json.dumps({'segments':[{'id':'a','text':'   '}]}),rows)
+    assert edits=={'a':'Send reports'}
+    assert rejects==[{'id':'a','reason':'Cleanup changed the segment length too much'}]
+
+
+def test_decomposed_vietnamese_input_compares_equal_to_the_repair():
+    from scribeloop_core.llm.transcript_cleanup import _negation_forms
+    assert _negation_forms('chu\u031ba') == _negation_forms('chưa') == ['chua']
+    decomposed='Chung ta chu\u031ba quyet dinh ngay ra mat'
+    rows=[{'id':'a','language':'vi','text':decomposed}]
+    edits,rejects=checked_edits(json.dumps({'segments':[
+        {'id':'a','text':'Chúng ta chưa quyết định ngày ra mắt'}]}),rows)
+    assert edits['a']=='Chúng ta chưa quyết định ngày ra mắt' and rejects == []
+
+
+
 @pytest.mark.asyncio
 async def test_cleanup_receives_global_topic_vocabulary_and_real_neighbors():
     class ContextEditor(Editor):

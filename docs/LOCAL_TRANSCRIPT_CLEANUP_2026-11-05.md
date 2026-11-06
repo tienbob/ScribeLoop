@@ -199,3 +199,26 @@ Two code weaknesses turned that into a silent no-op, both fixed here:
 The partial-failure warning names the failed parts and states that their segments
 kept the original wording. `cleanup_originals` and the `local_transcript_cleanup`
 provenance event are unchanged; original ASR revisions remain stored.
+
+## Validation hardening audit — 5 November late evening
+
+Request bounds now live in one place (`_MAX_PART_SEGMENTS`, `_MAX_PART_BYTES`,
+`_MAX_PARTS`, `_PART_TIMEOUT_S`) shared by the schema, grouping and timeout, so
+they cannot drift. The system prompt is a module constant aligned with the
+validator: the row being edited is never acceptable evidence, sibling rows are,
+and a row marked `needs_review=true` is told its text will be discarded.
+Validator changes, each covered by a regression test:
+
+- Self-citations are stripped before deciding whether a repair may use the
+  contextual checks; a segment citing only itself stays on the strict path.
+- One added or dropped word no longer fails the length ratio by itself, so
+  split and merged words ("ngânhàng" → "ngân hàng") survive; two or more words
+  still require the ratio band.
+- Vietnamese comparisons normalize to NFC first, so decomposed ASR output
+  ("chu" + combining horn + "a") compares equal to its precomposed spelling
+  instead of splitting into different words at the combining mark.
+- Whitespace-only repairs are rejected (no numbers, no words).
+- Skip-validation mode strips one fenced ```json wrapper, tolerates metadata,
+  reordered or missing rows, and now fails a part whose response maps no text
+  to any known segment ID instead of silently keeping every original.
+- Decomposed and precomposed negation spellings count as the same negation.
