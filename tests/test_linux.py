@@ -100,6 +100,94 @@ def test_linux_capture_supports_requested_eos_stop(monkeypatch):
     assert source._closed.is_set() and source._pipeline is None
 
 
+def test_linux_eos_drain_does_not_require_buffer_flags(monkeypatch):
+    import numpy as np
+
+    class Element:
+        def set_property(self, *_): pass
+        def link(self, *_): return True
+
+    class Buffer:
+        pts = 0
+        def get_flags(self):
+            raise AssertionError('GStreamer BufferFlags is not a portable EOS API')
+        def map(self, *_):
+            return True, SimpleNamespace(data=np.zeros(1600, dtype='<f4').tobytes())
+        def unmap(self, *_): pass
+
+    class Sample:
+        def __init__(self, buffer=None):
+            self.buffer = buffer
+        def get_buffer(self):
+            return self.buffer
+
+    class Sink(Element):
+        def __init__(self):
+            self.samples = [Sample(Buffer()), Sample()]
+            self.eos = False
+        def emit(self, *_):
+            if not self.samples:
+                self.eos = True
+                return None
+            return self.samples.pop(0)
+        def get_property(self, name):
+            assert name == 'eos'
+            return self.eos
+
+    class Bus:
+        def pop_filtered(self, *_): return None
+
+    class Pipeline:
+        def __init__(self):
+            self.events = []
+            self.sink = None
+        def add(self, _): pass
+        def set_state(self, _): return 'success'
+        def send_event(self, event):
+            self.events.append(event)
+            self.sink.eos = True
+            return True
+        def get_bus(self): return Bus()
+
+    current = SimpleNamespace(pipeline=None)
+    def new_pipeline(_name):
+        pipeline = Pipeline()
+        current.pipeline = pipeline
+        return pipeline
+
+    def make_element(name):
+        if name == 'appsink':
+            sink = Sink()
+            current.pipeline.sink = sink
+            return sink
+        return Element()
+
+    FakeGst = SimpleNamespace(MSECOND=1, SECOND=10_000, CLOCK_TIME_NONE=object(),
+        StateChangeReturn=SimpleNamespace(FAILURE='failure'),
+        State=SimpleNamespace(NULL='null', PLAYING='playing'),
+        MapFlags=SimpleNamespace(READ='read'),
+        MessageType=SimpleNamespace(ERROR=1, EOS=2),
+        Event=SimpleNamespace(new_eos=staticmethod(lambda: 'eos')),
+        Pipeline=SimpleNamespace(new=new_pipeline),
+        ElementFactory=SimpleNamespace(make=make_element),
+        Caps=SimpleNamespace(from_string=lambda _value: None))
+    FakeGst.init = staticmethod(lambda _args: None)
+    monkeypatch.setitem(sys.modules,'gi',SimpleNamespace(require_version=lambda *_:None))
+    monkeypatch.setitem(sys.modules,'gi.repository',SimpleNamespace(Gst=FakeGst))
+    monkeypatch.setattr('scribeloop_core.capture.linux_pipewire.resolve_devices',
+                        lambda _selection: [('mic','test-mic')])
+
+    source=LinuxMeetingAudioSource(CaptureSelection(scope='microphone',
+        microphone_device_id='default'),consent_confirmed=True)
+    frames=iter(source.frames())
+    assert next(frames).stream == 'mic'
+    assert source.request_stop()
+    with pytest.raises(StopIteration):
+        next(frames)
+    assert current.pipeline.events == ['eos']
+    source.close()
+
+
 def test_linux_capture_stop_before_lazy_pipeline_start(monkeypatch):
     class FakeGst:
         class Event:

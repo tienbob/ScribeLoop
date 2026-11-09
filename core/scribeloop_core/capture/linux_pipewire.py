@@ -163,7 +163,9 @@ class LinuxMeetingAudioSource:
                     idle = False
                     last_received[stream] = time.monotonic()
                     buffer = sample.get_buffer()
-                    if buffer is None or buffer.get_flags() & Gst.BufferFlags.EOS:
+                    if buffer is None:
+                        # EOS is an event/property at the appsink, not a
+                        # GstBuffer flag on the supported distributions.
                         continue
                     if buffer.pts == Gst.CLOCK_TIME_NONE:
                         raise ValueError('Audio capture has no timestamp')
