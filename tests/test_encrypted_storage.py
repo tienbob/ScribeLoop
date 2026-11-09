@@ -205,7 +205,11 @@ def test_encrypted_api_persists_and_reconnects_without_plaintext(tmp_path):
                 pytest.fail('Encrypted replay did not finish')
         with client.websocket_connect('ws://127.0.0.1/ws') as ws:
             ws.send_text(token)
-            assert ws.receive_json()['segments'][session_id][0]['text']=='encrypted-api-sentinel'
+            snapshot=ws.receive_json()
+            assert snapshot['paged'] is True and 'segments' not in snapshot
+            ws.send_json({'action':'conversation_page','session_id':session_id})
+            page=ws.receive_json()
+            assert page['segments'][0]['text']=='encrypted-api-sentinel'
     assert b'encrypted-api-sentinel' not in path.read_bytes()
     assert keys.created == 1
     assert len(keys.keys[database_account(path)]) == 32

@@ -1,21 +1,24 @@
 # ScribeLoop — Architecture Plan
 
-> **Current implementation (2026-10-28):** cloud-only Deepgram live ASR/diarization,
-> encrypted per-stream capture and 30-day audio retention/archive, Record / Not now
-> after a versioned first-use agreement, five-minute/one-hour/three-hour presets,
-> bounded readers/playback, durable cited section/final notes, and manual named
-> person links. OpenAI `gpt-5.4-mini` is the default summary API; explicit SUMMARY_*
-> overrides remain supported. Stop never triggers a full ASR pass. Local ML stacks
-> in older research tables below are historical alternatives, not app routes.
+> **Current implementation (2026-11-09):** the internal Apple Silicon macOS 13+ desktop
+> build implements encrypted local capture, first-use agreement and permissions, metadata
+> discovery with explicit Record / Not now, Deepgram live ASR (default) or optional local
+> Ollama batch transcription after a recording ends, optional transcript cleanup, bounded
+> cited section/final notes, manual speaker links, 30-day audio retention/archive, bounded
+> playback, Markdown export, email handoff, optional Calendar linking, and an account
+> sign-in/entitlement foundation. Reconnect uses bounded reads and dispatch receipts; it
+> never replays uncertain mutations. Local ML stacks in older research tables below are
+> historical alternatives, not app routes.
 > Voice recognition remains gated on a configured cloud embedding backend and
 > consented calibration; no guessed thresholds or automatic naming are enabled.
 > [Phase 2b delivery and gates](docs/PHASE_2B_CLOSEOUT.md) is authoritative for shipped
 > core behavior. The native SwiftUI macOS app and bundled Python core are implemented;
 > see [desktop instructions](packaging/macos/DESKTOP.md) and the
 > [current acceptance checklist](docs/CURRENT_STATUS.md). Signed distribution,
-> real-call/physical validation and OS parity remain open.
+> real-call/physical validation and OS parity remain open. An Ubuntu GTK preview exists
+> for the common core and notebook flow; second-OS capture and release parity remain open.
 
-> System-audio → Speaker-separated transcript → LLM summary → (Phase 3) Tool-using agent.
+> System-audio/mic → encrypted capture → cloud or local transcription → cited notes.
 > Target: Linux + macOS. Local-first, privacy-preserving.
 
 ---
@@ -27,18 +30,31 @@ transcribes it, separates speakers so you know *who said what*, and produces liv
 summaries. In later phases an agent layer turns summaries into actions: notes, calendar
 events, todos.
 
+```mermaid
+flowchart TB
+  user[User] --> shell[SwiftUI desktop shell]
+  subgraph bundle[ScribeLoop app bundle]
+    shell
+    core[Bundled Python core]
+    meeting[scribeloop-meeting helper]
+    observer[scribeloop-observer helper]
+  end
+  shell -- "protocol 2: token, commands, receipts" --> core
+  core -- manages --> meeting
+  core -- manages --> observer
+  meeting -- "SLC2 / SLP2 PCM" --> core
+  observer -- metadata snapshot --> core
+  core --> db[(SQLCipher workspace)]
+  core --> audio[(SLPA audio tracks)]
+  core -- "Deepgram / Ollama / notes / cleanup" --> models[Cloud or local model]
+  core -- "OAuth + entitlement" --> accounts[Account service]
+  shell -- EventKit --> calendar[Calendar]
+  shell -- "export handoff" --> share[Mail or save panel]
 ```
-System audio ──► Capture ──► VAD ──► ASR (streaming) ──► Diarization ──► Speaker registry
-                     │                                                      │
-                     │                                              Attributed transcript
-                     │                                                      │
-                     │                            ┌──── rolling summary ◄───┤
-                     │                            │                         │
-                     │                     Event bus ──► final summary ──► Storage ──► UI
-                     │                                                      │
-                     │         summaries + user commands ──► Agent layer (MCP tools)
-                     └──── session recorder: encrypted per-stream SLPA (no ASR rerun at Stop; retention §3.1)
-```
+
+Ubuntu preview uses a GTK shell against the same core and protocol; the browser UI remains
+a development/test client. Capture, permissions and release parity are not claimed for
+Linux.
 
 ### Meeting discovery and capture — core requirement (2026-10-22)
 
@@ -74,30 +90,33 @@ fixture inference is disabled; deterministic injected replay remains a test harn
 
 | Layer                         | Current implementation                                                                                                                                                                                           |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capture                       | macOS Swift helper: ScreenCaptureKit output and AVFoundation microphone, separate encrypted tracks and common host clock. Core Audio taps and Linux PipeWire capture remain planned.                             |
-| Transcription and diarization | Deepgram Nova-3 live streaming, one connection per source. Explicit saved reruns use a prerecorded HTTP upload. Anonymous speaker labels are source/connection scoped.                                           |
+| Capture                       | macOS Swift helper: ScreenCaptureKit output and AVFoundation microphone, separate encrypted tracks and common host clock. Core Audio taps remain planned; the Ubuntu preview has a PipeWire source, but cross-platform parity is not accepted. |
+| Transcription and diarization | Deepgram Nova-3 live streaming is the default, one connection per source. Optional Ollama transcribes saved audio after Stop. Anonymous speaker labels are source/connection scoped; optional local labels do not create identities. |
+| Transcript cleanup            | Optional bounded copy-editing pass after Stop, using a configured cloud or local provider. Validation/rejection preserves original wording; cleanup never creates a new ASR route.                                 |
 | People                        | Manual names and cross-meeting links. Automatic voice recognition requires a real embedding provider and consented calibration; it is disabled.                                                                  |
-| Notes                         | Bounded rolling/section/final cited summaries. OpenAI `gpt-5.4-mini` default; configurable Gemini, compatible APIs, Ollama and LM Studio. No embedded local LLM.                                               |
-| Storage                       | SQLCipher metadata and authenticated encrypted SLPA audio, Keychain keys, 30-day audio expiry/archive, explicit Markdown export. Vector-index primitives exist; user-facing semantic search/chat is future work. |
-| App shell                     | SwiftUI macOS client with an app-managed frozen Python core and private authenticated connection. Browser UI remains a development/test client.                                                                  |
+| Notes                         | Bounded rolling/section/final cited summaries. OpenAI `gpt-5.4-mini` default; configurable Gemini, compatible APIs, Ollama and LM Studio. No embedded local LLM.                                                 |
+| Storage                       | SQLCipher metadata and authenticated encrypted SLPA audio, Keychain keys, 30-day audio expiry/archive, bounded playback, Markdown/email export, Calendar link storage. Vector-index primitives exist; user-facing semantic search/chat is future work. |
+| App shell                     | SwiftUI macOS client with an app-managed frozen Python core and private authenticated connection. Ubuntu GTK preview and browser UI use the same core/protocol where documented.                                  |
+| Account                       | Google OAuth + signed entitlement foundation; checkout/paid-feature enforcement is not shipped.                                                                                                                  |
 | Agent                         | Phase 3 placeholder; MCP actions and meeting chat are not delivered.                                                                                                                                             |
 
 ### 2.1 Why this stack
 
 - **Python core** owns meeting state, provider requests, encryption, retention and summaries.
-- **SwiftUI host** provides the native window, menu bar, Preferences and login controls while managing core lifetime.
+- **SwiftUI host** provides the native window, menu bar, Preferences, Calendar and login controls while managing core lifetime.
 - **Swift helpers** isolate native capture and metadata observation from Python.
-- **Cloud processing** avoids loading local speech models. Audio and transcripts leave the device for configured cloud providers under the first-use agreement and explicit recording choice. Optional local notes servers are configurable.
+- **Cloud processing** avoids loading local speech models. Audio and transcripts leave the device for configured cloud providers under the first-use agreement and explicit recording choice. Optional local Ollama/notes servers are configurable.
 
 ### 2.2 Packaging status
 
 `dist/macos/ScribeLoop.app` runs without a repository checkout, installed Python or
-Homebrew libraries. The October 28 bundle check found 91 native binaries, no
-external library dependencies and no bundled recordings or model weights. It is
-ad-hoc signed, declares minimum macOS 27.2, and includes an operator transcription
-credential for the private demo. Developer ID signing/notarization, credential
-protection, clean-Mac/upgrade acceptance and older-OS testing remain open.
-See [build and validation](packaging/macos/DESKTOP.md).
+Homebrew libraries. The current build is `0.1.45 (46)`, Apple Silicon, with an
+explicit `LSMinimumSystemVersion` of macOS 13.0. The bundle is ad-hoc signed for
+internal testing, contains no operator transcription credential, recordings or
+model weights, and the verifier rejects external native dependencies. Developer ID
+signing/notarization, clean-Mac/upgrade acceptance and older-OS testing remain open.
+The packaging path can produce a signed/notarized Developer ID DMG when an identity
+is configured. See [build and validation](packaging/macos/DESKTOP.md).
 
 The original Python/browser v0 decision and local ML packaging experiments are
 preserved in [Phase 0 closeout](docs/PHASE_0_CLOSEOUT.md).
@@ -122,43 +141,27 @@ capture transport, encrypted readers and provider spending reservations.
 
 ## 3. Process & data layout
 
-The schematic below preserves the original core design; comments about adapters
-are historical. Current capture uses `macos_meeting.py`/`multiplexed.py`; live and
-saved ASR use `deepgram_meeting.py`/`deepgram_batch.py`. The native host lives in
-`shell/macos/Desktop/`, with builders under `packaging/macos/`.
+The schematic below is a wayfinding map, not an exhaustive file list. Current
+capture lives in `macos_client.py` and the Swift helpers under `capture/native/`;
+recording, engine routing and cleanup live under `pipeline/`. The production native
+host is in `shell/macos/Desktop/`, with builders under `packaging/macos/`.
 
-```Markdown
+```text
 scribeloop/
 ├── core/                      # Python package "scribeloop-core"
-│   ├── capture/
-│   │   ├── source.py          # AudioSource protocol (pulls PCM frames)
-│   │   ├── native/
-│   │   │   ├── macos_observer/ # implemented metadata-only process observer
-│   │   │   └── macos_sck/     # Swift helper: ScreenCaptureKit fallback
-│   │   ├── macos_client.py    # talks to the Swift helper over a local pipe
-│   │   └── linux_pipewire.py  # placeholder: planned GStreamer appsink source
-│   ├── meetings/              # metadata contracts, detector, macOS observer client
-│   ├── pipeline/
-│   │   ├── vad.py             # silero VAD gating
-│   │   ├── asr.py             # streaming ASR adapter
-│   │   ├── diar.py            # online diarization adapter
-│   │   ├── attributor.py      # merges ASR words ↔ diarized speaker turns
-│   │   └── bus.py             # typed event bus
-│   ├── speakers/
-│   │   ├── embeddings.py      # extract + persist voice embeddings
-│   │   └── registry.py        # match → named speakers, manual override
-│   ├── llm/
-│   │   ├── client.py          # OpenAI-compatible client (Ollama/llama.cpp/cloud)
-│   │   ├── prompts/           # rolling-summary, final-summary, extraction
-│   │   └── schemas.py         # pydantic: Summary, ActionItem, Decision, Participant
-│   ├── storage/
-│   │   ├── db.py              # sqlite schema + migrations
-│   │   └── vectors.py         # sqlite-vec index for "ask past sessions"
-│   ├── agent/                 # Phase 3
-│   │   ├── loop.py            # tool-calling agent loop
-│   │   └── mcp_tools.py       # MCP client → notes/calendar tools
-│   └── api/                   # local WS/HTTP server: loopback-only + per-launch token (§6)
-└── data/                      # local artifacts; encrypted recording is implemented
+│   ├── api/                   # server, desktop contract/settings, Calendar link, email export, dev web UI
+│   ├── capture/               # source contracts, devices, processing, native helper clients, PipeWire source
+│   │   └── native/            # macos_meeting, macos_observer and legacy macos_sck Swift helpers
+│   ├── meetings/              # discovery service, detector, macOS observer, auto-call monitor
+│   ├── pipeline/              # recording lifecycle, engine routing, Deepgram/Ollama ASR, replay, languages
+│   ├── llm/                   # summary/cleanup providers, grounded schemas, rolling notes, model lifecycle
+│   ├── speakers/              # manual registry, links, embeddings/retrieval research
+│   ├── storage/               # SQLCipher, SLPA, retained audio/playback, keys, cache, vectors
+│   ├── accounts/              # desktop OAuth/entitlements and separate account API
+│   └── agent/                 # Phase 3 placeholder; not delivered
+├── shell/macos/Desktop/       # production SwiftUI app, Preferences, Calendar, email, playback
+├── packaging/macos/           # frozen core/native helpers, bundle/package verification
+└── packaging/linux/           # Ubuntu preview builder and verification
 ```
 
 ### 3.1 Core data model (SQLite)
@@ -263,6 +266,253 @@ CREATE TABLE events (
 
 ## 4. Major feature flows
 
+The diagrams below describe the **implemented macOS desktop app** as of 2026-11-09.
+They show data/action flow, not trust boundaries; the security section defines those.
+The original local-model `Flow 1`–`Flow 5` text later in this section is historical
+planning, not the shipped route.
+
+### 4.1 Runtime topology
+
+```mermaid
+flowchart TB
+  user[User] --> shell[SwiftUI desktop shell]
+  subgraph bundle[ScribeLoop app bundle]
+    shell
+    core[Bundled Python core]
+    meeting[scribeloop-meeting helper]
+    observer[scribeloop-observer helper]
+  end
+  shell -- "protocol 2 commands/receipts" --> core
+  core -- spawn/manage --> meeting
+  core -- spawn/manage --> observer
+  meeting -- "SLC2 / SLP2 PCM" --> core
+  observer -- "bounded app/process metadata" --> core
+  core --> db[(SQLCipher workspace)]
+  core --> audio[(SLPA audio tracks)]
+  core -- "ASR / notes / cleanup" --> models[Cloud or local model]
+  core -- "OAuth + entitlement" --> account[Account service]
+  shell -- EventKit --> calendar[Calendar]
+  shell -- "export handoff" --> share[Mail or save panel]
+```
+
+The macOS app is the production client. The Ubuntu GTK preview and browser UI connect
+to the same core/protocol family; Linux capture and release parity remain open.
+
+### 4.2 Launch and authenticated command/receipt flow
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant S as Shell
+  participant C as Core
+  participant K as Keychain
+  participant D as Encrypted storage
+  U->>S: Open app
+  S->>C: Spawn bundled core
+  C->>K: Read workspace/settings keys
+  C->>D: Unlock, recover and migrate
+  C->>C: Bind loopback port
+  C-->>S: ready with protocol, launch id, port and boot id
+  S->>C: WebSocket /ws with first-message token
+  C-->>S: Protocol 2 snapshot
+  Note over S,C: Reconnect sends reads only. Uncertain mutations request status and are never replayed.
+```
+
+Desktop mutations are wrapped in protocol-2 envelopes and return `dispatching`,
+`accepted`, `rejected` or `unknown` receipts. Heavy mutation events become
+invalidations; clients load one bounded history or meeting page at a time. A replay
+runner remains available only for explicitly injected test/fixture backends; the
+production cloud desktop app disables it.
+
+### 4.3 Setup, agreement and permissions
+
+```mermaid
+flowchart LR
+  connected[Workspace connected] --> prefs[Preferences]
+  prefs --> settings[Validate provider settings]
+  settings --> keychain[Keychain storage]
+  settings --> route[TranscriptionRouter]
+  route --> deepgram[Deepgram cloud live]
+  route --> ollama[Ollama local batch]
+  prefs --> agreement{Versioned first-use agreement}
+  agreement -- accepted --> gates[Record / reprocess / notes gates]
+  agreement -- revoked --> stop[Stop capture and cancel notes]
+  prefs --> mic[Mic permission request]
+  mic -- "not determined" --> request[AVCaptureDevice.requestAccess]
+  mic -- "denied / restricted" --> systemsettings[System Settings]
+  prefs --> screen[Screen Recording guidance]
+  screen --> systemsettings
+  prefs --> eventkit[EventKit calendar access]
+```
+
+Settings changes make no provider request. Capture only begins after a valid source,
+accepted agreement and microphone authorization. Meeting/system output additionally
+requires Screen Recording; microphone-only capture does not.
+
+### 4.4 Discovery, source selection and consent
+
+```mermaid
+sequenceDiagram
+  participant O as Observer helper
+  participant D as DiscoveryService
+  participant S as Shell
+  participant A as Core API
+  participant R as Recorder
+  participant H as Meeting helper
+  O-->>D: bounded process/activity metadata
+  D->>D: Debounce, aggregate and classify candidate
+  D-->>S: Candidates only. No PCM or page data.
+  S->>A: accept_call or record with explicit scope and consent
+  A->>D: Select and revalidate installed app and microphone
+  A->>R: Start session behind the agreement gate
+  R->>H: Spawn helper requiring consent and mic authorization
+  Note over R,H: App disappearance or capture failure is visible. Scope is never broadened automatically.
+```
+
+
+### 4.5 Capture, transcription and cleanup
+
+```mermaid
+flowchart TB
+  selection{Explicit scope}
+  selection -- "microphone only" --> mic[MacOSMicrophoneSource]
+  selection -- "app or system output" --> multi[MacOSMeetingAudioSource]
+  mic --> helper[scribeloop-meeting helper]
+  multi --> helper
+  helper -- "16 kHz mono SLP2 frames" --> adapter[Source adapter]
+  adapter --> processing[Mic processing settings]
+  processing --> writer[Authenticated encrypted SLPA writer]
+  writer --> checkpoint[Checkpoint and bounded readers]
+  writer -- "while recording" --> deepgram[Deepgram stream per track]
+  deepgram --> segments[Confirmed segments and anonymous labels]
+  writer -- "after Stop" --> ollama[Ollama batch transcription]
+  segments --> cleanup[Optional transcript cleanup]
+  ollama --> cleanup
+  cleanup --> store[SQLCipher transcript revision]
+```
+
+Capture and transcription are independent. A provider failure leaves encrypted audio
+and confirmed transcript state recoverable; Stop does not start an automatic full ASR
+pass. Saved rerun/resume is explicit and uses the session's engine rules.
+
+### 4.6 Rolling and final notes
+
+```mermaid
+flowchart TB
+  rows[Confirmed transcript] --> hash{Input hash changed?}
+  hash -- yes --> buckets[15-minute closed sections]
+  buckets --> jobs[Persist summary jobs]
+  jobs --> provider[SummaryProvider cloud or local]
+  provider --> validate[Validate JSON, citations and segment IDs]
+  validate --> draft[Publish rolling draft]
+  hash -- no --> reuse[Reuse valid cached section notes]
+  rows --> stop{Capture complete and notes authorized}
+  stop -- yes --> final[Hierarchical reduce and final cited summary]
+  final --> saved[Save provider, model, revision and fingerprint]
+  grant[Stored automatic-summary grant] --> final
+  stop -- no --> wait[Wait for capture or explicit request]
+```
+
+Only closed confirmed sections are summarized. Provider/model/revision and request
+budgets persist. Failed/dispatched jobs require explicit retry; startup does not
+resume uploads. Editing transcript text or names invalidates matching cache keys.
+
+
+### 4.7 Recording and saved-meeting lifecycle
+
+```mermaid
+stateDiagram-v2
+  direction TB
+  [*] --> preparing: Valid source and accepted agreement
+  preparing --> recording: Helper starts and streams frames
+  recording --> stopping: Manual Stop, duration limit or known call end
+  recording --> failed: Capture failure
+  stopping --> processing: Streams drained and ownership released
+  processing --> completed
+  processing --> failed: Transcription or notes failure
+  processing --> interrupted: Shutdown or agreement revoke
+  failed --> processing: Explicit resume or reprocess
+  interrupted --> processing: Explicit resume
+  completed --> deleting: Confirmed delete
+  deleting --> [*]: Retryable cleanup finishes
+```
+
+Only one recording/replay task owns capture. A crash becomes `interrupted`; restart
+does not silently resume audio or paid work.
+
+### 4.8 Saved-meeting actions
+
+```mermaid
+flowchart LR
+  page[Bounded meeting page] --> actions{Saved action}
+  actions --> playback[Authenticate whole track, return bounded WAV window]
+  actions --> recover[Write recovered SLPA from an authenticated prefix]
+  actions --> rerun[Resume or reprocess through selected engine]
+  actions --> archive[Archive or unarchive retained audio]
+  actions --> delete[Delete key first, then ciphertext and metadata]
+  actions --> retention[Manual retention cleanup]
+  actions --> people[Manual speaker links and corrections]
+  actions --> export[Markdown/email export or Calendar link]
+```
+
+Manual retention removes expired unarchived audio; Archive exempts audio and
+transcripts/notes remain. Playback and email audio authenticate the whole track before
+any window leaves the backend. Markdown export is readable plaintext and uses the shell
+save panel. Email exports use owner-only temporary handoff files, are cleaned up later,
+and are opened only after the shell validates the returned attachment path. Calendar
+reads stay in EventKit; only a validated event snapshot is linked into encrypted
+workspace storage.
+
+### 4.9 Account sign-in and entitlement
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant S as Shell
+  participant C as Core
+  participant G as Google OAuth
+  participant A as Account service
+  U->>S: Sign in
+  S->>C: account_sign_in
+  C->>G: Start PKCE authorization URL
+  U->>G: Approve in browser
+  G->>C: Loopback callback code
+  C->>G: Exchange code
+  C->>A: Verify identity and request signed entitlement
+  A-->>C: User and signed entitlement
+  C->>S: account_state
+  Note over C: Refresh token is stored in Keychain. Last verified local ownership remains usable offline.
+```
+
+Account changes are blocked during active capture/processing. Checkout and paid-feature
+enforcement are not shipped.
+
+### 4.10 Idle retention and shutdown
+
+```mermaid
+flowchart LR
+  quit[User quits] --> shell[Shell sends STOP]
+  shell --> core[Core shutdown]
+  core --> discovery[Close discovery]
+  core --> recorder[Stop and drain capture]
+  recorder --> tasks[Cancel pending notes/replay]
+  core --> models[Release local Ollama models]
+  core --> keys[Clear unlocked keys and memory cache]
+  core --> database[Close SQLCipher and workspace keys]
+  idle[Idle timer] --> cleanup[Delete expired unarchived audio key first]
+```
+
+Audio cleanup is retryable and key-first; it does not touch saved transcripts or
+notes. Interrupted work remains recoverable but is never silently resumed.
+
+
+### Historical planning flows (superseded)
+
+The following numbered flows are the original pre-cloud/local-model planning history.
+They are retained for design context; the diagrams and current implementation notes
+above are authoritative.
+
 ### Flow 1 — Live session (the core loop)
 
 1. **Discover and start**: automatic detection presents a meeting candidate with app, capture scope, and microphone selection; user confirms recording consent and hits Record (manual Record/hotkey remains available) → shell asks core to open a session. A visible **recording indicator** stays active for the whole session (consent flag recorded on the session — §6).
@@ -357,7 +607,7 @@ CREATE TABLE events (
 - **The UI is an attack surface**: transcripts and summaries are untrusted text rendered in a webview that holds the API token. Everything renders as **sanitized text — no raw HTML**; remote images and auto-fetched links are **blocked** in rendered Markdown (a classic exfiltration path); the current browser UI serves a **strict CSP**; a future Tauri shell must preserve it.
 - Agent MCP servers are local processes with scoped tool permissions; cloud egress only via explicitly enabled tools.
 
-**Current implementation (2026-10-23):** Deepgram Nova-3 streaming with v1 per-word diarization is the single default meeting provider. One connection per capture track; no automatic fallback or final second pass. Capture, SLPA/SQLCipher, authenticated recovery, checkpoints and explicit deletion/retention remain local. Uploads need provider-named consent; backend-only keys and durable ten-second audio reservations bound use. Word speaker changes split persisted transcript rows and restore in notes/history. Anonymous identities are scoped to a connection/source; unknown labels and overlap uncertainty stay explicit. Auto multilingual is default across Nova-3’s ten supported multilingual languages, with fixed choices including Vietnamese; no unsupported hint parameters or first-language-lock claim. See [speaker integration and the open real multi-person quality gate](docs/DEEPGRAM_STREAMING.md). The historical [Local MOSS Q6_K evaluation](docs/LOCAL_MOSS.md) is not a current desktop app route; current new and saved audio use Deepgram. Earlier local GPU/streaming diagrams are experimental/future architecture. Original quality, physical and real-call targets remain open.
+**Current implementation (2026-11-09):** Deepgram Nova-3 streaming with v1 per-word diarization is the default meeting provider; optional Ollama batch transcription runs only after a recording has ended. One Deepgram connection per capture track; no automatic fallback or final second pass. Capture, SLPA/SQLCipher, authenticated recovery, checkpoints and explicit deletion/retention remain local. Uploads need the durable first-use agreement and provider-named consent; backend-only keys and durable audio reservations bound use. Word speaker changes split persisted transcript rows and restore notes/history. Anonymous identities are scoped to a connection/source; unknown labels and overlap uncertainty stay explicit. Language choices/hints and microphone processing apply per session. See [speaker integration and the open real multi-person quality gate](docs/DEEPGRAM_STREAMING.md) and [local transcription](docs/LOCAL_TRANSCRIPTION.md). Historical local MOSS/GPU diagrams are not current app routes. Original quality, physical and real-call targets remain open.
 
 ## 7. Evaluation plan
 
@@ -388,7 +638,7 @@ CREATE TABLE events (
 
 ## 8. Phased roadmap
 
-**Phase 1 macOS development closed (2026-10-23):** selected output + microphone feed encrypted recording, Deepgram streaming and anonymous person labels, Auto/fixed languages, history/notes and explicit recovery/resume/deletion. One provider per meeting, no automatic fallback or final second pass. Encrypted startup no longer needs replay assets. Full MVP/quality acceptance remains open: real calls were deferred, speaker quality and representative WER/latency are not signed off, physical/app coverage is unverified, Linux is not delivered, and signed distribution remains open; native desktop development packaging is implemented. See [authoritative closeout](docs/PHASE_1_CLOSEOUT.md). Earlier replay/local-model increments are historical.
+**Phase 1 macOS development closed (2026-10-23):** selected output + microphone feed encrypted recording, Deepgram streaming and anonymous person labels, Auto/fixed languages, history/notes and explicit recovery/resume/deletion. One provider per meeting, no automatic fallback or final second pass. Encrypted startup no longer needs replay assets. Full MVP/quality acceptance remains open: real calls were deferred, speaker quality and representative WER/latency are not signed off, physical/app coverage is unverified, and signed distribution remains open; native desktop development packaging is implemented. At this closeout Linux was not delivered; an Ubuntu GTK preview now exists, but second-OS capture/release parity remains open. See [authoritative closeout](docs/PHASE_1_CLOSEOUT.md). Earlier replay/local-model increments are historical.
 
 **2026-10-22 local-development handoff:** native ScreenCaptureKit fallback compiles,
 framed transport and health diagnostics are implemented, and 62 tests pass. Basic

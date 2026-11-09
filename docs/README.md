@@ -22,6 +22,8 @@ capture/release acceptance gates.
 - [macOS Calendar: upcoming events, meeting links and conversation association](MACOS_CALENDAR.md)
 - [Email sharing: Summary, Transcript or Audio](EMAIL_SHARING.md)
 - [Security & performance audit of the current change set — November 4](SECURITY_PERFORMANCE_AUDIT_2026-11-04.md)
+- [Security & performance audit follow-up — November 6](SECURITY_PERFORMANCE_AUDIT_2026-11-06.md)
+- [Ubuntu desktop preview validation — October 30](LINUX_UBUNTU_PREVIEW.md)
 - [Calendar feature review and roadmap — November 4](CALENDAR_REVIEW_AND_ROADMAP_2026-11-04.md)
 - [Email sharing review and roadmap — November 4](EMAIL_SHARING_REVIEW_AND_ROADMAP_2026-11-04.md)
 

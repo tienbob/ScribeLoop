@@ -1,10 +1,10 @@
 ScribeLoop — Installation & Usage
-Internal test build 0.1.33 (34) · 4 November 2026
+Internal test build 0.1.45 (46) · 6 November 2026
 
 1. INSTALL
 
 Requires an Apple Silicon Mac (M1 or newer), running macOS 13 Ventura or later.
-Download ScribeLoop-latest-arm64.dmg from this folder (currently 0.1.33, build 34).
+Download ScribeLoop-latest-arm64.dmg from this folder (currently 0.1.45, build 46).
 Open the DMG, drag ScribeLoop into Applications, then eject the disk image.
 Open ScribeLoop from Applications. Python, Homebrew and Xcode are not required.
 

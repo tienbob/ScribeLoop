@@ -171,7 +171,11 @@ def test_api_requires_separate_consent_restores_and_exports(saved,fenced):
             assert len(calls) == 1, 'Export never requests another model pass'
         with client.websocket_connect('ws://127.0.0.1/ws',headers=headers) as ws:
             ws.send_text(token)
-            assert ws.receive_json()['grounded_summaries'][sid]['summary']['overview']['text'] == 'Plan discussed'
+            snapshot=ws.receive_json()
+            assert snapshot['paged'] is True and 'grounded_summaries' not in snapshot
+            ws.send_json({'action':'conversation_page','session_id':sid})
+            page=ws.receive_json()
+            assert page['summary']['summary']['overview']['text'] == 'Plan discussed'
 
 
 def test_failed_provider_preserves_summary_and_redacts_error(saved):

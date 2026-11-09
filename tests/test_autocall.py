@@ -242,14 +242,18 @@ def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sq
         with client.websocket_connect('ws://127.0.0.1/ws',headers={'origin':'http://127.0.0.1'}) as ws:
             ws.send_text(token)
             snapshot=ws.receive_json()
+            assert snapshot['paged'] is True and 'grounded_summaries' not in snapshot
             current=next(row for row in snapshot['sessions'] if row['id']==sid)
             assert current['end_reason'] == ('manual_stop' if manual else 'auto_app_inactive')
             if transcription_failed:
                 assert current['status']=='failed' and 'confirmed speech only' in current['notes_status']
             if speech:
+                def conversation_page():
+                    ws.send_json({'action':'conversation_page','session_id':sid})
+                    return ws.receive_json()
                 if invalid_first=='always':
                     assert current['summary_failure']['code']=='summary_invalid_output'
-                    assert snapshot['grounded_summaries'].get(sid) is None
+                    assert conversation_page()['summary'] is None
                     state['fix']=True
                     ws.send_json({'action':'summarize','session_id':sid,'revision':1,
                         'provider':provider.provider,'model':provider.model,'text_consent':True})
@@ -260,10 +264,11 @@ def test_consent_auto_stop_notes_and_topic_title(tmp_path,monkeypatch,require_sq
                             break
                     else: raise AssertionError('Explicit retry did not recover summary')
                     expected_summaries+=1
+                    assert conversation_page()['summary']['stale'] is False
                 else:
                     assert current['title'] == 'Garden project launch'
                     assert current['summary_failure'] is None
-                    assert snapshot['grounded_summaries'][sid]['stale'] is False
+                    assert conversation_page()['summary']['stale'] is False
             else:
                 assert snapshot['sessions'][0]['notes_status'] == 'Call ended early — nothing to summarize'
                 assert not client.portal.call(lambda:app.state.store.conn.execute(

@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from ..async_compat import timeout
 from ..llm.ollama_lifecycle import release_all, release_if_small, session_targets
 from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
@@ -109,6 +110,15 @@ class SavedMeeting(BaseModel):
     model: Literal['deepgram','ollama'] = 'deepgram'
 
 
+class ConversationPage(BaseModel):
+    """One bounded web transcript read; the snapshot itself stays metadata-only."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal['conversation_page']
+    session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    offset: int = Field(default=0, ge=0, le=10_000_000)
+    anchor: str | None = Field(default=None, min_length=1, max_length=180)
+
+
 class SpeakerCorrection(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     action: Literal['rename_speaker','merge_speaker']
@@ -175,7 +185,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                storage='memory', key_store=None, discovery_factory=None, recording_factory=None, cloud_config=None,
                require_launch_key=True, summary_provider=None, desktop=None, launch_token=None,
                source_factory=None, permission_request=None, local_config=None, account=None, email_exports=None,
-               cleanup_provider=None) -> tuple[FastAPI, str]:
+               cleanup_provider=None, settings=None) -> tuple[FastAPI, str]:
     if storage not in {'memory', 'public-demo', 'encrypted'}:
         raise ValueError('Unknown storage mode')
     if (storage == 'memory') != (database is None):
@@ -382,7 +392,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False, automatic=False):
         nonlocal summary_task
         try:
-            async with asyncio.timeout(3600):
+            async with timeout(3600):
                 engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
                 value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,
                     retry=retry,repair_invalid=automatic)
@@ -434,21 +444,27 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             app.state.storage = storage
             app.state.recording = None
             app.state.audio = None
-            if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory):
-                from ..capture.macos_client import MacOSMeetingAudioSource
+            if storage == 'encrypted' and (sys.platform == 'darwin' or recording_factory or source_factory):
                 from ..pipeline.model_selection import CloudRecordingRouter
                 from ..storage.audio import SessionAudioStore
+                if source_factory:
+                    platform_source = source_factory
+                elif sys.platform == 'darwin':
+                    from ..capture.macos_client import MacOSMeetingAudioSource
+                    platform_source = MacOSMeetingAudioSource
+                else:
+                    raise ValueError('Encrypted recording requires a platform capture source')
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',
                                           workspace_keys,memory_cache=store.memory_cache)
                 if recording_factory:
-                    recording = recording_factory(store,audio,MacOSMeetingAudioSource,publish)
+                    recording = recording_factory(store,audio,platform_source,publish)
                 elif desktop is not None or local_config is not None:
                     from ..pipeline.model_selection import TranscriptionRouter
-                    recording = TranscriptionRouter(store,audio,source_factory or MacOSMeetingAudioSource,
+                    recording = TranscriptionRouter(store,audio,platform_source,
                         publish,cloud_config=cloud_config,local_config=local_config,
                         cleanup_provider=cleanup_provider)
                 else:
-                    recording = CloudRecordingRouter(store,audio,(source_factory or MacOSMeetingAudioSource),publish,
+                    recording = CloudRecordingRouter(store,audio,platform_source,publish,
                         cloud_config=cloud_config,cleanup_provider=cleanup_provider)
                 app.state.recording = recording
                 from ..storage.retained_audio import RetainedAudio
@@ -544,6 +560,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         if desktop:
             return HTMLResponse('Desktop API only', status_code=404)
         html = (STATIC/'index.html').read_text(encoding='utf-8')
+        if settings:
+            html = html.replace('LOCAL DEVELOPMENT', 'UBUNTU PREVIEW').replace(
+                'Local development notebook', 'Ubuntu meeting notebook')
+            html = html.replace('Open your call. We’ll ask before taking notes.',
+                                'Choose your source and start a recording.')
+            html = html.replace('Approved calls stop after app audio activity ends, then notes are prepared automatically.',
+                                'Start and stop manually in this Ubuntu preview.')
+            html = html.replace('OS microphone and Screen Recording permissions are still required.',
+                                'A working desktop sound server and microphone are still required.')
         return HTMLResponse(html.replace('<html lang="en">',
             '<html lang="en" data-require-launch-key="'+str(require_launch_key).lower()+'">'))
 
@@ -618,31 +643,58 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     getattr(summary_task,'session_id',None)))
             else:
                 history = store.list()
-                await send({'type': 'snapshot', 'fixtures': fixture_rows,
+                # Web history is metadata-only. Transcript bytes, notes and
+                # summaries load one bounded conversation at a time below; this
+                # keeps reconnect construction off the O(all-transcripts) path.
+                await send({'type': 'snapshot', 'paged': True, 'fixtures': fixture_rows,
                     'agreement':store.agreement(),
+                    'settings':settings.value.public() if settings else None,
                     'people':SpeakerRegistry(store).list(),
                     'summary_budgets':{row['id']:RollingNotes(store,summary_provider).public(row['id']) for row in history},
-                    'rolling_notes':{row['id']:RollingNotes(store,summary_provider).latest(row['id']) for row in history if row['source']=='meeting'},
                     'audio_states':{s['id']:app.state.audio.status(s['id']) for s in history if app.state.audio and s['source']=='meeting'},
                     'auto_call':{'session_id':auto_monitor.session_id},
                     'summary_provider':summary_provider.public() if summary_provider else {'configured':False},
                     'summary_active_id':getattr(summary_task,'session_id',None),
-                    'grounded_summaries':{s['id']:store.grounded_summary(s['id']) for s in history},
                     'sessions': history, 'active_id': app.state.runner.active_id or
                         (app.state.recording.active_id if app.state.recording else None),
                     'recording_available': app.state.recording is not None,
                     'transcription': app.state.recording.cloud.public() if app.state.recording is not None and hasattr(app.state.recording,'cloud') else {'cloud':False,'configured':True,'provider':'test'},
                     'transcription_models': app.state.recording.profiles() if app.state.recording is not None and hasattr(app.state.recording,'profiles') else {},
-                    'cloud_usage':{s['id']:store.cloud_usage(s['id']) for s in history},
                     'replay_available': not app.state.runner.unavailable,
                     'replay_enabled': explicit_replay_backend, 'storage': app.state.storage,
                     'discovery': app.state.discovery.snapshot(),
-                    'segments': {s['id']: store.segments(s['id']) for s in history},
-                    'transcript_revisions': {s['id']: store.revisions(s['id']) for s in history},
-                    'notes': {s['id']: store.notes(s['id']) for s in history},
-                    'language_locks': {s['id']:store.language_lock(s['id']) for s in history},
-                    'speaker_turns': {s['id']:store.turns(s['id']) for s in history},
-                    'checkpoints': {s['id']:store.checkpoints(s['id']) for s in history}})
+                    'transcript_revisions': {s['id']: store.revisions(s['id']) for s in history}})
+
+            def conversation_page(command):
+                request = ConversationPage.model_validate(command)
+                session = store.get(request.session_id)
+                if not session or session['status'] == 'deleting':
+                    raise ValueError('Select a saved conversation')
+                revision = session['transcript_revision']
+                count = store.conn.execute('SELECT COUNT(*) FROM segments WHERE session_id=? AND revision=?',
+                                           (request.session_id,revision)).fetchone()[0]
+                offset = request.offset
+                if request.anchor is not None:
+                    position = store.conn.execute('SELECT n FROM (SELECT id, ROW_NUMBER() OVER '
+                        '(ORDER BY start_ms,rowid)-1 AS n FROM segments WHERE session_id=? AND revision=?) WHERE id=?',
+                        (request.session_id,revision,request.anchor)).fetchone()
+                    if not position:
+                        raise ValueError('Citation is from a different revision')
+                    offset = (position[0] // 500) * 500
+                if count and offset >= count:
+                    offset = max(0,count-500)
+                rows = store.segments(request.session_id,revision=revision,limit=500,offset=offset) if revision else []
+                return {'type':'conversation_page', 'session_id':request.session_id, 'revision':revision,
+                    'offset':offset, 'total':count, 'segments':rows,
+                    'notes':store.notes(request.session_id)[:100000],
+                    'summary':store.grounded_summary(request.session_id),
+                    'rolling':RollingNotes(store,summary_provider).latest(request.session_id),
+                    'budget':RollingNotes(store,summary_provider).public(request.session_id),
+                    'speaker_turns':store.turns(request.session_id)[:10000],
+                    'language_lock':store.language_lock(request.session_id),
+                    'cloud_usage':store.cloud_usage(request.session_id),
+                    'audio':app.state.audio.status(request.session_id)
+                        if app.state.audio and session['source']=='meeting' else {}}
 
             async def send_events():
                 nonlocal playback_pending
@@ -842,6 +894,26 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                         action = command.get('action')
+                        if not desktop and action == 'conversation_page':
+                            await queue.put(conversation_page(command))
+                            continue
+                        if settings and not desktop and action == 'save_settings':
+                            if (recording_busy() or summary_task is not None or auto_tasks
+                                    or set(command) != {'action','settings'}):
+                                raise ValueError('Wait for processing before changing providers')
+                            await asyncio.to_thread(settings.save,command['settings'])
+                            summary_provider = settings.value.summary()
+                            configure_cloud = getattr(app.state.recording,'configure_cloud',None)
+                            if configure_cloud is not None:
+                                configure_cloud(settings.cloud())
+                            elif app.state.recording:
+                                app.state.recording.base_config = settings.cloud()
+                                app.state.recording.cloud = app.state.recording.base_config
+                            await publish({'type':'settings','settings':settings.value.public(),
+                                'summary_provider':summary_provider.public(),
+                                'transcription':app.state.recording.cloud.public()
+                                    if app.state.recording else {}})
+                            continue
                         if desktop and action in {'resume','reprocess'}:
                             sid = command.get('session_id')
                             if not isinstance(sid,str) or not store.get(sid):

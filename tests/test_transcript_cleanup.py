@@ -420,6 +420,31 @@ async def test_partial_batch_503_saves_cleaned_parts_and_persists_status(saved):
 
 
 @pytest.mark.asyncio
+async def test_total_batch_failure_redacts_model_text(saved):
+    from scribeloop_core.llm.transcript_cleanup import apply_cleanup
+    store,sid,raw = saved
+    for i in range(4):
+        store.append(sid,{'text':f'Canary part {i+1}','start_ms':2000+i*1000,
+            'end_ms':2500+i*1000,'is_final':True},stream='mic')
+    class Unavailable(Editor):
+        async def generate(self,messages,*,schema):
+            self.calls.append((messages,schema))
+            return json.dumps({'segments':[{'id':42,'text':'canary-SPEECH-42'}]})
+    events = []
+    async def publish(event): events.append(event)
+    await apply_cleanup(store,sid,Unavailable(),asr_model='test',publish=publish,cancelled=threading.Event())
+    assert store.segments(sid)[0]['text']==raw['text']
+    warning = next(event for event in events if event['type']=='transcription_warning')
+    assert 'Reason: ValidationError' in warning['message']
+    assert 'canary-SPEECH-42' not in warning['message']
+    assert 'Canary part' not in warning['message']
+    recorded = store.conn.execute("SELECT payload_json FROM events WHERE session_id=? AND "
+        "type='local_transcript_cleanup_failed'",(sid,)).fetchall()
+    assert len(recorded)==1
+    assert json.loads(recorded[0][0])['error']=='ValidationError'
+
+
+@pytest.mark.asyncio
 async def test_total_batch_failure_records_event_and_keeps_transcript(saved):
     import httpx
     from scribeloop_core.llm.transcript_cleanup import apply_cleanup

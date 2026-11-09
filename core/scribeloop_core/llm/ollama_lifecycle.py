@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..async_compat import timeout
+
 KEEP_ALIVE = '15m'
 SMALL_MODEL_B = 8.0
 UNLOAD_TIMEOUT_S = 4.0
@@ -123,7 +125,7 @@ async def release_all(targets,*,client_factory=None):
         with contextlib.suppress(Exception):
             await release(base_url,model,client_factory=client_factory)
     try:
-        async with asyncio.timeout(RELEASE_ALL_TIMEOUT_S):
+        async with timeout(RELEASE_ALL_TIMEOUT_S):
             await asyncio.gather(*(run(base_url,model) for base_url,model in sorted(pending)))
     except Exception as exc:  # noqa: BLE001 - quitting must never fail or wait on an unload
         log.debug('Ollama release unfinished (%s)',type(exc).__name__)

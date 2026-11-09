@@ -25,6 +25,10 @@ def reset_local_capture_permission(app, *, fixture=False):
     """Refresh this Mac's grant after replacing its canonical ad-hoc app."""
     if fixture or Path(app).resolve() != APP.resolve():
         return False
+    # Routine rebuilds must not discard local TCC grants. Only an explicit
+    # build-side opt-in replaces the canonical ad-hoc identity's approvals.
+    if os.environ.get('SCRIBELOOP_RESET_TCC') != '1':
+        return False
     # Never reset All, another app, Microphone, or the user's Keychain grants.
     # A reset requires fresh local approval; it does not grant access.
     # Calendar is Apple's tccutil service name for EventKit event access.
@@ -103,7 +107,7 @@ def main(*, app=APP, fixture=False):
         plistlib.dump({'CFBundleExecutable': 'ScribeLoop', 'CFBundleName': 'ScribeLoop Preview' if fixture else 'ScribeLoop',
             'CFBundleIdentifier': 'ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop', 'CFBundlePackageType': 'APPL',
             'CFBundleIconFile': 'ScribeLoop.icns',
-            'CFBundleShortVersionString': '0.1.44', 'CFBundleVersion': '45',
+            'CFBundleShortVersionString': '0.1.45', 'CFBundleVersion': '46',
             'LSMinimumSystemVersion': MINIMUM_MACOS, 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': 'Record your microphone only when you choose Record for a conversation.',
             'NSAudioCaptureUsageDescription': 'Record selected meeting audio only when you choose Record.',

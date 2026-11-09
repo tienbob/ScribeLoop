@@ -520,3 +520,29 @@ demoEvent({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v3'},fix
 assert.equal(demoGet('recording-end-status').textContent,'Stopped because the meeting app quit');
 assert.equal(demoGet('automatic-notes-status').textContent,'Call ended early — nothing to summarize');
 console.log('Persisted recording end reason and short-call notice restore passed');
+// A bounded web snapshot carries no transcript mass and lazily loads one page.
+let pagedSent = recovered.sent.length;
+recovered.onmessage({data:JSON.stringify({type:'snapshot',agreement:{accepted:true,version:'2026-10-26-v3'},fixtures:[],
+ sessions:[{id:'paged',source:'meeting',status:'completed',title:'Paged',started_at:1}],active_id:null,
+ paged:true,recording_available:true,segments:{},notes:{},storage:'encrypted',discovery})});
+assert.equal(JSON.parse(recovered.sent.at(-1)).action,'conversation_page');
+assert.equal(JSON.parse(recovered.sent.at(-1)).session_id,'paged');
+const pagedRows=Array.from({length:500},(_,i)=>({id:`p${i}`,stream:'mic',start_ms:i*1000,end_ms:i*1000+999,
+ text:`Paged ${i}`,revision:1}));
+recovered.onmessage({data:JSON.stringify({type:'conversation_page',session_id:'paged',offset:0,total:1001,
+ segments:pagedRows,notes:'Bounded notes',speaker_turns:[],language_lock:null,summary:null,rolling:null,
+ budget:{},cloud_usage:{providers:[],requests:0,estimated_usd:0,billed_audio_s:0}})});
+assert.equal(get('transcript').children.length,500);
+assert.match(get('transcript-window').textContent,/1–500 of 1001/);
+assert.equal(get('meeting-notes').textContent,'Bounded notes');
+get('transcript-next').onclick();
+assert.equal(JSON.parse(recovered.sent.at(-1)).action,'conversation_page');
+assert.equal(JSON.parse(recovered.sent.at(-1)).offset,500);
+recovered.onmessage({data:JSON.stringify({type:'conversation_page',session_id:'paged',offset:500,total:1001,
+ segments:Array.from({length:500},(_,i)=>({id:`p${500+i}`,stream:'mic',start_ms:(500+i)*1000,
+   end_ms:(500+i)*1000+999,text:`Paged ${500+i}`,revision:1})),notes:'Bounded notes',
+ speaker_turns:[],language_lock:null,summary:null,rolling:null,budget:{},
+ cloud_usage:{providers:[],requests:0,estimated_usd:0,billed_audio_s:0}})});
+assert.match(get('transcript-window').textContent,/501–1000 of 1001/);
+assert.equal(get('transcript').children[0].children[1].children[1].textContent,'Paged 500');
+assert.ok(recovered.sent.length>pagedSent);

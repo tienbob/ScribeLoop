@@ -346,9 +346,12 @@ def test_api_restores_speaker_labels_and_hides_credentials(tmp_path,require_sqlc
         with connection(client) as ws:
             ws.send_text(token)
             snapshot=ws.receive_json()
-            assert all(r['speaker_label'] for r in snapshot['segments'][sid])
-            assert 'Speaker ' in snapshot['notes'][sid]
-            assert secret not in json.dumps(snapshot)
+            assert snapshot['paged'] is True and 'segments' not in snapshot
+            ws.send_json({'action':'conversation_page','session_id':sid})
+            page=ws.receive_json()
+            assert all(r['speaker_label'] for r in page['segments'])
+            assert 'Speaker ' in page['notes']
+            assert secret not in json.dumps(snapshot)+json.dumps(page)
 
 
 def test_wrong_provider_configuration_is_rejected_before_key_dispatch(state):

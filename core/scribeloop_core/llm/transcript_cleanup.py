@@ -12,6 +12,7 @@ from difflib import SequenceMatcher
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..async_compat import timeout
 from ..storage.db import DATABASE_ERRORS
 from .ollama_lifecycle import release_if_small
 
@@ -254,7 +255,7 @@ async def clean_transcript(rows,provider,cancelled,*,validate=True,title=''):
                 ensure_ascii=False)}]
         neighbors = {r['id'] for r in before_rows} | {r['id'] for r in after_rows}
         try:
-            async with asyncio.timeout(_PART_TIMEOUT_S):
+            async with timeout(_PART_TIMEOUT_S):
                 raw = await provider.generate(messages,schema=schema)
             if validate:
                 batch_edits,batch_rejects = checked_edits(raw,group,context_ids=context_ids|neighbors)
@@ -342,6 +343,9 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
     except Exception as exc:  # noqa: BLE001 - optional cleanup never discards the ASR transcript
         if not cancelled.is_set():
             status = getattr(getattr(exc,'response',None),'status_code',None)
+            # Pydantic errors may embed provider response text. Publish only the
+            # exception class and transport status, never that payload.
+            reason = type(exc).__name__+(f' (HTTP {status})' if status is not None else '')
             with contextlib.suppress(*DATABASE_ERRORS):
                 store.record_cleanup_failure(session_id,{'outcome':'failed',
                     'error':type(exc).__name__,'http_status':status})
@@ -358,4 +362,4 @@ async def apply_cleanup(store, session_id, provider, *, asr_model,
             else:
                 prefix = 'Transcript cleanup request, response or validation failed. '
             await publish({'type':'transcription_warning','session_id':session_id,
-                'message':prefix+'The original transcript is saved; notes will use it. Reason: '+str(exc)})
+                'message':prefix+'The original transcript is saved; notes will use it. Reason: '+reason})

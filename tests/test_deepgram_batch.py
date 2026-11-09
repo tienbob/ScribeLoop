@@ -29,6 +29,19 @@ def saved(service):
     return sid
 
 
+def mic_only_saved(service):
+    sid = service.store.create_recording('Mic only',{'provider':'deepgram','model':'nova-3','scope':'microphone'})['id']
+    service.audio.create_session(sid)
+    service.store.set_audio_paths(sid,service.audio)
+    with service.audio.writer(sid,'loopback'):
+        pass
+    with service.audio.writer(sid,'mic') as writer:
+        writer.write(AudioFrame(np.full(1600,.2,dtype=np.float32),'mic',0,0))
+        writer.write(AudioFrame(np.full(1600,.2,dtype=np.float32),'mic',100,0))
+    service.store.transition(sid,'completed')
+    return sid
+
+
 def response():
     return {'results':{'channels':[{'alternatives':[{'words':[
         {'word':'hello','start':0,'end':.1,'speaker':0},
@@ -92,6 +105,32 @@ def test_one_whole_multichannel_wav_preserves_gaps_sources_and_speakers(retained
     assert len(rows)==4 and {r['stream'] for r in rows}=={'mic','loopback'}
     assert len({r['speaker_key'] for r in rows})==4
     assert [e['mode'] for e in events if e.get('type')=='transcription_progress']==['batch_upload','batch_wait']
+
+
+def test_mic_only_batch_excludes_empty_loopback_track(retained):
+    sid=mic_only_saved(retained)
+    calls=[]
+    def handler(request):
+        calls.append(request)
+        assert request.url.params.get('multichannel') is None
+        assert int(request.headers['content-length'])==len(request.content)
+        with wave.open(io.BytesIO(request.content),'rb') as wav:
+            assert wav.getnchannels()==1 and wav.getframerate()==16000
+            assert wav.getnframes()==3200
+            pcm=np.frombuffer(wav.readframes(3200),dtype='<i2')/32767
+        assert np.allclose(pcm,.2,atol=.0001)
+        return httpx.Response(200,json={'results':{'channels':[{'alternatives':[{'words':[
+            {'word':'local','start':0,'end':.1,'speaker':0}]}]}]}})
+    events=execute(retained,sid,handler)
+    assert len(calls)==1
+    reservations=[event for event in events if event.get('type')=='cloud_request']
+    assert len(reservations)==1
+    assert reservations[0]['reservation']['billed_audio_s']==.2
+    rows=[event for event in events if 'text' in event]
+    assert len(rows)==1 and rows[0]['stream']=='mic'
+    assert retained.audio.path(sid,'loopback').is_file()
+
+
 
 
 @pytest.mark.parametrize('fault',['http','channels','timestamps'])

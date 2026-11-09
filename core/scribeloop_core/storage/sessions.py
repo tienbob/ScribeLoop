@@ -10,12 +10,49 @@ from uuid import uuid4
 
 log = logging.getLogger(__name__)
 
+# One materialized pass over the session's current utterances. The grouped
+# speech CTE prevents per-speaker scalar subqueries from rescanning segments.
+ROSTER_QUERY = """
+WITH identities AS (
+    SELECT s.id,s.stream,s.local_label,ROW_NUMBER() OVER (ORDER BY s.rowid) AS number
+    FROM session_speakers s WHERE s.session_id=?
+    AND EXISTS (SELECT 1 FROM segments current WHERE current.session_id=s.session_id
+                AND current.revision=? AND current.local_speaker_id=s.id)
+),
+utterances AS MATERIALIZED (
+    SELECT COALESCE(e.merge_target,g.local_speaker_id) AS identity,g.text,g.start_ms,g.rowid AS position
+    FROM segments g LEFT JOIN revision_speaker_edits e ON e.session_id=g.session_id
+    AND e.revision=g.revision AND e.speaker_id=g.local_speaker_id
+    WHERE g.session_id=? AND g.revision=? AND g.local_speaker_id IS NOT NULL
+),
+ranked AS (
+    SELECT u.identity,u.text,u.start_ms,
+           ROW_NUMBER() OVER (PARTITION BY u.identity ORDER BY u.start_ms,u.position) AS sample_rank
+    FROM utterances u
+),
+speech AS (
+    SELECT identity,MIN(start_ms) AS start_ms,
+           MAX(CASE WHEN sample_rank=1 THEN text END) AS sample
+    FROM ranked GROUP BY identity
+)
+SELECT i.id,i.stream,i.number AS person_number,
+    COALESCE(p.canonical_name,e.label,i.local_label) AS name,l.person_id,
+    CASE WHEN p.canonical_name IS NULL AND e.label IS NULL THEN i.local_label END AS auto_label,
+    speech.sample AS sample,speech.start_ms AS start_ms
+FROM identities i LEFT JOIN revision_speaker_edits e ON e.session_id=? AND e.revision=? AND e.speaker_id=i.id
+LEFT JOIN person_links l ON l.session_id=? AND l.revision=? AND l.speaker_id=i.id
+LEFT JOIN speakers p ON p.id=l.person_id
+JOIN speech ON speech.identity=i.id
+ORDER BY i.number LIMIT 2001
+"""
+
 
 class SessionStore:
     def __init__(self, conn: sqlite3.Connection, *, memory_cache=None):
         from .memory_cache import MemoryCache
         self.conn = conn
         self.memory_cache = memory_cache if memory_cache is not None else MemoryCache()
+        self._cloud_usage_cache = {}
 
     AGREEMENT_VERSION = '2026-10-26-v3'
 
@@ -237,7 +274,7 @@ class SessionStore:
                  limit: int | None = None, offset: int = 0):
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError('Invalid transcript revision')
-        if (limit is not None and (type(limit) is not int or not 1 <= limit <= 201)) or type(offset) is not int or offset < 0:
+        if (limit is not None and (type(limit) is not int or not 1 <= limit <= 500)) or type(offset) is not int or offset < 0:
             raise ValueError('Invalid transcript page')
         versions = self._page_source_versions(session_id)
         selected = revision if revision is not None else self.conn.execute(
@@ -294,26 +331,7 @@ class SessionStore:
         cached=self.memory_cache.get(('roster',key))
         if cached is not None:
             return [dict(row) for row in cached]
-        query = """WITH identities AS (
-            SELECT s.id,s.stream,s.local_label,ROW_NUMBER() OVER (ORDER BY s.rowid) AS number
-            FROM session_speakers s WHERE s.session_id=?
-            AND EXISTS (SELECT 1 FROM segments current WHERE current.session_id=s.session_id
-                        AND current.revision=? AND current.local_speaker_id=s.id)
-        ), utterances AS (
-            SELECT COALESCE(e.merge_target,g.local_speaker_id) AS identity,g.text,g.start_ms,g.rowid AS position
-            FROM segments g LEFT JOIN revision_speaker_edits e ON e.session_id=g.session_id
-            AND e.revision=g.revision AND e.speaker_id=g.local_speaker_id
-            WHERE g.session_id=? AND g.revision=? AND g.local_speaker_id IS NOT NULL
-        ) SELECT i.id,i.stream,i.number AS person_number,
-            COALESCE(p.canonical_name,e.label,i.local_label) AS name,l.person_id,
-            CASE WHEN p.canonical_name IS NULL AND e.label IS NULL THEN i.local_label END AS auto_label,
-            (SELECT text FROM utterances u WHERE u.identity=i.id ORDER BY start_ms,position LIMIT 1) AS sample,
-            (SELECT MIN(start_ms) FROM utterances u WHERE u.identity=i.id) AS start_ms
-        FROM identities i LEFT JOIN revision_speaker_edits e ON e.session_id=? AND e.revision=? AND e.speaker_id=i.id
-        LEFT JOIN person_links l ON l.session_id=? AND l.revision=? AND l.speaker_id=i.id
-        LEFT JOIN speakers p ON p.id=l.person_id
-        WHERE EXISTS (SELECT 1 FROM utterances u WHERE u.identity=i.id)
-        ORDER BY i.number LIMIT 2001"""
+        query = ROSTER_QUERY
         rows=[dict(row) for row in self.conn.execute(query,
             (session_id,revision,session_id,revision,session_id,revision,session_id,revision))]
         if len(rows)>2000:
@@ -693,6 +711,7 @@ class SessionStore:
     def finish_delete(self, session_id):
         """Delete dependent data in FK order; callers have already retired audio keys."""
         self.memory_cache.invalidate(session_id)
+        self._cloud_usage_cache.pop(session_id,None)
         has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
         if has_vectors:
             from .vectors import load_vec_extension
@@ -778,15 +797,36 @@ class SessionStore:
             self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
                 (session_id,self._now(),'info','cloud_consent',json.dumps({'provider':provider,'model':model,'consent':True})))
 
-    def reserve_cloud(self, session_id, reservation):
-        with self.conn:
-            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
-                (session_id,self._now(),'info','cloud_request',json.dumps(reservation)))
-        return self.cloud_usage(session_id)
-
-    def cloud_usage(self, session_id):
+    def _cloud_usage_rows(self, session_id):
         rows = [json.loads(row[0]) for row in self.conn.execute(
             "SELECT payload_json FROM events WHERE session_id=? AND type='cloud_request'", (session_id,))]
         return {'providers':sorted({r.get('provider','groq') for r in rows}),
                 'requests':len(rows),'estimated_usd':sum(r['estimated_usd'] for r in rows),
                 'billed_audio_s':sum(r['billed_audio_s'] for r in rows)}
+
+    def reserve_cloud(self, session_id, reservation):
+        with self.conn:
+            self.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                (session_id,self._now(),'info','cloud_request',json.dumps(reservation)))
+        cached = self._cloud_usage_cache.get(session_id)
+        if cached is not None:
+            # Every reserve already authenticated and persisted its reservation.
+            # Maintain the small aggregate instead of reparsing the whole event
+            # tail once per ten-second stream block.
+            providers = set(cached['providers'])
+            providers.add(reservation.get('provider','groq'))
+            usage = {'providers':sorted(providers),'requests':cached['requests']+1,
+                     'estimated_usd':cached['estimated_usd']+reservation['estimated_usd'],
+                     'billed_audio_s':cached['billed_audio_s']+reservation['billed_audio_s']}
+            self._cloud_usage_cache[session_id] = usage
+        else:
+            usage = self._cloud_usage_rows(session_id)
+            self._cloud_usage_cache[session_id] = usage
+        return dict(usage)
+
+    def cloud_usage(self, session_id):
+        cached = self._cloud_usage_cache.get(session_id)
+        if cached is None:
+            cached = self._cloud_usage_rows(session_id)
+            self._cloud_usage_cache[session_id] = cached
+        return dict(cached)

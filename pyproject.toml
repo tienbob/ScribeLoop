@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scribeloop-core"
-version = "0.1.0"
+version = "0.1.45"
 description = "ScribeLoop core: system-audio capture, streaming ASR, speaker diarization, LLM summaries. Local-first."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
 dependencies = [
     "numpy>=1.26",
+    "async-timeout>=4,<6; python_version < '3.11'",
     "soundfile>=0.12",
     "pydantic>=2.6",
     "openai>=1.30",

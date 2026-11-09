@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.sessions import ROSTER_QUERY, SessionStore
 
 
 @pytest.fixture()
@@ -104,3 +105,36 @@ def test_roster_covering_index_migration_and_rollback(db):
     migrate(db)
     plan=' '.join(str(tuple(r)) for r in db.execute('EXPLAIN QUERY PLAN SELECT id FROM segments WHERE session_id=? AND revision=? AND local_speaker_id=?',('s',1,'speaker')))
     assert 'idx_segments_revision_speaker' in plan and 'SEARCH' in plan
+
+
+def test_full_roster_query_is_one_pass_and_preserves_samples(db):
+    store=SessionStore(db)
+    sid=store.create_recording('Roster scale',{})['id']
+    for index in range(120):
+        store.append(sid,{'text':f'Words {index%2}','start_ms':index*1000,
+            'end_ms':index*1000+999,'is_final':True,'speaker_key':f'deepgram:{sid}:mic:{index%2}'},stream='mic')
+    plan=' '.join(str(tuple(row)) for row in db.execute('EXPLAIN QUERY PLAN '+ROSTER_QUERY,
+        (sid,1,sid,1,sid,1,sid,1)))
+    assert 'CORRELATED SCALAR SUBQUERY' not in plan
+    assert 'idx_segments_revision_speaker' in plan
+    roster=store.speaker_roster(sid,1)
+    assert [row['person_number'] for row in roster]==[1,2]
+    assert roster[0]['sample']=='Words 0' and roster[0]['start_ms']==0
+    assert roster[1]['sample']=='Words 1' and roster[1]['start_ms']==1000
+
+
+def test_cloud_usage_cache_avoids_reparsing_reservation_tail(db):
+    store=SessionStore(db)
+    sid=store.create_recording('Cloud usage',{})['id']
+    reservation={'provider':'deepgram','model':'nova-3','stream':'mic','billed_audio_s':10,
+                 'estimated_usd':.001,'reserved_at_ms':1}
+    usage=store.reserve_cloud(sid,reservation)
+    assert usage['requests']==1
+    reads=[]
+    db.set_trace_callback(reads.append)
+    for index in range(10):
+        usage=store.reserve_cloud(sid,{**reservation,'reserved_at_ms':index+2})
+    db.set_trace_callback(None)
+    assert usage['requests']==11 and usage['estimated_usd']==pytest.approx(.011)
+    assert not any('SELECT payload_json' in query for query in reads)
+    assert store.cloud_usage(sid)==usage

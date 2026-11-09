@@ -15,6 +15,7 @@ let summaryProvider={configured:false}, savedSummaries=new Map(), summaryActiveI
 let savedModelSession = null;
 let notes = new Map(), languageLocks = new Map(), speakerTurns = new Map(), liveProgress = new Map();
 const partials = new Map();
+let paged=false, conversationTotals=new Map(), pendingPages=new Set(), loadedConversations=new Set();
 let socket, activeId = null, selectedId = null, sessions = new Map(), segments = new Map();
 const liveStates = new Set(['loading', 'replaying', 'preparing', 'recording', 'stopping']);
 let discovery = {status:'disabled', apps:[], microphones:[], candidates:[]};
@@ -161,7 +162,7 @@ function renderCallAssistant() {
   const processing=[...sessions.values()].some(s=>s.status === 'processing');
   const current=discovery.candidates.find(c=>c.id === promptCandidate?.id && c.selectable);
   if(promptCandidate && (!current || !agreement.accepted || !authenticated || busy() || processing || discovery.status !== 'available')) closeCallPrompt();
-  text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs the encrypted macOS app.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
+  text('watch-status',!authenticated ? 'Reconnect to watch for calls.' : activeId ? 'Taking notes for your conversation.' : processing ? 'Finishing your transcript…' : !recordingAvailable ? 'Recording needs encrypted desktop storage.' : discovery.permission !== 'authorized' ? 'Allow microphone access in recording preferences to include your voice.' : !profile().configured ? 'Choose and configure your transcription model in recording preferences.' : discovery.status === 'available' ? 'Watching for call activity. Nothing is being recorded.' : 'Call detection is unavailable. Open recording preferences to record manually.');
   const ending=autoCallState?.session_id === activeId && autoCallState?.state === 'ending';
   $('keep-recording').hidden=!ending;
   $('keep-recording').disabled=!authenticated;
@@ -193,7 +194,7 @@ function renderDiscovery() {
   text('transcript-feature','Live transcript');
   text('transcript-feature-help','Words arrive while you speak');
   const reason = !authenticated ? 'Reconnect to set up recording.' :
-    !recordingAvailable ? 'Meeting recording requires the encrypted macOS app.' :
+    !recordingAvailable ? 'Meeting recording requires encrypted desktop storage.' :
     activeId ? 'Stop the active session before starting another.' :
     !transcription.configured ? (transcription.cloud ? `Configure ${transcription.provider === 'deepgram' ? 'DEEPGRAM_API_KEY' : 'GROQ_API_KEY'} in your local .env, then restart ScribeLoop.` : transcription.setup || 'Install the local model before recording.') :
     processing ? 'Wait for transcription to finish.' :
@@ -284,7 +285,7 @@ function renderHistory() {
       const button=document.createElement('button'); button.type='button';
       const title=document.createElement('span'), meta=document.createElement('small');
       button.append(title,meta);
-      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false;  render(); };
+      button.onclick=()=>{ selectedId=session.id; $('delete-consent').checked=false; $('retention-consent').checked=false;  render(); if (paged && !loadedConversations.has(session.id)) requestConversation(); };
       node={button,title,meta}; historyNodes.set(session.id,node);
     }
     if (node.title.textContent !== session.title) node.title.textContent=session.title;
@@ -311,12 +312,12 @@ function speakerLabel(row, turns) {
 }
 function renderTranscript(session, rows, emptyMessage) {
   if(transcriptPageSession!==selectedId) { transcriptPageSession=selectedId; transcriptPageStart=null; }
-  const total=rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-500));
+  const total=paged ? (conversationTotals.get(selectedId)||0) : rows.length, start=transcriptPageStart===null ? Math.max(0,total-500) : Math.min(transcriptPageStart,Math.max(0,total-500));
   $('transcript-pagination').hidden=total<=500;
   $('transcript-previous').disabled=start===0;
   $('transcript-next').disabled=start+500>=total;
   text('transcript-window',total>500 ? `Showing ${start+1}–${Math.min(total,start+500)} of ${total} entries. Export includes the full transcript.` : '');
-  rows=rows.slice(start,start+500);
+  rows=paged ? rows : rows.slice(start,start+500);
   const signature=JSON.stringify([selectedId,emptyMessage,rows,speakerTurns.get(selectedId)]);
   if (signature === transcriptView) return;
   transcriptView=signature;
@@ -384,7 +385,9 @@ function renderSummary(session) {
       const p=document.createElement('p'); p.textContent=item.text || `${item.task} · Owner: ${item.owner || 'not stated'} · Due: ${item.due || 'not stated'}`; $('summary-content').append(p);
       for(const id of item.segment_ids) { const source=rows.find(r=>r.id === id); if(!source) continue;
         const button=document.createElement('button'); button.type='button'; button.className='summary-citation'; button.textContent=`Source ${formatDuration(source.start_ms)} · ${source.speaker_label || 'Speaker unknown'}`;
-        button.onclick=()=>{ const all=segments.get(selectedId)||[]; const index=all.findIndex(r=>r.id===id); transcriptPageStart=Math.floor(Math.max(0,index)/500)*500; render(); const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
+        button.onclick=()=>{ const all=segments.get(selectedId)||[]; const index=all.findIndex(r=>r.id===id);
+          if (paged && index<0) { requestConversation(null,id); return; }
+          transcriptPageStart=Math.floor(Math.max(0,index)/500)*500; render(); const article=transcriptNodes.get(`${selectedId}:${id}`)?.article; article?.scrollIntoView?.({block:'center'}); article?.setAttribute('tabindex','-1'); article?.focus(); }; $('summary-content').append(button);
       }
     }
     if(!items.length) { const p=document.createElement('p'); p.textContent='None stated.'; $('summary-content').append(p); }
@@ -475,6 +478,12 @@ function render() {
   renderTranscript(session,rows,rows.length ? '' : emptyMessage);
 
 }
+function requestConversation(offset=null, anchor=null) {
+  if (!paged || !authenticated || !selectedId || pendingPages.has(selectedId)) return;
+  pendingPages.add(selectedId);
+  send({action:'conversation_page',session_id:selectedId,
+        ...(offset !== null ? {offset} : {}),...(anchor ? {anchor} : {})});
+}
 function connect() {
   if (connecting || authenticated) return;
   if (requireLaunchKey && !key) { if (!$('unlock').open) $('unlock').showModal(); return; }
@@ -486,6 +495,28 @@ function connect() {
   socket.onmessage = event => {
     if (socket !== connection) return;
     const data = JSON.parse(event.data);
+    if(data.type==='conversation_page') {
+      pendingPages.delete(data.session_id); loadedConversations.add(data.session_id);
+      conversationTotals.set(data.session_id,data.total||0);
+      segments.set(data.session_id,data.segments||[]);
+      notes.set(data.session_id,data.notes||'');
+      savedSummaries.set(data.session_id,data.summary||null);
+      if(data.rolling) rollingDrafts.set(data.session_id,data.rolling); else rollingDrafts.delete(data.session_id);
+      if(data.budget) summaryBudgets.set(data.session_id,data.budget);
+      speakerTurns.set(data.session_id,data.speaker_turns||[]);
+      languageLocks.set(data.session_id,data.language_lock||null);
+      cloudUsage.set(data.session_id,data.cloud_usage||{providers:[],requests:0,estimated_usd:0,billed_audio_s:0});
+      if (selectedId === data.session_id) { transcriptPageStart=data.offset||0; render(); }
+      return;
+    }
+    if (data.type === 'settings') {
+      providerSettings(data.settings);
+      summaryProvider=data.summary_provider;
+      transcription=data.transcription;
+      modelProfiles.deepgram={...modelProfiles.deepgram,...transcription};
+      text('provider-save-status','Settings saved.');
+      render(); return;
+    }
     if(data.type==='people_changed') {
       people=data.people; personPending=false;
       for(const session of data.sessions || []) sessions.set(session.id,session);
@@ -516,6 +547,7 @@ function connect() {
     }
     if (data.type === 'snapshot') {
       agreement=data.agreement || {accepted:false,version:null};
+      paged=data.paged === true; loadedConversations.clear(); pendingPages.clear(); conversationTotals.clear();
       audioStates=new Map(Object.entries(data.audio_states || {})); audioPending=false;
       people=data.people || []; personPending=false;
       summaryBudgets=new Map(Object.entries(data.summary_budgets || {}));
@@ -544,12 +576,15 @@ function connect() {
       $('connection').textContent = '● Connected locally';
       if (!replayAvailable) notice('Replay storage is unavailable. Restart the local server.');
       sessions = new Map(data.sessions.map(s => [s.id,s]));
-      segments = new Map(Object.entries(data.segments)); activeId = data.active_id;
+      segments = new Map(Object.entries(data.segments || {})); activeId = data.active_id;
       selectedId = activeId || (sessions.has(selectedId) ? selectedId : data.sessions[0]?.id) || null;
+      transcriptPageStart=null; transcriptPageSession=selectedId;
+      providerSettings(data.settings);
       updateDiscovery(data.discovery);
       $('fixture').replaceChildren();
       data.fixtures.forEach(f => { const option = document.createElement('option'); option.value=f.id; option.textContent=`${f.id} · ${Math.round(f.duration_s)}s`; $('fixture').append(option); });
       if (!data.fixtures.length) $('start').disabled=true;
+      requestConversation();
       render();
     } else if (data.type === 'discovery') {
       updateDiscovery(data.discovery);
@@ -620,6 +655,7 @@ function connect() {
       if (liveStates.has(data.session.status)) { const newActive=activeId !== data.session.id; activeId=data.session.id; if (newActive || !selectedId) selectedId=activeId; }
       else { if (activeId === data.session.id) { activeId=null; stopPending=false; } partials.delete(data.session.id); }
       render();
+      if (paged && selectedId === data.session.id && !loadedConversations.has(selectedId)) requestConversation();
     } else if (data.type === 'segment') {
       if(savedSummaries.get(data.session_id)) savedSummaries.get(data.session_id).stale=true;
       const rows=segments.get(data.session_id)||[];
@@ -637,7 +673,7 @@ function connect() {
       replayAvailable=false; activeId=null; stopPending=false; partials.clear(); notice(data.message); render();
     } else if (data.type === 'error') {
       audioPending=false; personPending=false;
-      speakerPending=false; summaryPending=false; exportPending=false;
+      speakerPending=false; summaryPending=false; exportPending=false; pendingPages.clear();
       if (data.context === 'meeting') {
         audioPending=false; recordPending=false; notice(data.message);
         if (data.request_id === pendingSource || data.request_id == null) { clearSource(data.message); }
@@ -649,6 +685,7 @@ function connect() {
   socket.onclose = event => {
     if (socket !== connection) return;
     connecting=false; authenticated=false; personPending=false; audioPending=false; stopPending=false; recordPending=false; partials.clear();
+    paged=false; pendingPages.clear(); loadedConversations.clear(); conversationTotals.clear();
     clearSource('Connection lost. Reconnect and choose the source again.'); render();
     $('connection').textContent='Disconnected';
     if (event.code === 1008) { key=''; notice('Launch key rejected. Enter the current key from your server terminal.'); if (!$('unlock').open) $('unlock').showModal(); }
@@ -660,7 +697,7 @@ function connect() {
 $('unlock-form').onsubmit = () => { key=$('launch-key').value.trim(); $('launch-key').value=''; setTimeout(connect,0); };
 $('replay-form').onsubmit = event => { event.preventDefault(); notice(''); send({action:'start',fixture:$('fixture').value,title:$('replay-title').value,consent_confirmed:agreement.accepted}); };
 $('stop').onclick = () => { stopPending=send({action:'stop',session_id:activeId}); render(); };
-$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false;  $('title').value='Meeting conversation';   $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
+$('new-session').onclick = () => { if (activeId) { selectedId=activeId; render(); if (paged && !loadedConversations.has(selectedId)) requestConversation(); return; } selectedId=null; $('delete-consent').checked=false; $('retention-consent').checked=false;  $('title').value='Meeting conversation';   $('partial').textContent=''; notice(''); render(); $('manual-recording').open=true; $('meeting-model').focus(); };
 $('fixture').onchange = render;
 $('source-form').onsubmit = event => { event.preventDefault(); chooseSource(); };
 $('meeting-source').onchange = () => { if (busy()) return; clearSource(); renderDiscovery(); };
@@ -796,8 +833,23 @@ $('archive-audio').onclick=()=>{
 $('playback-track').onchange=()=>clearPlayback();
 
 $('meeting-duration').onchange=renderDiscovery;
-$('transcript-previous').onclick=()=>{const total=(segments.get(selectedId)||[]).length;transcriptPageStart=Math.max(0,(transcriptPageStart===null ? Math.max(0,total-500) : transcriptPageStart)-500);render();};
-$('transcript-next').onclick=()=>{const total=(segments.get(selectedId)||[]).length;const next=(transcriptPageStart || 0)+500;transcriptPageStart=next+500>=total ? null : next;render();};
+$('transcript-previous').onclick=()=>{
+  const total=paged ? (conversationTotals.get(selectedId)||0) : (segments.get(selectedId)||[]).length;
+  const current=transcriptPageStart===null ? Math.max(0,total-500) : transcriptPageStart;
+  transcriptPageStart=Math.max(0,current-500);
+  if (paged) requestConversation(transcriptPageStart); else render();
+};
+$('transcript-next').onclick=()=>{
+  const total=paged ? (conversationTotals.get(selectedId)||0) : (segments.get(selectedId)||[]).length;
+  const next=(transcriptPageStart || 0)+500;
+  if (next+500>=total) {
+    transcriptPageStart=null;
+    if (paged) requestConversation(Math.max(0,total-500));
+  } else {
+    transcriptPageStart=next;
+    if (paged) requestConversation(next);
+  }
+};
 function renderPeople() {
   const previous=$('person-select').value;
   $('person-select').replaceChildren();
@@ -822,3 +874,21 @@ $('unlink-person').onclick=()=>{if(!$('unlink-person').disabled) linkPerson(null
 $('forget-person').onclick=()=>{if(!$('forget-person').disabled) personCommand({action:'forget_person',person_id:$('person-select').value,confirmed:true});};
 
 function personCommand(command) { personPending=send(command); renderPeople(); }
+
+function providerSettings(value) {
+  if (!value || !$('provider-settings')) return;
+  $('provider-settings').hidden=false;
+  $('provider-name').value=value.summary_provider;
+  $('provider-endpoint').value=value.summary_endpoint;
+  $('provider-model').value=value.summary_model;
+}
+if ($('provider-settings-form')) $('provider-settings-form').onsubmit = event => {
+  event.preventDefault();
+  const settings={summary_provider:$('provider-name').value,
+    summary_endpoint:$('provider-endpoint').value,summary_model:$('provider-model').value};
+  for (const [field,id] of [['deepgram_key','provider-deepgram-key'],['summary_key','provider-summary-key']]) {
+    if ($(id).value) settings[field]=$(id).value;
+    $(id).value='';
+  }
+  text('provider-save-status',send({action:'save_settings',settings}) ? 'Saving…' : 'Reconnect to save settings.');
+};
