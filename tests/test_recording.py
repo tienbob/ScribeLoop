@@ -316,7 +316,7 @@ async def test_five_minute_encrypted_tracks_preserve_offset_and_samples(setup):
             for stream, offset, level in (('loopback', 0, .02), ('mic', 150, .04)):
                 yield AudioFrame(np.full(1600, level, dtype=np.float32), stream,
                                  i * 100 + offset, 0)
-            time.sleep(.0001)  # Keep normal queue bounds; don't test overflow here.
+            time.sleep(.001)  # Keep normal queue bounds; don't test overflow here.
     source.frames = frames
     def verify(audio, sid, emit, cancelled):
         for stream, offset, level in (('loopback', 0, .02), ('mic', 150, .04)):
