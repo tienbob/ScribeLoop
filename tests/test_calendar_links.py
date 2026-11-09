@@ -46,7 +46,7 @@ def test_snapshot_link_replace_unlink_and_reopen(tmp_path):
     conn.close()
 
 
-def test_desktop_calendar_link_receipt_page_and_rejection(tmp_path):
+def test_desktop_calendar_link_receipt_page_and_rejection(tmp_path,require_sqlcipher):
     settings=DesktopSettings(Vault()); contract=DesktopContract(settings,Path('/fake/helper'))
     app,token=create_app(storage='encrypted',database=tmp_path/'calendar.sqlcipher',key_store=Keys(),
         desktop=contract,summary_provider=settings.value.summary(),discovery_factory=lambda p:DiscoveryService(p))

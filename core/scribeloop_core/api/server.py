@@ -452,6 +452,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 elif sys.platform == 'darwin':
                     from ..capture.macos_client import MacOSMeetingAudioSource
                     platform_source = MacOSMeetingAudioSource
+                elif sys.platform.startswith('linux'):
+                    from ..capture.linux_pipewire import LinuxMeetingAudioSource
+                    platform_source = LinuxMeetingAudioSource
                 else:
                     raise ValueError('Encrypted recording requires a platform capture source')
                 audio = SessionAudioStore(Path(database).resolve().parent / 'recordings',

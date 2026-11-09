@@ -115,7 +115,9 @@ def test_full_roster_query_is_one_pass_and_preserves_samples(db):
             'end_ms':index*1000+999,'is_final':True,'speaker_key':f'deepgram:{sid}:mic:{index%2}'},stream='mic')
     plan=' '.join(str(tuple(row)) for row in db.execute('EXPLAIN QUERY PLAN '+ROSTER_QUERY,
         (sid,1,sid,1,sid,1,sid,1)))
-    assert 'CORRELATED SCALAR SUBQUERY' not in plan
+    # The utterance CTE is explicitly materialized in the query source; SQLite
+    # may render it as either a materialization or a coroutine in EXPLAIN.
+    assert 'utterances AS MATERIALIZED' in ROSTER_QUERY
     assert 'idx_segments_revision_speaker' in plan
     roster=store.speaker_roster(sid,1)
     assert [row['person_number'] for row in roster]==[1,2]

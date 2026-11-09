@@ -293,6 +293,8 @@ def test_account_cli_proxy_trust_is_explicit_and_ignores_permissive_env(account_
     if trusted:argv.append('--trust-loopback-proxy')
     monkeypatch.setattr(sys,'argv',argv)
     monkeypatch.setattr(cli.os,'umask',lambda value:0)
+    # The CLI proxy arguments are independent of the optional Google verifier.
+    monkeypatch.setattr(cli,'create_account_app',lambda *args,**kwargs:None)
     monkeypatch.setenv('FORWARDED_ALLOW_IPS','*');monkeypatch.setenv('WEB_CONCURRENCY','8')
     calls=[]
     monkeypatch.setattr(uvicorn,'run',lambda app,**kwargs:calls.append(kwargs))

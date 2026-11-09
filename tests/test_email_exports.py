@@ -163,7 +163,7 @@ async def test_export_limits_and_cleanup_are_scoped(state,monkeypatch,tmp_path):
     with pytest.raises(ValueError):await manager.prepare(store,retained,{**command,'kind':'transcript'})
 
 
-def test_desktop_email_protocol_is_explicit_and_reversible(tmp_path):
+def test_desktop_email_protocol_is_explicit_and_reversible(tmp_path,require_sqlcipher):
     settings=DesktopSettings(Vault());exports=EmailExports(tmp_path/'exports',converter='/missing')
     app,token=create_app(storage='encrypted',database=tmp_path/'email.sqlcipher',key_store=Keys(),
         desktop=DesktopContract(settings,Path('/fake/helper')),summary_provider=settings.value.summary(),
@@ -187,7 +187,7 @@ def test_desktop_email_protocol_is_explicit_and_reversible(tmp_path):
         assert 'Could not prepare' in ws.receive_json()['message']
 
 
-def test_disconnected_export_gets_terminal_receipt(tmp_path):
+def test_disconnected_export_gets_terminal_receipt(tmp_path,require_sqlcipher):
     started=threading.Event()
     class PendingExports:
         async def prepare(self,*args):

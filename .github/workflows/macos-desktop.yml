@@ -24,6 +24,9 @@ jobs:
             shell/macos/Desktop/MeetingPlayback.swift \
             shell/macos/Desktop/PlaybackSmoke.swift \
             shell/macos/Desktop/Appearance.swift \
+            shell/macos/Desktop/Calendar.swift \
+            shell/macos/Desktop/EmailSharing.swift \
+            shell/macos/Desktop/TranscriptScrolling.swift \
             shell/macos/Desktop/DesktopApp.swift \
             shell/macos/Desktop/Preferences.swift \
             -o "$RUNNER_TEMP/ScribeLoop"

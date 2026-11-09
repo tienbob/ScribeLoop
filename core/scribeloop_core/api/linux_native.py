@@ -9,10 +9,15 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-import gi
+try:
+    import gi
 
-gi.require_version('Gtk','3.0')
-from gi.repository import Gdk, GLib, Gtk
+    gi.require_version('Gtk','3.0')
+    from gi.repository import Gdk, GLib, Gtk
+except (ImportError,ValueError):
+    # The shell reducer and packaging checks import this module without a GUI.
+    Gdk = GLib = Gtk = None
+
 from websockets.sync.client import connect
 
 from .linux_state import (
@@ -705,6 +710,8 @@ class NativeShell:
 
 
 def run_native(port,token,child):
+    if Gtk is None or Gdk is None or GLib is None:
+        raise RuntimeError('GTK 3 runtime is required for the Ubuntu shell')
     shell=NativeShell(port,token,child)
     shell.refresh()
     Gtk.main()

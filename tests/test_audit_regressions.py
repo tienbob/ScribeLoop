@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from scribeloop_core.api.desktop_contract import DesktopContract
 from scribeloop_core.api.desktop_settings import DesktopSettings
@@ -11,6 +12,8 @@ from scribeloop_core.api.server import create_app
 from scribeloop_core.meetings.service import DiscoveryService
 from scribeloop_core.pipeline.deepgram_meeting import DeepgramConfig
 from test_local_transcription import Keys, Vault
+
+pytestmark = pytest.mark.usefixtures('require_sqlcipher')
 
 
 def send(ws,command):

@@ -33,7 +33,7 @@ def test_real_blocked_socket_write_obeys_deadline_and_cancellation(cancel):
     class Socket:
         socket = left
         def send(self,data): self.socket.sendall(data)
-    timer = threading.Timer(.05,cancelled.set) if cancel else None
+    timer = threading.Timer(.01,cancelled.set) if cancel else None
     started = time.monotonic()
     try:
         if timer: timer.start()

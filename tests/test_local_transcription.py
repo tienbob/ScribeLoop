@@ -522,7 +522,7 @@ def test_experience_validation_toggle_reaches_the_live_recorder(state):
 
 
 @pytest.mark.asyncio
-async def test_record_command_routes_ollama_engine_through_the_server(tmp_path):
+async def test_record_command_routes_ollama_engine_through_the_server(tmp_path,require_sqlcipher):
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
     from scribeloop_core.meetings.service import DiscoveryService
@@ -590,7 +590,7 @@ async def test_record_command_routes_ollama_engine_through_the_server(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_check_ollama_reports_status_and_rejects_unconfigured(tmp_path):
+async def test_check_ollama_reports_status_and_rejects_unconfigured(tmp_path,require_sqlcipher):
     from fastapi.testclient import TestClient
     from scribeloop_core.api.server import create_app
     from scribeloop_core.meetings.service import DiscoveryService
@@ -608,7 +608,7 @@ async def test_check_ollama_reports_status_and_rejects_unconfigured(tmp_path):
         assert 'Ollama' in reply['message'] and 'Preferences' in reply['message']
 
 
-def test_desktop_checks_unsaved_model_and_applies_local_settings_without_restart(tmp_path,monkeypatch):
+def test_desktop_checks_unsaved_model_and_applies_local_settings_without_restart(tmp_path,monkeypatch,require_sqlcipher):
     from pathlib import Path
     from uuid import uuid4
 
