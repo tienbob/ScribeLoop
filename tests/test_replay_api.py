@@ -86,11 +86,14 @@ def test_confirmed_persistence_reconnect_and_no_partials_on_disk(setup):
             snapshot = ws.receive_json()
             assert snapshot['sessions'][0]['id'] == session_id
             assert snapshot['sessions'][0]['transcript_revision'] == 1
+            assert snapshot['paged'] is True and 'segments' not in snapshot
             history = snapshot['transcript_revisions'][session_id]
             assert len(history) == 1 and history[0]['segment_count'] == 2
             assert history[0]['selected'] == 1
-            assert len(snapshot['segments'][session_id]) == 2
-            assert all(s['text'] == 'confirmed words' for s in snapshot['segments'][session_id])
+            ws.send_json({'action':'conversation_page','session_id':session_id})
+            page = ws.receive_json()
+            assert page['total'] == 2 and len(page['segments']) == 2
+            assert all(s['text'] == 'confirmed words' for s in page['segments'])
     assert backends[0].closed
     with sqlite3.connect(database) as conn:
         assert conn.execute('SELECT COUNT(*) FROM segments WHERE revision=0').fetchone()[0] == 0

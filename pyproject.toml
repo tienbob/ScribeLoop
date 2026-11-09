@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scribeloop-core"
-version = "0.1.0"
+version = "0.1.45"
 description = "ScribeLoop core: system-audio capture, streaming ASR, speaker diarization, LLM summaries. Local-first."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
 dependencies = [
     "numpy>=1.26",
+    "async-timeout>=4,<6; python_version < '3.11'",
     "soundfile>=0.12",
     "pydantic>=2.6",
     "openai>=1.30",
@@ -30,6 +31,8 @@ local-asr = ["faster-whisper>=1.0", "silero-vad>=5.1", "av>=11,<19"]
 diar = ["pyannote.audio>=3.3", "torch>=2.2"]
 # At-rest encryption; SQLCipher binding needs a compatible native library on source builds.
 security = ["cryptography>=43,<51", "keyring>=25,<26"]
+# Hosted account service only; Google verification dependencies are not frozen into the Mac app.
+accounts = ["google-auth[requests]>=2.40,<3", "cryptography>=43,<51"]
 sqlcipher = ["sqlcipher3>=0.6.4,<0.7"]
 # Bake-off candidates
 sherpa = ["sherpa-onnx>=1.10"]

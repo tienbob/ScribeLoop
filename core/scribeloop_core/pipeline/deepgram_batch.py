@@ -71,6 +71,12 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language,language_hints=N
         for cursor in cursors:
             for _frame in _frames(cursor,cancelled):
                 pass
+        # Empty compatibility tracks (for example the loopback container written
+        # by mic-only capture) must not become silent provider channels.
+        cursors = [cursor for cursor in cursors if cursor.samples > 0]
+        if not cursors:
+            raise DeepgramError('Saved audio duration is invalid')
+        streams = [cursor.stream for cursor in cursors]
         samples = max(c.aligned_end or 0 for c in cursors)
         if not 0 < samples <= 10_805*SAMPLE_RATE:
             raise DeepgramError('Saved audio duration is invalid')
@@ -84,9 +90,11 @@ def run_batch(audio,sid,emit,cancelled,*,config,budget,language,language_hints=N
             raise InterruptedError('Batch transcription cancelled')
         budget.reserve('multichannel',emit,cancelled,seconds=samples/SAMPLE_RATE*len(streams))
         emit({'type':'transcription_progress','mode':'batch_upload','stream':'all'})
-        params = {'model':'nova-3',**options,'multichannel':'true',
+        params = {'model':'nova-3',**options,
                   'diarize_model':'v1','smart_format':'true','mip_opt_out':'true',
                   **config.quality.deepgram_options()}
+        if len(streams) > 1:
+            params['multichannel'] = 'true'
         headers = {'Authorization':'Token '+config.api_key,'Content-Type':'audio/wav',
                    'Content-Length':str(44+samples*len(streams)*2)}
         def content():

@@ -14,6 +14,105 @@ def builder():
     return module
 
 
+def test_permission_reset_requires_explicit_opt_in(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
+    build = builder()
+    target = tmp_path/'ScribeLoop.app'
+    monkeypatch.setattr(build,'APP',target)
+    calls = []
+    monkeypatch.setattr(build,'run',lambda *args:calls.append(args))
+    monkeypatch.delenv('SCRIBELOOP_RESET_TCC',raising=False)
+    assert not build.reset_local_capture_permission(target,fixture=True)
+    assert not build.reset_local_capture_permission(target)
+    assert calls == []
+    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
+    assert build.reset_local_capture_permission(target)
+    assert calls == [('/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop')
+                     for service in ('ScreenCapture','Calendar')]
+
+
+def test_permission_reset_is_scoped_to_local_production_rebuild(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
+    build = builder()
+    target = tmp_path/'ScribeLoop.app'
+    monkeypatch.setattr(build,'APP',target)
+    calls = []
+    monkeypatch.setattr(build,'run',lambda *args:calls.append(args))
+    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
+    assert not build.reset_local_capture_permission(target,fixture=True)
+    assert not build.reset_local_capture_permission(tmp_path/'Other.app')
+    assert calls == []
+    assert build.reset_local_capture_permission(target)
+    assert calls == [('/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop')
+                     for service in ('ScreenCapture','Calendar')]
+
+
+
+def test_main_permission_reset_is_gated_by_build_success_and_scope(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
+    build = builder()
+    root = tmp_path/'repo'
+    work = root/'build'
+    production = root/'ScribeLoop.app'
+    preview = work/'ScribeLoop Preview.app'
+    custom = root/'Custom.app'
+    (work/'venv/bin').mkdir(parents=True)
+    (work/'venv/bin/python').touch()
+    (root/'shell/macos/Assets').mkdir(parents=True)
+    (root/'shell/macos/Assets/ScribeLoop.icns').write_bytes(b'icon')
+    monkeypatch.setattr(build,'ROOT',root)
+    monkeypatch.setattr(build,'BUILD',work)
+    monkeypatch.setattr(build,'PYTHON',work/'venv/bin/python')
+    monkeypatch.setattr(build,'APP',production)
+    monkeypatch.setattr(build,'validate_app',lambda app:None)
+    monkeypatch.setattr(build.subprocess,'check_output',
+        lambda args,**kwargs:'27.2' if args[0]=='sw_vers' else 'requirements')
+    commands = []
+    def run(*args):
+        args = list(map(str,args))
+        commands.append(args)
+        if 'PyInstaller' in args:
+            name = args[args.index('--name')+1]
+            target = work/'frozen'/name
+            target.mkdir(parents=True,exist_ok=True)
+            (target/name).write_bytes(b'fixture core')
+        elif args[0] == 'xcrun':
+            Path(args[args.index('-o')+1]).write_bytes(b'native UI')
+        elif '--output' in args:
+            Path(args[args.index('--output')+1]).write_bytes(b'helper')
+    monkeypatch.setattr(build,'run',run)
+    def resets():
+        return [args for args in commands if args[:2] == ['/usr/bin/tccutil','reset']
+                and args[2] in ('ScreenCapture','Calendar')
+                and args[3] == 'ai.scribeloop.desktop']
+
+    monkeypatch.delenv('SCRIBELOOP_RESET_TCC',raising=False)
+    build.main(app=production,fixture=False)
+    assert resets() == []
+    build.main(app=preview,fixture=True)
+    assert resets() == []
+
+    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
+    build.main(app=production,fixture=False)
+    assert resets() == [['/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop']
+                        for service in ('ScreenCapture','Calendar')]
+    validation_index = commands.index(['codesign','--verify','--deep','--strict',str(production)])
+    reset_index = commands.index(resets()[0])
+    assert validation_index < reset_index
+
+    completed = len(resets())
+    def reject_validation(app):
+        raise RuntimeError('validation failed')
+    monkeypatch.setattr(build,'validate_app',reject_validation)
+    with pytest.raises(RuntimeError,match='validation'):
+        build.main(app=production,fixture=False)
+    assert len(resets()) == completed
+
+    monkeypatch.setattr(build,'validate_app',lambda app:None)
+    build.main(app=custom,fixture=False)
+    assert len(resets()) == completed
+
+
 @pytest.mark.parametrize('fixture',[True,False])
 def test_build_has_no_credentials_and_custom_destination_preserves_existing_app(tmp_path,monkeypatch,fixture):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
@@ -59,6 +158,9 @@ def test_build_has_no_credentials_and_custom_destination_preserves_existing_app(
     info = plistlib.loads((preview/'Contents/Info.plist').read_bytes())
     assert info['CFBundleIdentifier'] == ('ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop')
     assert info['LSMinimumSystemVersion'] == '13.0'
+    assert 'NSCalendarsUsageDescription' in info
+    assert 'NSCalendarsFullAccessUsageDescription' in info
+    assert 'NSRemindersUsageDescription' not in info
     assert (work/('preview-manifest.json' if fixture else 'desktop-manifest.json')).is_file()
     for path in preview.rglob('*'):
         if path.is_file(): assert b'must-never-be-bundled' not in path.read_bytes()

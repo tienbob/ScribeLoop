@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 DDL = """
 CREATE TABLE sessions (
@@ -278,6 +278,13 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
                 conn.execute('BEGIN')
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_session_type_id "
                          "ON events(session_id,type,id)")
+            conn.execute("PRAGMA user_version=14")
+    if version < 15:
+        with conn:
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_revision_speaker "
+                         "ON segments(session_id,revision,local_speaker_id)")
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
 

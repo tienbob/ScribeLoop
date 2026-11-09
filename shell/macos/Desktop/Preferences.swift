@@ -4,11 +4,13 @@ import ServiceManagement
 
 struct Preferences: View {
     @ObservedObject var core: DesktopClient
+    @ObservedObject var calendar:CalendarCoordinator
+    var initialPage = "Recording"
     @Environment(\.dismiss) private var dismiss
     @State private var summaryKey = ""
     @State private var transcriptionKey = ""
     @State private var removeTranscriptionKey = false
-    private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey }
+    private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey, localModel, cleanupEndpoint, cleanupModel, cleanupKey }
     @FocusState private var focusedField: Field?
     @State private var endpoint = "https://api.openai.com/v1"
     @State private var model = "gpt-5.4-mini"
@@ -25,6 +27,15 @@ struct Preferences: View {
     @State private var vocabulary = ""
     @State private var asrMicrophoneSource = "processed"
     @State private var finalTranscription = false
+    @State private var transcriptionEngine = "deepgram"
+    @State private var localModel = ""
+    @State private var localSpeakerLabels = false
+    @State private var localTranscriptCleanup = true
+    @State private var cleanupModel = ""
+    @State private var cleanupProvider = "Ollama"
+    @State private var cleanupEndpoint = ""
+    @State private var cleanupKey = ""
+    @State private var cleanupValidate = true
     private var vocabularyTerms: [String] {
         vocabulary.components(separatedBy:.newlines).map { $0.trimmingCharacters(in:.whitespaces) }.filter { !$0.isEmpty }
     }
@@ -32,18 +43,25 @@ struct Preferences: View {
     @State private var microphoneFilter = "standard"
     @State private var microphoneThreshold = -40.0
     @State private var stopOnMicrophoneRelease = false
-    @State private var initialValues = ""
+    @State private var saveProgress = PreferencesSaveProgress()
+    @State private var pendingSaveCommand:Object?
     @State private var pendingSave: String?
     @State private var applying = false
     @State private var saveCommands: [Object] = []
     @State private var detectionDraft = true
-    @State private var initialDetection = true
     @State private var initialLogin = false
     @State private var saveError: String?
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var loginStatus = ""
-    @State private var revokeConfirmation = false
+    @State private var page = "Recording"
+    @State private var advancedRecognition = false
+    @State private var advancedMicrophone = false
     private var presets: [String:String] { core.settings["summary_presets"] as? [String:String] ?? [:] }
+    private var savedKeyPreviews: [String:String] { core.settings["summary_key_previews"] as? [String:String] ?? [:] }
+    private var cleanupKeyPreviews: [String:String] { core.settings["local_cleanup_key_previews"] as? [String:String] ?? [:] }
+    private var savedCleanupModels: [String:String] { core.settings["local_cleanup_models"] as? [String:String] ?? [:] }
+    private var savedSummaryModels: [String:String] { core.settings["summary_models"] as? [String:String] ?? [:] }
+    private var cleanupIsCloud: Bool { cleanupProvider != "Ollama" && cleanupProvider != "LM Studio" }
     private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
     private var languageChoices: [(String,String)] {
         let names = core.settings["supported_language_hints"] as? [String:String] ?? ["en":"English","vi":"Tiếng Việt"]
@@ -55,58 +73,176 @@ struct Preferences: View {
             return left == right ? $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending : left < right
         }
     }
-    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription)].joined(separator:"\u{001f}") }
-    private var providerChanged: Bool { valuesSignature != initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || removeTranscriptionKey }
-    private var changed: Bool { providerChanged || detectionDraft != initialDetection || login != initialLogin }
+    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate)].joined(separator:"\u{001f}") }
+    private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !cleanupKey.isEmpty || removeTranscriptionKey }
+    private var changed: Bool { providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
     private var keyPreview: String {
-        guard endpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) == text(core.settings["summary_endpoint"]).trimmingCharacters(in:CharacterSet(charactersIn:"/")) else { return "" }
-        return text(core.settings["summary_key_preview"])
+        guard let preview = savedKeyPreviews[provider] else { return "" }
+        let trimmed = CharacterSet(charactersIn:"/")
+        let savedEndpoint = text(core.settings["summary_endpoint"]).trimmingCharacters(in:trimmed)
+        let current = endpoint.trimmingCharacters(in:trimmed)
+        // The badge reflects what will actually be used: the key travels with its
+        // provider preset, and a manually edited endpoint starts with a blank key.
+        if current == savedEndpoint || current == (presets[provider] ?? "").trimmingCharacters(in:trimmed) { return preview }
+        return ""
+    }
+    private var cleanupKeyPreview: String {
+        // Mirrors the backend key resolution: the cleanup key store first,
+        // then the notes key saved for the same provider.
+        if let preview = cleanupKeyPreviews[cleanupProvider] { return preview }
+        let destination = cleanupEndpoint.trimmingCharacters(in:.whitespacesAndNewlines).trimmingCharacters(in:CharacterSet(charactersIn:"/"))
+        let effective = destination.isEmpty ? (presets[cleanupProvider] ?? "http://localhost:11434/v1").trimmingCharacters(in:CharacterSet(charactersIn:"/")) : destination
+        let savedProvider = text(core.settings["summary_provider"])
+        let notesEndpoint = cleanupProvider == savedProvider ? text(core.settings["summary_endpoint"]) : (presets[cleanupProvider] ?? "")
+        if effective == notesEndpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")),
+           let preview = savedKeyPreviews[cleanupProvider] { return preview }
+        return ""
     }
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             HStack(spacing:10) {
                 ScribeMark(size:32)
-                Text("Preferences").font(.system(size:26,design:.serif))
+                Text("Settings").font(.system(size:26,design:.serif))
                 Spacer()
                 Button("Cancel") { cancel() }.keyboardShortcut(.cancelAction).disabled(applying)
-                Button(applying ? "Saving…" : "Done") { finish() }
+                Button(applying ? "Saving…" : changed ? "Save changes" : "Done") { finish() }
                     .buttonStyle(.borderedProminent).tint(ScribeTheme.action).keyboardShortcut(.defaultAction)
                     .disabled(applying || !core.connected || (changed && core.busy))
             }.padding(.horizontal,24).padding(.top,20)
             if let saveError { Label(saveError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning).padding(.horizontal,24) }
             if changed && core.busy { Text("Finish current processing before saving these changes.").font(.caption).foregroundStyle(.secondary).padding(.horizontal,24) }
+            Picker("Settings category",selection:$page) {
+                Label("Recording",systemImage:"record.circle").tag("Recording")
+                Label("Models",systemImage:"cpu").tag("Models")
+                Label("Microphone",systemImage:"mic").tag("Microphone")
+                Label("Calendar",systemImage:"calendar").tag("Calendar")
+                Label("Experience",systemImage:"wand.and.stars").tag("Experience")
+                Label("Account",systemImage:"person.crop.circle").tag("Account")
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal,24)
+                .accessibilityLabel("Settings category")
+                .onChange(of:page) { _ in focusedField = nil }
+            Text(page == "Recording" ? "Languages, call detection and recording permissions." : page == "Models" ? "Choose how conversations are transcribed and turned into notes." : page == "Microphone" ? "Adjust your voice level and background noise filtering." : page == "Calendar" ? "Connect calendars and choose which meetings appear." : page == "Experience" ? "Experimental settings for trying features before they are finished." : "Your sign-in and purchase information.")
+                .font(.caption).foregroundStyle(.secondary).padding(.horizontal,24)
             Form {
-                Section("Transcription · Deepgram") {
-                    HStack {
-                        Text("Your Deepgram API key")
-                        Spacer()
-                        if core.settings["transcription_configured"] as? Bool == true && !removeTranscriptionKey {
-                            Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
+                if page == "Calendar" { CalendarSettings(calendar:calendar) }
+                if page == "Account" {
+                Section("Account and plan") {
+                    if core.account["configured"] as? Bool != true {
+                        Text("Google sign-in is awaiting account-service setup.").foregroundStyle(.secondary)
+                        Button("Sign in with Google") { core.send(["action":"account_sign_in"]) }
+                            .disabled(true).help("The account-service address and verification key must be configured first.")
+                        Text("Your current internal workspace remains available.").font(.caption).foregroundStyle(.secondary)
+                    } else if text(core.account["phase"]) == "signing_in" {
+                        HStack { ProgressView().controlSize(.small); Text("Finish Google sign-in in your browser.") }
+                        Button("Cancel sign-in") { core.send(["action":"account_cancel"]) }.disabled(core.busy)
+                    } else {
+                        if let user = core.account["user"] as? Object {
+                            Text(text(user["email"]))
+                            Text(core.account["local_owned"] as? Bool == true ? "Local · Purchased once" : "Local · No purchase recorded")
+                            Text(core.account["cloud_active"] as? Bool == true ? "Cloud · Subscription active" : "Cloud · No active subscription")
+                            if text(core.account["phase"]) == "cached" { Text("Showing the last verified account state.").font(.caption).foregroundStyle(.secondary) }
+                            HStack {
+                                Button("Refresh plan") { core.send(["action":"account_refresh"]) }
+                                Button("Sign out") { core.send(["action":"account_sign_out"]) }
+                            }.disabled(core.busy)
+                        } else {
+                            Button("Sign in with Google") { core.send(["action":"account_sign_in"]) }.disabled(core.busy || !core.connected)
                         }
                     }
-                    SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["transcription_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
-                        .textFieldStyle(.roundedBorder).textContentType(nil).autocorrectionDisabled(true)
-                        .focused($focusedField,equals:.transcriptionKey)
-                        .accessibilityLabel("Deepgram API key")
-                        .disabled(removeTranscriptionKey)
-                    if core.settings["transcription_configured"] as? Bool == true {
-                        Toggle("Remove saved transcription key",isOn:$removeTranscriptionKey)
+                    Text("Local: $3 one time · Cloud: $5/month. Checkout is not available in this build.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if !text(core.account["error"]).isEmpty {
+                        Text(text(core.account["error"])).font(.caption).foregroundStyle(ScribeTheme.warning)
                     }
-                    Text("Stored in this Mac's Keychain. Leave unchanged to keep it. Audio is sent to Deepgram when you record or rerun transcription; your provider bills your account directly. This build does not include transcription credits or self-hosted ASR.").font(.caption).foregroundStyle(.secondary)
                 }
+                }
+                if page == "Experience" {
+                Section("Transcript cleanup") {
+                    Toggle("Skip cleanup validation",isOn:Binding(get:{ !cleanupValidate },set:{ cleanupValidate = !$0 }))
+                    Text("When on, changed numbers, negations and rewrites are accepted without content validation. The response still needs readable JSON with segment IDs so edits can be saved to the correct transcript. When off, unsafe edits are rejected per segment and the original wording is kept. Experimental: turn this off again for normal use.").font(.caption).foregroundStyle(.secondary)
+                }
+                }
+                if page == "Models" {
+                Section("Transcription") {
+                    Picker("Engine",selection:$transcriptionEngine) {
+                        Text("Deepgram · Cloud").tag("deepgram")
+                        Text("Ollama · Local").tag("ollama")
+                    }
+                    .accessibilityLabel("Transcription engine")
+                    .onChange(of:transcriptionEngine) { _ in saveError = nil }
+                    if transcriptionEngine == "deepgram" {
+                        VStack(alignment:.leading,spacing:8) {
+                            HStack {
+                                Text("Your Deepgram API key").font(.callout).foregroundStyle(.secondary)
+                                Spacer()
+                                if core.settings["transcription_configured"] as? Bool == true && !removeTranscriptionKey {
+                                    Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
+                                }
+                            }
+                            SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["transcription_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
+                                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(nil).autocorrectionDisabled(true)
+                                .focused($focusedField,equals:.transcriptionKey)
+                                .accessibilityLabel("Deepgram API key")
+                                .disabled(removeTranscriptionKey)
+                        }.padding(.vertical,4)
+                        if core.settings["transcription_configured"] as? Bool == true {
+                            Toggle("Remove saved transcription key",isOn:$removeTranscriptionKey)
+                        }
+                        Text("Stored in Keychain. Audio is sent to Deepgram; recording and transcription reruns are billed to your API account.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if transcriptionEngine == "ollama" {
+                        VStack(alignment:.leading,spacing:8) {
+                            Text("Ollama transcription model").font(.callout).foregroundStyle(.secondary)
+                            TextField("Model name",text:$localModel,prompt:Text("Installed audio model, e.g. gemma4:e2b"))
+                                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                                .focused($focusedField,equals:.localModel).autocorrectionDisabled(true)
+                                .simultaneousGesture(TapGesture().onEnded {
+                                    NSApp.setActivationPolicy(.regular)
+                                    NSApp.activate(ignoringOtherApps:true)
+                                    focusedField = .localModel
+                                })
+                                .accessibilityLabel("Ollama transcription model")
+                        }.padding(.vertical,4)
+                        Toggle("Speaker labels · local diarization",isOn:$localSpeakerLabels)
+                        Text("Optional anonymous Speaker 1/2 labels from a local diarization model. It needs the diarization add-on on this Mac; when it is unavailable the transcript is saved without labels.").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button(core.checkingLocalModel ? "Checking…" : "Check Ollama") { core.checkOllama(model:localModel) }
+                                .disabled(!core.connected || core.busy || core.checkingLocalModel)
+                            if core.checkingLocalModel { ProgressView().controlSize(.small) }
+                            if !core.localModelMessage.isEmpty {
+                                Text(core.localModelMessage).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                            }
+                        }
+                        Text("Local transcription runs only after the conversation has ended — there is no live transcript while recording. ScribeLoop opens Ollama for you, downloads the named model once if it is available in the Ollama library, and keeps all audio on this Mac.").font(.caption).foregroundStyle(.secondary)
+                        if !localSummary {
+                            Text("Notes still use your selected cloud provider. Choose Ollama for Conversation notes to keep the whole flow on this Mac.").font(.caption).foregroundStyle(.orange)
+                            Button("Use Ollama for notes too") {
+                                selectProvider("Ollama")
+                                model = localModel.trimmingCharacters(in:.whitespacesAndNewlines)
+                            }
+                        } else {
+                            Text("Transcription and notes are set to local providers. Download both models before going offline; Check Ollama tests the transcription model without saving this draft.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if transcriptionEngine == "deepgram" {
                 Section("Recognition accuracy") {
+                    Text("Names and vocabulary · one term per line").font(.callout.weight(.medium))
+                    TextEditor(text:$vocabulary).frame(height:85).font(.body).padding(6)
+                        .background(ScribeTheme.canvas,in:RoundedRectangle(cornerRadius:8))
+                        .overlay { RoundedRectangle(cornerRadius:8).strokeBorder(ScribeTheme.border) }
+                        .accessibilityLabel("Transcription vocabulary")
+                    Text("Add names, projects and technical terms you expect to hear. Up to 50 short terms; hints may improve recognition but do not force exact wording.").font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Advanced recognition",isExpanded:$advancedRecognition) {
                     Picker("Microphone audio for transcription",selection:$asrMicrophoneSource) {
                         Text("Processed · gain and noise filter").tag("processed")
                         Text("Original · before gain and noise filter").tag("raw")
                     }
                     Text("Original sends the unprocessed microphone track to Deepgram. Playback keeps your microphone settings. Applies to new recordings and Transcribe again; older recordings need a retained original track.").font(.caption).foregroundStyle(.secondary)
-                    Text("Names and vocabulary · one term per line").font(.callout.weight(.medium))
-                    TextEditor(text:$vocabulary).frame(height:85).font(.body)
-                        .accessibilityLabel("Transcription vocabulary")
-                        .overlay { RoundedRectangle(cornerRadius:6).strokeBorder(ScribeTheme.border) }
-                    Text("Add names, projects and technical terms you expect to hear. Up to 50 short terms; hints may improve recognition but do not force exact wording.").font(.caption).foregroundStyle(.secondary)
                     Toggle("Refine transcript after recording",isOn:$finalTranscription)
                     Text("Sends the recording to Deepgram one more time after Stop, then generates notes. This adds processing time and provider charges within the displayed audio cap. The live revision is retained. If refinement fails, notes use the live transcript.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 }
                 Section("Conversation notes") {
                     Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
@@ -116,7 +252,13 @@ struct Preferences: View {
                         Text("LM Studio · Local").tag("LM Studio")
                         Text("Custom · OpenAI compatible").tag("Custom")
                     }
-                    if provider == "Custom" { TextField("API base URL",text:$endpoint).focused($focusedField,equals:.endpoint) }
+                    VStack(alignment:.leading,spacing:8) {
+                        Text("API base URL").font(.callout).foregroundStyle(.secondary)
+                        TextField("API base URL",text:$endpoint)
+                            .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).autocorrectionDisabled(true)
+                            .focused($focusedField,equals:.endpoint)
+                            .accessibilityLabel("API base URL")
+                    }.padding(.vertical,4)
                     VStack(alignment:.leading,spacing:8) {
                         Text("Model ID").font(.callout).foregroundStyle(.secondary).onTapGesture { focusedField = .model }
                         TextField("Model ID",text:$model,prompt:Text(localSummary ? "Type your installed model name" : "Type the model ID from your provider"))
@@ -139,7 +281,7 @@ struct Preferences: View {
                             .focused($focusedField,equals:.apiKey)
                             .accessibilityLabel(keyPreview.isEmpty ? "API key" : "Replace saved API key")
                     }.padding(.vertical,4)
-                    Text(localSummary ? "Connects to your running local model server. A key is optional unless the server requires one." : "Your key is stored securely. Leave this field unchanged to keep it, or enter a new key to replace it.").font(.caption).foregroundStyle(.secondary)
+                    Text(localSummary ? "Connects to your running local model server. A key is optional unless the server requires one." : "Your key is stored securely. Each provider remembers its own key and model, so switching providers restores both automatically; leave the fields unchanged to keep them or enter new values to replace them.").font(.caption).foregroundStyle(.secondary)
                     VStack(alignment:.leading,spacing:8) {
                         Text("Summary instructions").font(.callout.weight(.medium))
                         TextEditor(text:$instructions).font(.body)
@@ -148,10 +290,68 @@ struct Preferences: View {
                             .background(ScribeTheme.canvas,in:RoundedRectangle(cornerRadius:8))
                             .overlay { RoundedRectangle(cornerRadius:8).strokeBorder(ScribeTheme.border) }
                             .accessibilityLabel("Summary instructions")
-                        Text("Edit this guidance to change the focus, style or detail of your notes. Clearing it restores default guidance. Applies when notes are generated again; citations and factual checks stay required.").font(.caption).foregroundStyle(.secondary)
+                        Text("Control the language, style and detail of new or regenerated notes. Clear to restore defaults. Citations remain required.").font(.caption).foregroundStyle(.secondary)
                         Text("\(instructions.count)/2,000 characters").font(.caption).foregroundStyle(instructions.count>2000 ? ScribeTheme.warning : .secondary)
                     }.padding(.vertical,4)
                 }
+                Section("Transcript cleanup") {
+                    Toggle("Clean up transcript locally",isOn:$localTranscriptCleanup)
+                    if localTranscriptCleanup {
+                        Picker("Provider",selection:$cleanupProvider) {
+                            Text("OpenAI · Cloud").tag("OpenAI")
+                            Text("Gemini · Cloud").tag("Gemini")
+                            Text("Ollama · Local").tag("Ollama")
+                            Text("LM Studio · Local").tag("LM Studio")
+                            Text("Custom · OpenAI compatible").tag("Custom")
+                        }
+                        .onChange(of:cleanupProvider) { selected in
+                            cleanupEndpoint = presets[selected] ?? cleanupEndpoint
+                            cleanupModel = savedCleanupModels[selected] ?? ""
+                            cleanupKey = ""
+                            saveError = nil
+                        }
+                        VStack(alignment:.leading,spacing:8) {
+                            Text("API base URL").font(.callout).foregroundStyle(.secondary)
+                            TextField("API base URL",text:$cleanupEndpoint,prompt:Text(presets[cleanupProvider] ?? "http://localhost:11434/v1"))
+                                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).autocorrectionDisabled(true)
+                                .focused($focusedField,equals:.cleanupEndpoint)
+                                .accessibilityLabel("Cleanup API base URL")
+                        }.padding(.vertical,4)
+                        if cleanupIsCloud {
+                            VStack(alignment:.leading,spacing:8) {
+                                HStack { Text("API key").font(.callout).foregroundStyle(.secondary)
+                                    Spacer()
+                                    if !cleanupKeyPreview.isEmpty { Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent) }
+                                }
+                                SecureField("API key",text:$cleanupKey,prompt:Text(cleanupKeyPreview.isEmpty ? "Enter your API key" : cleanupKeyPreview))
+                                    .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(nil).autocorrectionDisabled(true)
+                                    .focused($focusedField,equals:.cleanupKey)
+                                    .accessibilityLabel(cleanupKeyPreview.isEmpty ? "Cleanup API key" : "Replace saved cleanup API key")
+                            }.padding(.vertical,4)
+                        }
+                        VStack(alignment:.leading,spacing:8) {
+                            Text("Cleanup model").font(.callout).foregroundStyle(.secondary)
+                            TextField("Model ID",text:$cleanupModel,prompt:Text(cleanupProvider == provider ? "Leave empty to reuse the notes model" : (cleanupProvider == "OpenAI" ? "Model ID from your provider, e.g. gpt-5.4-mini" : cleanupProvider == "Gemini" ? "Model ID from your provider, e.g. gemini-2.5-flash" : cleanupProvider == "LM Studio" ? "Loaded model name, e.g. qwen2.5-7b-instruct" : cleanupProvider == "Custom" ? "Type the model ID from your provider" : "Installed text model, e.g. gemma4:e2b")))
+                                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                                .focused($focusedField,equals:.cleanupModel).autocorrectionDisabled(true)
+                                .simultaneousGesture(TapGesture().onEnded {
+                                    NSApp.setActivationPolicy(.regular)
+                                    NSApp.activate(ignoringOtherApps:true)
+                                    focusedField = .cleanupModel
+                                })
+                                .accessibilityLabel("Cleanup model")
+                        }.padding(.vertical,4)
+                        if cleanupProvider != provider && cleanupModel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && (savedSummaryModels[cleanupProvider] ?? "").isEmpty {
+                            Text("Enter a cleanup model, or cleanup stays off.").font(.caption).foregroundStyle(.orange)
+                        }
+                        if cleanupIsCloud && cleanupKey.isEmpty && cleanupKeyPreview.isEmpty {
+                            Text("Enter an API key for this provider, or cleanup stays off.").font(.caption).foregroundStyle(.orange)
+                        }
+                        Text("After transcription, the selected model uses the call topic, nearby dialogue and vocabulary to repair ASR wording and Vietnamese diacritics before notes are generated. Unclear wording is flagged for review; changed passages show their original ASR text. Content checks protect numbers, negations and excessive rewrites unless skipped in Experience. Cloud cleanup sends transcript text and context to that provider; audio is never sent by this step. On-device providers keep the text on this Mac.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                }
+                if page == "Microphone" {
                 Section("Microphone") {
                     VStack(alignment:.leading,spacing:8) {
                         HStack {
@@ -170,6 +370,7 @@ struct Preferences: View {
                         Text("Strong").tag("strong")
                     }
                     if microphoneFilter != "off" {
+                        DisclosureGroup("Advanced noise filtering",isExpanded:$advancedMicrophone) {
                         VStack(alignment:.leading,spacing:8) {
                             HStack { Text("Noise rejection threshold"); Spacer(); Text(String(format:"%.0f dBFS",microphoneThreshold)).monospacedDigit().foregroundStyle(.secondary) }
                             Slider(value:$microphoneThreshold,in:-65 ... -25,step:1)
@@ -178,12 +379,15 @@ struct Preferences: View {
                             Text("Raise to reject more background sound; lower to keep quieter speech.").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical,4)
                     }
+                    }
                     Text("Sensitivity boosts your voice and background sound. The filter reduces rumble and quiet background noise; it cannot isolate voices or remove every sudden sound. Strong may soften quiet speech.").font(.caption).foregroundStyle(.secondary)
                     Text("Applies to new recordings and processed-audio transcription. An encrypted original microphone track is kept when processing is enabled. Existing recordings stay as recorded.").font(.caption).foregroundStyle(.secondary)
                     Button("Reset microphone settings") { microphoneGain = 0; microphoneFilter = "standard"; microphoneThreshold = -40 }
                 }
-                Section("Recording preset") {
-                    Picker("Maximum duration",selection:$duration) { Text("5 minutes · $0.25 audio cap").tag(300); Text("1 hour · $3 audio cap").tag(3600); Text("3 hours · $8 audio cap").tag(10800) }
+                }
+                if page == "Recording" {
+                Section("Recording preferences") {
+                    Picker("Maximum duration",selection:$duration) { Text(transcriptionEngine == "ollama" ? "5 minutes" : "5 minutes · $0.25 audio cap").tag(300); Text(transcriptionEngine == "ollama" ? "1 hour" : "1 hour · $3 audio cap").tag(3600); Text(transcriptionEngine == "ollama" ? "3 hours" : "3 hours · $8 audio cap").tag(10800) }
                     VStack(alignment:.leading,spacing:10) {
                         HStack {
                             Text("Conversation languages").font(.callout.weight(.medium))
@@ -209,7 +413,7 @@ struct Preferences: View {
                         if languageChoices.isEmpty { Text("No matching languages").font(.caption).foregroundStyle(.secondary) }
                         Button("Reset to English and Vietnamese") { selectedLanguages = ["en","vi"]; languageSearch = "" }
                     }
-                    Text("Select the languages you expect to hear. Keep at least one selected. Deepgram uses your selection as hints and supports switching languages. Hints guide recognition; accuracy can vary. Applies to new recordings and manual transcription reruns.").font(.caption).foregroundStyle(.secondary)
+                    Text(transcriptionEngine == "ollama" ? "These hints apply to Deepgram. Ollama detects the spoken language using your selected local model." : "Choose the languages you expect to hear. Deepgram uses them as hints; accuracy can vary. Keep at least one selected.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Permissions and call detection") {
                     HStack(spacing:12) {
@@ -241,22 +445,17 @@ struct Preferences: View {
                         Label("Detect calls automatically",systemImage:"phone.badge.waveform")
                     }.toggleStyle(.switch).disabled(!core.connected || core.busy)
                     Toggle("Stop after meeting app releases microphone",isOn:$stopOnMicrophoneRelease)
-                    Text("After 60 seconds without the meeting app's microphone activity, stop even if browser audio continues. The countdown offers Keep recording. A muted or receive-only call can also release its microphone; leave off to wait until all selected-app audio is inactive. Applies to meeting-app recordings, not microphone-only or all-system recordings.").font(.caption).foregroundStyle(.secondary)
+                    Text("Stops after 60 seconds without the meeting app’s microphone activity. Muted calls can trigger this too; choose Keep recording during the countdown to continue. Applies only to meeting-app capture.").font(.caption).foregroundStyle(.secondary)
                     Toggle("Open ScribeLoop at login",isOn:$login)
                     if !loginStatus.isEmpty { Text(loginStatus).font(.caption) }
                 }
-                if core.accepted {
-                    Section("Cloud processing") {
-                        Text("Stop recording and processing, and require the first-use agreement again. Saved conversations remain on this Mac.").font(.caption).foregroundStyle(.secondary)
-                        Button("Stop cloud processing…",role:.destructive) { revokeConfirmation = true }
-                            .disabled(!core.connected)
-                    }
                 }
-            }.formStyle(.grouped).disabled(applying)
+            }.formStyle(.grouped).id(page).disabled(applying)
         }.background(ScribeTheme.canvas).tint(ScribeTheme.accent).background(InteractiveWindowActivation())
         .background(OutsideClickFocusDismissal(dismissFocus:{ focusedField = nil },
             cancelOnOutsideModal:applying ? nil : { cancel() }).allowsHitTesting(false)).onAppear {
             guard core.connected else { dismiss(); return }
+            page = initialPage
             endpoint = text(core.settings["summary_endpoint"])
             model = text(core.settings["summary_model"])
             provider = text(core.settings["summary_provider"])
@@ -273,48 +472,65 @@ struct Preferences: View {
             vocabulary = (core.settings["vocabulary"] as? [String] ?? []).joined(separator:"\n")
             asrMicrophoneSource = core.settings["asr_microphone_source"] as? String ?? "processed"
             finalTranscription = core.settings["final_transcription"] as? Bool ?? false
+            transcriptionEngine = text(core.settings["transcription_engine"])
+            if transcriptionEngine != "ollama" { transcriptionEngine = "deepgram" }
+            localModel = text(core.settings["local_transcription_model"])
+            if localModel.isEmpty { localModel = "gemma4:e2b" }
+            localSpeakerLabels = core.settings["local_speaker_labels"] as? Bool ?? false
+            localTranscriptCleanup = core.settings["local_transcript_cleanup"] as? Bool ?? true
+            cleanupModel = text(core.settings["local_cleanup_model"])
+            let savedCleanupProvider = text(core.settings["local_cleanup_provider"])
+            cleanupProvider = ["OpenAI","Gemini","Ollama","LM Studio","Custom"].contains(savedCleanupProvider) ? savedCleanupProvider : "Ollama"
+            cleanupEndpoint = text(core.settings["local_cleanup_endpoint"])
+            cleanupKey = ""
+            cleanupValidate = core.settings["local_cleanup_validate"] as? Bool ?? true
             microphoneGain = (core.settings["microphone_gain_db"] as? NSNumber)?.doubleValue ?? 0
             microphoneFilter = text(core.settings["microphone_noise_filter"])
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
             microphoneThreshold = (core.settings["microphone_noise_threshold_db"] as? NSNumber)?.doubleValue ?? -40
             stopOnMicrophoneRelease = core.settings["stop_on_microphone_release"] as? Bool ?? false
-            initialValues = valuesSignature
-            initialDetection = core.detection; detectionDraft = initialDetection
+            saveProgress = PreferencesSaveProgress()
+            saveProgress.initialValues = valuesSignature
+            saveProgress.initialDetection = core.detection; detectionDraft = saveProgress.initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
-            summaryKey = ""; transcriptionKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; applying = false; saveCommands = []
+            summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
             loginStatus = SMAppService.mainApp.status == .requiresApproval ? "Approve ScribeLoop in Login Items settings." : ""
         }.onChange(of:core.requests[pendingSave ?? ""]) { status in
             guard pendingSave != nil else { return }
-            if status == "accepted" { pendingSave = nil; saveNext() }
+            if status == "accepted" {
+                let action = text(pendingSaveCommand?["action"])
+                saveProgress.accept(action:action,values:valuesSignature,detection:detectionDraft)
+                if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false }
+                pendingSave = nil; pendingSaveCommand = nil; saveNext()
+            }
             else if status == "rejected" || status == "unknown" {
-                pendingSave = nil; applying = false; saveCommands = []
-                saveError = status == "unknown" ? "Save status is uncertain. Reconnect and check your settings before retrying." : "Settings could not be saved. Check the model and endpoint, then try Done again."
+                pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
+                saveError = saveProgress.failure(uncertain:status == "unknown")
             }
         }.interactiveDismissDisabled(applying)
-        .alert("Stop cloud processing?",isPresented:$revokeConfirmation) {
-            Button("Cancel",role:.cancel) {}
-            Button("Stop processing",role:.destructive) { core.send(["action":"revoke_agreement"]) }
-        } message: { Text("Recording and pending notes will stop. Data already sent to providers cannot be recalled. Unsaved settings will be discarded; saved conversations remain.") }
         .onChange(of:core.accepted) { accepted in if !accepted { cancel() } }
-        .onDisappear { summaryKey = ""; transcriptionKey = "" }
+        .onDisappear { summaryKey = ""; transcriptionKey = ""; cleanupKey = "" }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
         provider = selected
         if let preset = presets[selected] { endpoint = preset }
         summaryKey = ""; saveError = nil
-        model = selected == "OpenAI" ? "gpt-5.4-mini" : ""
+        // Restore the model this provider remembers, like its saved key.
+        model = savedSummaryModels[selected] ?? (selected == "OpenAI" ? "gpt-5.4-mini" : "")
         focusedField = .model
     }
     private func cancel() {
         guard !applying else { return }
-        focusedField = nil; summaryKey = ""; transcriptionKey = ""; dismiss()
+        focusedField = nil; summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; dismiss()
     }
     private func finish() {
         focusedField = nil
         guard !applying else { return }
         guard changed else { dismiss(); return }
         guard !model.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else { saveError = "Enter a model ID before saving."; return }
+        guard transcriptionEngine != "ollama" || !localModel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+            saveError = "Enter an Ollama transcription model name before saving."; return }
         guard vocabularyTerms.count <= 50, vocabularyTerms.allSatisfy({ $0.count <= 80 }), vocabularyTerms.reduce(0,{ $0 + $1.utf8.count }) <= 500 else {
             saveError = "Keep vocabulary to a shorter list of important names and terms."; return
         }
@@ -328,19 +544,31 @@ struct Preferences: View {
             value["vocabulary"] = vocabularyTerms
             value["asr_microphone_source"] = asrMicrophoneSource
             value["final_transcription"] = finalTranscription
+            value["transcription_engine"] = transcriptionEngine
+            value["local_transcription_model"] = localModel.trimmingCharacters(in:.whitespacesAndNewlines)
+            value["local_speaker_labels"] = localSpeakerLabels
+            value["local_transcript_cleanup"] = localTranscriptCleanup
+            value["local_cleanup_model"] = cleanupModel.trimmingCharacters(in:.whitespacesAndNewlines)
+            value["local_cleanup_provider"] = cleanupProvider
+            value["local_cleanup_endpoint"] = cleanupEndpoint.trimmingCharacters(in:.whitespacesAndNewlines)
+            value["local_cleanup_validate"] = cleanupValidate
+            if !cleanupKey.isEmpty { value["local_cleanup_key"] = cleanupKey }
             if removeTranscriptionKey { value["deepgram_key"] = "" }
             else if !transcriptionKey.isEmpty { value["deepgram_key"] = transcriptionKey }
             saveCommands.append(["action":"save_settings","settings":value])
         }
-        if detectionDraft != initialDetection { saveCommands.append(["action":"set_detection","enabled":detectionDraft]) }
+        if detectionDraft != saveProgress.initialDetection { saveCommands.append(["action":"set_detection","enabled":detectionDraft]) }
         applying = true; saveNext()
     }
     private func saveNext() {
         if !saveCommands.isEmpty {
-            pendingSave = core.send(saveCommands.removeFirst())
+            let command = saveCommands.removeFirst()
+            pendingSaveCommand = command
+            pendingSave = core.send(command)
             if pendingSave == nil {
                 applying = false; saveCommands = []
-                saveError = "Settings could not be sent. Your changes are still here; reconnect and try Done again."
+                pendingSaveCommand = nil
+                saveError = saveProgress.failure(uncertain:true)
             }
             return
         }
@@ -350,21 +578,24 @@ struct Preferences: View {
                 if SMAppService.mainApp.status == .requiresApproval { core.message = "Approve ScribeLoop in Login Items settings to open it at login." }
             } catch {
                 applying = false
-                initialValues = valuesSignature; initialDetection = detectionDraft
-                summaryKey = ""; transcriptionKey = ""; removeTranscriptionKey = false
+                saveProgress.initialValues = valuesSignature; saveProgress.initialDetection = detectionDraft
+                summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false
                 saveError = "Other settings were saved, but the login setting could not be changed. Check System Settings → Login Items."
                 return
             }
         }
-        applying = false; summaryKey = ""; transcriptionKey = ""; dismiss()
+        applying = false; summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; dismiss()
     }
 }
 
 struct AudioView: View {
     @ObservedObject var core: DesktopClient
     @State private var rerun = false
+    @State private var rerunCommand:Object?
     var audio: Object { core.detail["audio"] as? Object ?? [:] }
     var available: Bool { audio["available"] as? Bool == true }
+    private var localTranscription:Bool { text(core.settings["transcription_engine"]) == "ollama" }
+    private var reviewedLocalTranscription:Bool { text(rerunCommand?["model"]) == "ollama" }
     var body: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:28) {
@@ -381,14 +612,22 @@ struct AudioView: View {
                 } else { Label("Audio is unavailable or expired. Transcript and notes are preserved.",systemImage:"waveform.slash").foregroundStyle(.secondary) }
                 VStack(alignment:.leading,spacing:10) {
                     Label("Transcribe again",systemImage:"arrow.clockwise").font(.headline)
-                    Text("Process the complete saved recording in one upload. Your current transcript stays available until the new version is ready. Provider charges apply.").font(.callout).foregroundStyle(.secondary)
-                    Button("Transcribe again…") { rerun = true }.disabled(!available || core.busy || !core.accepted)
+                    Text(localTranscription ? "Transcribe the saved recording on this Mac with Ollama. Your current transcript stays available until the new version is ready." : "Send the saved recording to Deepgram. Your current transcript stays available until the new version is ready. Your provider bills your API account.").font(.callout).foregroundStyle(.secondary)
+                    Button("Transcribe again…") {
+                        guard let id = core.selectedID, let command = core.savedTranscriptionCommand(action:"reprocess",sessionID:id) else {
+                            core.message = "Choose a transcription engine in Preferences first."; return
+                        }
+                        rerunCommand = command; rerun = true
+                    }.disabled(!available || core.busy || !core.accepted)
                 }.notebookCard()
             }.padding(28).frame(maxWidth:850,alignment:.leading)
         }
         .onDisappear { core.stopAudio() }
-        .confirmationDialog("Upload this saved audio and transcribe again?",isPresented:$rerun,titleVisibility:.visible) {
-            Button("Upload and transcribe") { core.stopAudio(); if let id = core.selectedID { core.send(["action":"reprocess","session_id":id,"language":core.settings["language"] ?? "auto","language_hints":core.settings["language_hints"] ?? ["en","vi"]]) } }
+        .confirmationDialog(reviewedLocalTranscription ? "Transcribe again on this Mac with Ollama?" : "Send this saved audio to Deepgram?",isPresented:$rerun,titleVisibility:.visible) {
+            Button(reviewedLocalTranscription ? "Transcribe locally" : "Upload to Deepgram") {
+                core.stopAudio()
+                if let command = rerunCommand { core.send(command) }
+            }
         }
     }
 }
@@ -442,18 +681,28 @@ struct PlaybackBar: View {
 }
 
 struct TranscriptRow: View {
-    @ObservedObject var core: DesktopClient
-    let row: Record
+    let core: DesktopClient
+    let busy:Bool
+    let citationID:String?
+    let turn: TranscriptTurn
+    private var row:Record { turn.rows[0] }
+    private var personColor:Color {
+        let colors:[Color] = [ScribeTheme.accent,.blue,.purple,.orange,.pink,.teal]
+        return colors[max(0,row.int("person_number")-1) % colors.count]
+    }
     @State private var name = ""
     @State private var rename = false
     @State private var naming = false
     var body: some View {
-        HStack(alignment:.top,spacing:20) {
-            Text(String(format:"%d:%02d",row.int("start_ms")/60000,row.int("start_ms")/1000%60)).font(.system(size:11,weight:.medium)).monospacedDigit().foregroundStyle(.secondary).padding(.vertical,5).frame(width:50,alignment:.leading)
+        HStack(alignment:.top,spacing:12) {
+            if turn.alignsRight { Spacer(minLength:64) }
+            else { avatar }
             VStack(alignment:.leading,spacing:8) {
                 HStack {
-                    Text(row.personTitle).font(.system(size:11,weight:.semibold)).foregroundStyle(ScribeTheme.accent).padding(.horizontal,8).padding(.vertical,5).background(ScribeTheme.subtle,in:Capsule())
-                    Text(row.text("stream") == "mic" ? "Microphone" : "Meeting audio").font(.system(size:10)).foregroundStyle(.secondary)
+                    Text(row.personTitle).font(.system(size:11,weight:.semibold)).foregroundStyle(personColor).padding(.horizontal,8).padding(.vertical,5).background(ScribeTheme.subtle,in:Capsule())
+                    Spacer(minLength:8)
+                    Text(String(format:"%d:%02d",row.int("start_ms")/60000,row.int("start_ms")/1000%60))
+                        .font(.system(size:10)).monospacedDigit().foregroundStyle(.secondary)
                     if !row.text("display_speaker_id").isEmpty {
                         Menu {
                             Button("Rename speaker…") { name = row.text("speaker_label"); rename = true }
@@ -464,17 +713,46 @@ struct TranscriptRow: View {
                             }
                             Button("Name this person…") { core.send(["action":"people_page"]); naming = true }
 
-                        } label: { Image(systemName:"pencil") }.disabled(core.busy)
+                        } label: { Image(systemName:"pencil") }.disabled(busy)
                     }
                 }
-                Text(verbatim:row.text("text")).textSelection(.enabled).lineSpacing(5)
-            }
+                ForEach(turn.rows) { segment in
+                    Text(verbatim:segment.text("text")).textSelection(.enabled).lineSpacing(5)
+                        .frame(maxWidth:.infinity,alignment:.leading)
+                        .padding(segment.id == citationID ? 6 : 0)
+                        .background(segment.id == citationID ? personColor.opacity(0.2) : Color.clear,in:RoundedRectangle(cornerRadius:6))
+                        .help("\(segment.int("start_ms")/60000):\(String(format:"%02d",segment.int("start_ms")/1000%60)) · \(segment.text("stream") == "mic" ? "Microphone" : "Meeting audio")")
+                        .id(segment.id)
+                    if !segment.text("cleanup_original_text").isEmpty {
+                        DisclosureGroup(segment.raw["cleanup_original_truncated"] as? Bool == true ? "Original ASR · excerpt" : "Original ASR") {
+                            Text(verbatim:segment.text("cleanup_original_text")).textSelection(.enabled)
+                                .font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)
+                        }.font(.caption).foregroundStyle(ScribeTheme.accent)
+                    }
+                    if segment.raw["cleanup_needs_review"] as? Bool == true {
+                        Label("Unclear wording · review original audio",systemImage:"exclamationmark.bubble")
+                            .font(.caption).foregroundStyle(ScribeTheme.warning)
+                    }
+                }
+            }.padding(16)
+                .frame(maxWidth:640,alignment:.leading)
+                .background(personColor.opacity(0.10),
+                            in:RoundedRectangle(cornerRadius:18))
+                .overlay(RoundedRectangle(cornerRadius:18).stroke(personColor.opacity(0.22),lineWidth:1))
+            if turn.alignsRight { avatar }
+            else { Spacer(minLength:64) }
         }.sheet(isPresented:$naming) { PeopleView(core:core,initialSpeaker:row.text("display_speaker_id")).frame(width:650,height:650) }
         .alert("Name this speaker",isPresented:$rename) {
             TextField("Display name",text:$name)
             Button("Cancel",role:.cancel) {}
             Button("Save") { correction("rename_speaker",extra:["label":name]) }
         } message: { Text("A manual label applies to this transcript revision. It does not identify a voice across meetings.") }
+    }
+    private var avatar:some View {
+        Text(row.int("person_number") > 0 ? "\(row.int("person_number"))" : "?")
+            .font(.system(size:12,weight:.semibold)).foregroundStyle(personColor)
+            .frame(width:32,height:32).background(personColor.opacity(0.14),in:Circle())
+            .accessibilityLabel(row.personTitle)
     }
     var speakers: [Record] {
         var seen = Set<String>()

@@ -39,6 +39,8 @@ class Socket:
         if isinstance(data,bytes):
             self.sent_ms += len(data)//32
         else:
+            if json.loads(data)['type']=='KeepAlive':
+                return
             assert json.loads(data)['type']=='CloseStream'
             self.closed = True
     def recv(self,timeout):
@@ -62,6 +64,46 @@ class Socket:
 
 def event(words):
     return {'channel':{'alternatives':[{'transcript':'one two three','words':words}]}}
+
+
+@pytest.mark.asyncio
+async def test_idle_live_connections_send_text_keepalive_without_audio_or_reconnect(state, monkeypatch):
+    import threading
+
+    from scribeloop_core.pipeline import deepgram_meeting
+
+    store,audio,_events,publish = state
+    source = ControlledSource()
+    seen = threading.Event()
+    sockets = []
+    monkeypatch.setattr(deepgram_meeting,'KEEPALIVE_INTERVAL_S',.05)
+
+    class IdleSocket(Socket):
+        def send(self,data):
+            if isinstance(data,str) and json.loads(data)['type'] == 'KeepAlive':
+                seen.set()
+            super().send(data)
+
+    def connector(*args,**kwargs):
+        sock = IdleSocket()
+        sockets.append(sock)
+        return sock
+
+    runner = DeepgramRecordingRunner(store,audio,lambda *a,**kw:source,publish,
+        config=DeepgramConfig(api_key='hidden-test-key',connector=connector))
+    sid = runner.start(None,{'cloud_consent':True,'language':'en'},'Idle',consent_confirmed=True)['id']
+    await wait_for(lambda:len(store.segments(sid)) >= 4)
+    runner.set_paused(sid,True)
+    await wait_for(lambda:len(sockets) == 2 and all(sock.sent_ms == 12150 for sock in sockets))
+    seen.clear()
+    await wait_for(seen.is_set)
+    sent = [sock.sent_ms for sock in sockets]
+    runner.set_paused(sid,False)
+    runner.stop(sid)
+    await runner.task
+    assert len(sockets) == 2 and store.get(sid)['status'] == 'completed'
+    assert [sock.sent_ms for sock in sockets] == sent
+    await runner.close()
 
 
 @pytest.mark.asyncio
@@ -163,8 +205,11 @@ async def test_fault_keeps_recorder_running_and_fresh_resume_does_not_merge_peop
     sid=runner.start(None,{'cloud_consent':True,'language':'en'},'Fail',consent_confirmed=True)['id']
     await wait_for(lambda:any(e['type']=='transcription_error' for e in events))
     assert runner.active_id==sid and not source.closed
+    assert not runner.cancel_processing.is_set(), 'Provider failure is not user cancellation'
     runner.stop(sid)
     await runner.task
+    assert store.get(sid)['status'] == 'failed'
+    assert store.get(sid)['failure']['stage'] == 'transcription'
     assert list(audio.frames(sid,'mic'))
     assert len(calls)<=2
     runner.cloud.connector=lambda *a,**kw:Socket()
@@ -301,9 +346,12 @@ def test_api_restores_speaker_labels_and_hides_credentials(tmp_path,require_sqlc
         with connection(client) as ws:
             ws.send_text(token)
             snapshot=ws.receive_json()
-            assert all(r['speaker_label'] for r in snapshot['segments'][sid])
-            assert 'Speaker ' in snapshot['notes'][sid]
-            assert secret not in json.dumps(snapshot)
+            assert snapshot['paged'] is True and 'segments' not in snapshot
+            ws.send_json({'action':'conversation_page','session_id':sid})
+            page=ws.receive_json()
+            assert all(r['speaker_label'] for r in page['segments'])
+            assert 'Speaker ' in page['notes']
+            assert secret not in json.dumps(snapshot)+json.dumps(page)
 
 
 def test_wrong_provider_configuration_is_rejected_before_key_dispatch(state):

@@ -22,15 +22,101 @@ struct Record: Identifiable {
 func objects(_ value: Any?) -> [Record] { (value as? [Object] ?? []).map { Record(raw: $0) } }
 func text(_ value: Any?) -> String { value as? String ?? "" }
 
+/// Consecutive speech turns use corrected speaker identity, never capture source.
+struct TranscriptTurn:Identifiable {
+    var rows:[Record]
+    var alignsRight = false
+    var id:String { "turn-" + (rows.first?.id ?? "") }
+    static func identity(_ row:Record)->String? {
+        for key in ["person_id","display_speaker_id","local_speaker_id"] {
+            let value = row.text(key)
+            if !value.isEmpty { return key + ":" + value }
+        }
+        return nil
+    }
+    static func isRight(_ row:Record,scope:String)->Bool {
+        if ["application","system"].contains(scope) { return row.text("stream") == "mic" }
+        return row.int("person_number") > 0 && row.int("person_number") % 2 == 1
+    }
+    static func grouped(_ rows:[Record],scope:String = "microphone")->[TranscriptTurn] {
+        var turns:[TranscriptTurn] = []
+        for row in rows {
+            if let last = turns.last?.rows.last, let speaker = identity(row),
+               speaker == identity(last), turns.last?.alignsRight == isRight(row,scope:scope), row.int("start_ms")-last.int("end_ms") <= 15_000 {
+                turns[turns.count-1].rows.append(row)
+            } else { turns.append(TranscriptTurn(rows:[row],alignsRight:isRight(row,scope:scope))) }
+        }
+        return turns
+    }
+}
+
+struct TranscriptFollowState:Equatable {
+    private(set) var following = true
+    private(set) var unread = false
+    private(set) var nearTop = false
+    mutating func navigate(latest: Bool, top: Bool = false) {
+        following = latest; unread = false; nearTop = top && !latest }
+    mutating func userScrolled(nearBottom: Bool, latestPage: Bool, nearTop: Bool) {
+        following = nearBottom && latestPage
+        self.nearTop = nearTop
+        if following { unread = false }
+    }
+    mutating func receivedSpeech() { if !following { unread = true } }
+}
+
+struct PreferencesSaveProgress {
+    var initialValues = ""
+    var initialDetection = true
+    private(set) var anySaved = false
+    mutating func accept(action:String,values:String,detection:Bool) {
+        if action == "save_settings" { initialValues = values; anySaved = true }
+        if action == "set_detection" { initialDetection = detection; anySaved = true }
+    }
+    func failure(uncertain:Bool) -> String {
+        let prefix = anySaved ? "Some changes are already saved. " : ""
+        return prefix + (uncertain ? "The remaining save status is uncertain. Reconnect and review settings before retrying." : "The remaining changes could not be saved. Review them and try again; Cancel discards only unsaved edits.")
+    }
+}
+
 @MainActor final class DesktopClient: ObservableObject {
     @Published var state = "Stopped"
-    @Published var message: String?
+    private var messageDismissTask:Task<Void,Never>?
+    private var messageGeneration = UUID()
+    @Published var message: String? {
+        didSet {
+            messageDismissTask?.cancel()
+            messageGeneration = UUID()
+            guard message != nil else { return }
+            let generation = messageGeneration
+            messageDismissTask = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds:5_000_000_000) } catch { return }
+                guard let self, self.messageGeneration == generation else { return }
+                self.message = nil
+            }
+        }
+    }
     @Published var sessions: [Record] = []
     @Published var selectedID: String?
-    @Published var detail: Object = [:]
+    @Published var detail: Object = [:] {
+        didSet {
+            rows = objects(detail["segments"])
+            let session = detail["session"] as? Object ?? [:]
+            let capture = session["capture"] as? Object ?? [:]
+            transcriptCaptureScope = text(capture["scope"])
+            transcriptTurns = TranscriptTurn.grouped(rows,scope:transcriptCaptureScope)
+        }
+    }
+    @Published var emailExport: Object = [:]
     @Published var pageSerial = 0
+    @Published var pageScrollToLatest = false
+    @Published var transcriptFollow = TranscriptFollowState()
+    private var scrollOnPageResponse = true
+    private var followsLatestPage = true
+    private var navigationPending = false
+    private var refreshAfterPage = false
     @Published var citationID: String?
     @Published var settings: Object = [:]
+    @Published var account: Object = [:]
     @Published var summaryProvider: Object = [:]
     @Published var transcription: Object = [:]
     @Published var discovery: Object = [:]
@@ -38,8 +124,27 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     @Published var people: [Record] = []
     @Published var nextPeopleOffset: Int?
     @Published var activeID: String?
+    @Published var recordingPaused = false
     @Published var processingID: String?
     @Published var processingLabel = "Transcribing saved audio…"
+    @Published var localModelStatus: Object = [:]
+    private var localCheckRequest: String?
+    var checkingLocalModel: Bool { ["checking","starting","pulling","loading"].contains(text(localModelStatus["state"])) }
+    var localModelMessage: String {
+        let status = text(localModelStatus["status"])
+        return status.isEmpty ? text(localModelStatus["message"]) : status
+    }
+    func checkOllama(model:String) {
+        let model = model.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !model.isEmpty else {
+            localModelStatus = ["state":"unavailable","status":"Enter a local audio model name first."]; return
+        }
+        localModelStatus = ["state":"checking","status":"Checking \(model)…"]
+        localCheckRequest = send(["action":"check_ollama","model":model])
+        if localCheckRequest == nil {
+            localModelStatus = ["state":"unavailable","status":message ?? "Reconnect and try again."]
+        }
+    }
     @Published var summaryID: String?
     @Published var partials: [String:String] = [:]
     @Published var streamingProgress: [String:Object] = [:]
@@ -75,9 +180,27 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
     var running: Bool { process?.isRunning == true }
     var busy: Bool { activeID != nil || processingID != nil || summaryID != nil }
     var accepted: Bool { agreement["accepted"] as? Bool == true }
+    func savedTranscriptionCommand(action:String,sessionID:String) -> Object? {
+        guard ["resume","reprocess"].contains(action) else { return nil }
+        var engine = text(settings["transcription_engine"])
+        if action == "resume", selectedID == sessionID {
+            let previous = text(detail["transcript_provider"])
+            if previous == "local-ollama" { engine = "ollama" }
+            else if previous == "deepgram" { engine = "deepgram" }
+        }
+        guard ["deepgram","ollama"].contains(engine) else { return nil }
+        return ["action":action,"session_id":sessionID,"model":engine,
+                "language":settings["language"] ?? "auto","language_hints":settings["language_hints"] ?? ["en","vi"]]
+    }
+    func resumeTranscription(_ sid:String) {
+        guard let command = savedTranscriptionCommand(action:"resume",sessionID:sid) else { message = "Choose a transcription engine in Preferences first."; return }
+        send(command)
+    }
     var selected: Record? { sessions.first { $0.id == selectedID } }
     var speakerRoster: [Record] { objects(detail["speakers"]) }
-    var rows: [Record] { objects(detail["segments"]) }
+    private(set) var rows:[Record] = []
+    private(set) var transcriptTurns:[TranscriptTurn] = []
+    private(set) var transcriptCaptureScope = ""
     var revision: Int { (detail["revision"] as? NSNumber)?.intValue ?? 0 }
     var offset: Int { (detail["offset"] as? NSNumber)?.intValue ?? 0 }
     var total: Int { (detail["total"] as? NSNumber)?.intValue ?? 0 }
@@ -200,6 +323,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
                 guard let self, generation == self.connection, !self.stopping, !Task.isCancelled else { return }
                 self.playback.close()
                 self.state = "Disconnected"; self.message = "Connection interrupted. Pending actions will be checked, never replayed."
+                if self.checkingLocalModel { self.localModelStatus = ["state":"unavailable","status":"Connection interrupted. Reopen Preferences and check Ollama again."] }
                 if self.reconnectAttempts < 3 && self.running {
                     self.reconnectAttempts += 1
                     try? await Task.sleep(nanoseconds:UInt64(self.reconnectAttempts)*1_000_000_000)
@@ -240,6 +364,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
                 catch {
                     if !isRead { self?.requests[id] = "unknown" }
                     self?.message = isRead ? "Could not load data. Reconnect and try again." : "Action delivery is uncertain. Reconnect to check status before trying again."
+                    if action == "check_ollama" { self?.localModelStatus = ["state":"unavailable","status":"The Ollama check could not be sent. Reconnect and try again."] }
                 }
             }
             return id
@@ -250,11 +375,13 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         switch kind {
         case "snapshot":
             state = "Connected"; message = nil; deadline?.cancel(); reconnectAttempts = 0
+            account = v["account"] as? Object ?? [:]
             if let location = v["database"] as? String { database = location }
             settings = v["settings"] as? Object ?? [:]; summaryProvider = v["summary_provider"] as? Object ?? [:]
             transcription = v["transcription"] as? Object ?? [:]; discovery = v["discovery"] as? Object ?? [:]
             agreement = v["agreement"] as? Object ?? [:]; sessions = objects(v["sessions"]); nextCursor = v["next_cursor"] as? [Any]
             activeID = v["active_id"] as? String; summaryID = v["summary_active_id"] as? String
+            recordingPaused = v["recording_paused"] as? Bool ?? false
             captureStopping = false; callStatus = nil; callEnding = false
             processingID = v["processing_id"] as? String
             partials = [:]; detail = [:]; streamingProgress = [:]
@@ -267,6 +394,12 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "receipt":
             let id = text(v["request_id"]), status = text(v["status"])
             if requests[id] != nil { requests[id] = status }
+            if id == localCheckRequest && ["rejected","unknown"].contains(status) && checkingLocalModel {
+                localModelStatus = ["state":"unavailable","status":"The Ollama check was not accepted. Wait for active work to finish and try again."]
+            }
+            if id == pageRequest && ["rejected","unknown"].contains(status) {
+                navigationPending = false; refreshAfterPage = false
+            }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
@@ -277,7 +410,28 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "meeting_page":
             guard text((v["session"] as? Object)?["id"]) == selectedID,
                 text(v["response_to"]) == pageRequest else { return }
-            detail = v; pageSerial += 1; upsert(v["session"] as? Object ?? [:])
+            // A response requested while following may arrive after the user
+            // scrolls up. Retain the visible page instead of replacing it.
+            let nextOffset = (v["offset"] as? NSNumber)?.intValue ?? 0
+            if !scrollOnPageResponse && !transcriptFollow.following && nextOffset != offset {
+                loadPage(offset,scroll:false)
+                return
+            }
+            let nextTotal = (v["total"] as? NSNumber)?.intValue ?? 0
+            if nextTotal > total { transcriptFollow.receivedSpeech() }
+            navigationPending = false
+            detail = v
+            if scrollOnPageResponse { pageSerial += 1 }
+            upsert(v["session"] as? Object ?? [:])
+            if refreshAfterPage { refreshAfterPage = false; reloadSoon() }
+        case "account_state": account = v
+        case "account_authorize":
+            guard let url = URL(string:text(v["url"])), url.scheme == "https",
+                  url.host == "accounts.google.com", url.path == "/o/oauth2/v2/auth",
+                  url.user == nil, url.password == nil, url.port == nil, url.fragment == nil else {
+                message = "Google sign-in link was invalid."; return
+            }
+            NSWorkspace.shared.open(url)
         case "settings":
             settings = v["settings"] as? Object ?? [:]; summaryProvider = v["summary_provider"] as? Object ?? [:]
             transcription = v["transcription"] as? Object ?? [:]; message = "Settings saved securely. New work will use these settings."
@@ -290,8 +444,11 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             let status = text(row["status"]), sid = text(row["id"])
             let wasRecording = activeID == sid
             if ["preparing","recording","stopping"].contains(status) { stopAudio(); activeID = sid; captureStopping = status == "stopping"; if selectedID != sid { select(sid) } }
-            else if activeID == sid { activeID = nil; partials = [:]; callEnding = false; callStatus = nil; captureStopping = false }
-            if status == "processing" { processingID = sid; processingLabel = wasRecording ? "Finishing live transcription…" : "Transcribing saved audio…" }
+            else if activeID == sid { activeID = nil; recordingPaused = false; partials = [:]; callEnding = false; callStatus = nil; captureStopping = false }
+            if status == "processing" {
+                processingID = sid
+                processingLabel = wasRecording && (settings["transcription_engine"] as? String) != "ollama" ? "Finishing live transcription…" : "Transcribing saved audio…"
+            }
             else if processingID == sid { processingID = nil }
             reloadSoon()
         case "transcription_progress":
@@ -301,6 +458,14 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             }
             if text(v["mode"]) == "batch_upload" { processingLabel = "Uploading saved audio…" }
             else if text(v["mode"]) == "batch_wait" { processingLabel = "Waiting for transcription…" }
+            if text(v["mode"]) == "preparing_ollama" { processingLabel = "Preparing the local model…" }
+            if text(v["mode"]) == "speaker_diarization" { processingLabel = "Recognizing speakers…" }
+        case "local_model_status":
+            localModelStatus = v
+        case "calendar_link":
+            if text(v["session_id"]) == selectedID { detail["calendar_event"] = v["event"] ?? NSNull() }
+        case "speaker_warning":
+            message = text(v["message"])
         case "session_deleted":
             let sid = text(v["session_id"])
             let index = sessions.firstIndex { $0.id == sid } ?? 0
@@ -312,17 +477,26 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         case "conversation_renamed":
             upsert(v["session"] as? Object ?? [:]); reloadSoon()
         case "partial":
-            if text(v["session_id"]) == selectedID { partials[text(v["stream"])] = text((v["segment"] as? Object)?["text"]) }
+            if text(v["session_id"]) == selectedID {
+                let stream = text(v["stream"]), value = text((v["segment"] as? Object)?["text"])
+                if !value.isEmpty && partials[stream] != value { transcriptFollow.receivedSpeech() }
+                partials[stream] = value
+            }
         case "segment":
-            if text(v["session_id"]) == selectedID { partials[text((v["segment"] as? Object)?["stream"])] = nil; reloadSoon() }
+            if text(v["session_id"]) == selectedID {
+                transcriptFollow.receivedSpeech()
+                partials[text((v["segment"] as? Object)?["stream"])] = nil; reloadSoon()
+            }
         case "transcript_replaced":
             if text(v["session_id"]) == selectedID { detail = [:]; partials = [:]; reloadSoon() }
         case "transcription_warning": message = text(v["message"])
         case "transcription_stage":
             if text(v["stage"]) == "finalizing" { processingLabel = "Refining the saved transcript…" }
+            else if text(v["stage"]) == "local_cleanup" { processingLabel = "Cleaning up" }
         case "summary_started": summaryID = v["session_id"] as? String
         case "summary_ready", "summary_error": summaryID = nil; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
         case "markdown_export": saveExport(text(v["content"]))
+        case "email_export": emailExport = v
         case "audio_info", "audio_window": playback.receive(v)
         case "audio_playback":
             guard text(v["session_id"]) == selectedID,
@@ -342,6 +516,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             }
         case "recording_state":
             activeID = v["active_id"] as? String; processingID = v["processing_id"] as? String
+            recordingPaused = v["paused"] as? Bool ?? false
             captureStopping = v["stopping"] as? Bool ?? false
             callEnding = false; callStatus = nil
             if activeID == nil { partials = [:] }
@@ -349,7 +524,10 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             if kind == "transcription_error" { streamingProgress = [:] }
             message = text(v["message"]); reloadSoon()
         case "reconnect_required": reconnect()
-        case "invalidate": detail = [:]; partials = [:]; reloadSoon(); send(["action":"people_page"])
+        case "invalidate":
+            guard text(v["session_id"]).isEmpty || text(v["session_id"]) == selectedID else { return }
+            detail = [:]; partials = [:]; navigationPending = false
+            loadPage(-1); send(["action":"people_page"])
         default: if ["audio_state","notes","rolling_notes","recovery_complete","speakers_corrected"].contains(kind) { reloadSoon() }
         }
     }
@@ -369,20 +547,46 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         else { sessions.insert(row,at:0) }
     }
     func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1) }
-    func loadPage(_ offset: Int, anchor: String? = nil) {
+    func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }
+        if !scroll && navigationPending { refreshAfterPage = true; return }
+        if scroll {
+            refreshTask?.cancel(); refreshTask = nil; refreshAfterPage = false
+            transcriptFollow.navigate(latest:offset == -1 && anchor == nil,
+                top:offset == 0 && anchor == nil)
+        }
         var command: Object = ["action":"meeting_page","session_id":selectedID,"offset":offset]
         if revision > 0 { command["revision"] = revision }
         if let anchor { command["anchor"] = anchor }
-        citationID = anchor
+        if scroll {
+            citationID = anchor
+            followsLatestPage = offset == -1
+            pageScrollToLatest = offset == -1 && anchor == nil
+        }
+        scrollOnPageResponse = scroll
         pageRequest = send(command)
+        navigationPending = scroll && pageRequest != nil
+    }
+    var transcriptRefreshOffset: Int {
+        followsLatestPage && transcriptFollow.following ? -1 : offset
+    }
+    func transcriptUserScrolled(nearBottom: Bool, nearTop: Bool = false) {
+        // Reaching the bottom of an older page is not the latest conversation.
+        let latest = offset + 100 >= total
+        var next = transcriptFollow
+        next.userScrolled(nearBottom:nearBottom,latestPage:latest,nearTop:nearTop)
+        if next != transcriptFollow { transcriptFollow = next }
+        if next.following {
+            if !followsLatestPage { followsLatestPage = true }
+            if citationID != nil { citationID = nil }
+        }
     }
     private func reloadSoon() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds:300_000_000)
             guard let self, !Task.isCancelled else { return }; self.refreshTask = nil
-            self.loadPage(self.activeID == self.selectedID ? -1 : self.offset)
+            self.loadPage(self.transcriptRefreshOffset, scroll:false)
         }
     }
     func acknowledgeUncertainActions() {
@@ -406,6 +610,10 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         }
     }
     func stopRecording() { send(["action":"stop_recording"]) }
+    func toggleRecordingPause() {
+        guard let activeID else { return }
+        send(["action":"set_recording_paused","session_id":activeID,"paused":!recordingPaused])
+    }
     var transcriptionLanguageLabel: String {
         let names = settings["supported_language_hints"] as? [String:String] ?? ["en":"English","vi":"Tiếng Việt"]
         let codes = settings["language_hints"] as? [String] ?? ["en","vi"]
@@ -424,7 +632,8 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
             command = ["action":"record","request_id":1,"scope":scope,"title":"Meeting conversation"]
             if let app, scope == "application" { command["app_id"] = app }
         }
-        command["microphone_id"] = microphone; command["model"] = "deepgram"
+        command["microphone_id"] = microphone
+        command["model"] = (settings["transcription_engine"] as? String) ?? "deepgram"
         command["language"] = settings["language"] ?? "auto"; command["duration_s"] = settings["duration_s"] ?? 3600
         command["language_hints"] = settings["language_hints"] ?? ["en","vi"]
         command["consent_confirmed"] = true; return send(command)
@@ -467,6 +676,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
         try? output?.fileHandleForReading.close(); try? diagnostics?.fileHandleForReading.close(); try? input?.fileHandleForWriting.close()
         input = nil; output = nil; diagnostics = nil; process = nil; state = "Stopped"; stopping = false
         activeID = nil; processingID = nil; summaryID = nil; streamingProgress = [:]
+        recordingPaused = false
         let callback = completion; completion = nil; callback?()
     }
 }
@@ -474,6 +684,7 @@ func text(_ value: Any?) -> String { value as? String ?? "" }
 #if DESKTOP_AUDIT_TESTS
 // Test-only access to the real reducer and send guards, without launching the core.
 extension DesktopClient {
+    var auditPageRequest: String? { pageRequest }
     func auditConnect(_ socket: URLSessionWebSocketTask) { self.socket = socket; state = "Connected" }
     func auditReceive(_ value: Object) { receive(value) }
 }

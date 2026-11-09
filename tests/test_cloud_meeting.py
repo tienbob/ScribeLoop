@@ -6,6 +6,7 @@ import threading
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.cloud_meeting import (
     Budget,
@@ -33,7 +34,7 @@ def state(tmp_path):
 
 
 async def wait_for(predicate):
-    async with asyncio.timeout(4):
+    async with timeout(4):
         while not predicate():
             await asyncio.sleep(.01)
 
@@ -155,7 +156,7 @@ def test_budget_is_durable_before_dispatch_and_cap_prevents_more_requests(state)
 
 @pytest.mark.asyncio
 async def test_failed_usage_commit_cancels_before_any_audio_upload(state,monkeypatch):
-    store,audio,_,publish = state
+    store,audio,events,publish = state
     source=ControlledSource()
     calls=[]
     def request(*a,**kw):
@@ -167,10 +168,12 @@ async def test_failed_usage_commit_cancels_before_any_audio_upload(state,monkeyp
     runner=CloudRecordingRunner(store,audio,lambda *a,**kw:source,publish,
         config=GroqConfig(api_key='test-key',request=request))
     sid=runner.start(None,{'cloud_consent':True,'language':'vi'},'Ledger fault',consent_confirmed=True)['id']
-    await wait_for(runner.cancel_processing.is_set)
+    await wait_for(lambda:any(e['type']=='transcription_error' for e in events))
+    assert not runner.cancel_processing.is_set()
     runner.stop(sid)
     await asyncio.wait_for(runner.task,3)
     assert not calls and source.closed
+    assert store.get(sid)['status']=='failed'
 
 
 @pytest.mark.asyncio

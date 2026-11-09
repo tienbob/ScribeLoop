@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.recording import RecordingRunner
 from scribeloop_core.storage.audio import MAGIC, SessionAudioStore
@@ -60,7 +61,7 @@ def setup(tmp_path):
 
 
 async def wait_for(predicate):
-    async with asyncio.timeout(3):
+    async with timeout(3):
         while not predicate():
             await asyncio.sleep(.01)
 
@@ -326,7 +327,7 @@ async def test_five_minute_encrypted_tracks_preserve_offset_and_samples(setup):
                 count += frame.pcm.size
             assert count == 300 * 16000
     runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish,
-                             transcriber=verify)
+                             transcriber=verify, queue_size=4096)
     session = runner.start(None, {}, 'Generated five minutes', consent_confirmed=True)
     await asyncio.wait_for(runner.task, 15)
     assert store.get(session['id'])['status'] == 'completed'

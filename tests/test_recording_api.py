@@ -85,7 +85,10 @@ def test_encrypted_recording_consent_exclusivity_stop_and_notes(tmp_path):
     with TestClient(app, base_url='http://127.0.0.1') as client, connection(client) as ws:
         ws.send_text(token)
         snapshot = ws.receive_json()
-        assert 'Test call words' in snapshot['notes'][session['id']]
+        assert snapshot['paged'] is True and 'notes' not in snapshot
+        ws.send_json({'action':'conversation_page','session_id':session['id']})
+        page = ws.receive_json()
+        assert 'Test call words' in page['notes']
         assert snapshot['active_id'] is None
         assert snapshot['sessions'][0]['capture']['name']=='Brave'
         assert snapshot['sessions'][0]['capture']['scope']=='application'
@@ -113,7 +116,8 @@ def test_saved_recovery_resume_delete_and_retention_require_auth_and_confirmatio
     with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
         ws.send_text(token)
         snapshot = ws.receive_json()
-        assert snapshot['checkpoints'] == {} and snapshot['speaker_turns'] == {}
+        assert snapshot['paged'] is True
+        assert 'checkpoints' not in snapshot and 'speaker_turns' not in snapshot
         def prepare():
             store, audio = app.state.store, app.state.recording.audio
             sid = store.create_recording('Interrupted',{})['id']

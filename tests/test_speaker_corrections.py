@@ -105,5 +105,8 @@ def test_api_corrections_and_reconnect(saved,tmp_path):
         with client.websocket_connect('ws://127.0.0.1/ws',headers={'origin':'http://127.0.0.1'}) as ws:
             ws.send_text(token)
             snapshot = ws.receive_json()
-            assert snapshot['segments'][sid][0]['speaker_label'] == '<script>Alex</script>'
-            assert '<script>Alex</script>' in snapshot['notes'][sid]
+            assert snapshot['paged'] is True and 'segments' not in snapshot
+            ws.send_json({'action':'conversation_page','session_id':sid})
+            page = ws.receive_json()
+            assert page['segments'][0]['speaker_label'] == '<script>Alex</script>'
+            assert '<script>Alex</script>' in page['notes']

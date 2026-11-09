@@ -301,10 +301,17 @@ def test_desktop_streams_before_stop_no_replay_and_finishes_notes(tmp_path,requi
             assert receipt['status']=='rejected'
             receive(ws,'error')
             assert contract.settings.value.language=='en'
+            ws.send_json(envelope({'action':'set_recording_paused','session_id':sid,'paused':True}))
+            assert receive(ws,'recording_state')['paused']
         # Reconnecting does not stop or restart an owned active recording.
         with client.websocket_connect('ws://127.0.0.1/ws') as ws:
             ws.send_text(token)
-            assert receive(ws,'snapshot')['active_id']==sid and len(sources)==1
+            snapshot = receive(ws,'snapshot')
+            assert snapshot['active_id']==sid and len(sources)==1 and snapshot['recording_paused']
+            ws.send_json(envelope({'action':'set_recording_paused','session_id':sid,'paused':False}))
+            assert not receive(ws,'recording_state')['paused']
+            ws.send_json(envelope({'action':'set_recording_paused','session_id':sid,'paused':True}))
+            assert receive(ws,'recording_state')['paused']
             ws.send_json(envelope({'action':'stop_recording'}))
             completed=None
             for _ in range(100):
@@ -355,6 +362,97 @@ def test_provider_presets_select_endpoints_and_do_not_reuse_keys():
     assert settings.value.public()['summary_presets']==SUMMARY_PRESETS
 
 
+def test_provider_switch_restores_each_provider_saved_key():
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_key':'openai-secret'})
+    # Gemini has no saved key yet: switching must not reuse the OpenAI key.
+    settings.save({'summary_provider':'Gemini','summary_model':'example-gemini-model'})
+    assert not settings.value.summary_key
+    settings.save({'summary_key':'gemini-secret'})
+    # Switching back and forth restores each provider's own key: no re-entry.
+    settings.save({'summary_provider':'OpenAI','summary_model':'gpt-5.4-mini'})
+    assert settings.value.summary_key=='openai-secret'
+    assert settings.value.summary().configured
+    settings.save({'summary_provider':'Gemini','summary_model':'example-gemini-model'})
+    assert settings.value.summary_key=='gemini-secret'
+    assert settings.value.summary_keys=={'OpenAI':'openai-secret','Gemini':'gemini-secret'}
+
+
+def test_saved_provider_keys_are_private_and_survive_reopen():
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_key':'openai-secret'})
+    settings.save({'summary_provider':'Gemini','summary_key':'gemini-secret',
+                   'summary_model':'example-gemini-model'})
+    public=settings.value.public()
+    assert 'summary_keys' not in public and 'summary_key' not in public
+    assert 'openai-secret' not in str(public) and 'gemini-secret' not in str(public)
+    assert public['summary_key_previews']=={'OpenAI':'open********','Gemini':'gemi********'}
+    assert public['summary_key_preview']=='gemi********'
+    reopened=DesktopSettings(settings.backend).value
+    assert reopened.summary_keys=={'OpenAI':'openai-secret','Gemini':'gemini-secret'}
+    assert reopened.summary_key=='gemini-secret'
+
+
+def test_cleanup_provider_key_and_model_are_remembered_per_provider():
+    settings=DesktopSettings(Vault())
+    settings.save({'local_cleanup_provider':'OpenAI','local_cleanup_model':'gpt-5.4-mini',
+                   'local_cleanup_key':'cleanup-secret'})
+    assert settings.value.local_cleanup_keys=={'OpenAI':'cleanup-secret'}
+    assert settings.value.local_cleanup_models=={'OpenAI':'gpt-5.4-mini'}
+    assert settings.value.cleanup().cloud is True
+    # A provider with no saved values starts blank instead of reusing another
+    # provider's key or model; switching back restores the saved ones.
+    settings.save({'local_cleanup_provider':'Ollama','local_cleanup_model':'text-model'})
+    assert settings.value.local_cleanup_key==''
+    assert settings.value.local_cleanup_models=={'OpenAI':'gpt-5.4-mini','Ollama':'text-model'}
+    settings.save({'local_cleanup_provider':'OpenAI'})
+    assert settings.value.local_cleanup_key=='cleanup-secret'
+    assert settings.value.local_cleanup_model=='gpt-5.4-mini'
+    public=settings.value.public()
+    assert 'local_cleanup_key' not in public and 'local_cleanup_keys' not in public
+    assert 'cleanup-secret' not in str(public)
+    assert public['local_cleanup_key_previews']=={'OpenAI':'clea********'}
+    assert public['local_cleanup_models']=={'OpenAI':'gpt-5.4-mini','Ollama':'text-model'}
+
+
+def test_notes_model_is_remembered_per_provider():
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_key':'openai-secret','summary_model':'gpt-5.4-mini'})
+    assert settings.value.summary_models=={'OpenAI':'gpt-5.4-mini'}
+    # Switching to Gemini with a new model remembers it under Gemini; the
+    # OpenAI entry survives for the switch back.
+    settings.save({'summary_provider':'Gemini','summary_model':'example-gemini-model'})
+    assert settings.value.summary_models=={'OpenAI':'gpt-5.4-mini','Gemini':'example-gemini-model'}
+    # A provider switch without an explicit model restores the saved one.
+    settings.save({'summary_provider':'OpenAI','summary_key':'new-openai-secret'})
+    assert settings.value.summary_model=='gpt-5.4-mini'
+    settings.save({'summary_provider':'Gemini'})
+    assert settings.value.summary_model=='example-gemini-model'
+    # A provider with no saved model carries the previous model over on a
+    # backend switch; the UI always sends an explicit model, so this only
+    # affects API callers.
+    settings.save({'summary_provider':'LM Studio'})
+    assert settings.value.summary_model=='example-gemini-model'
+    assert settings.value.summary_models=={'OpenAI':'gpt-5.4-mini',
+        'Gemini':'example-gemini-model','LM Studio':'example-gemini-model'}
+    assert settings.value.public()['summary_models']=={'OpenAI':'gpt-5.4-mini',
+        'Gemini':'example-gemini-model','LM Studio':'example-gemini-model'}
+
+
+def test_legacy_single_key_settings_migrate_to_provider_keys():
+    import json
+
+    from scribeloop_core.api.desktop_settings import ACCOUNT, SERVICE
+    backend=Vault()
+    backend.set_password(SERVICE,ACCOUNT,json.dumps({'summary_provider':'OpenAI',
+        'summary_key':'legacy-secret','summary_model':'gpt-5.4-mini'}))
+    settings=DesktopSettings(backend)
+    assert settings.value.summary_keys=={'OpenAI':'legacy-secret'}
+    assert settings.value.summary_models=={'OpenAI':'gpt-5.4-mini'}
+    assert settings.value.summary_key=='legacy-secret'
+    assert settings.value.summary().configured
+
+
 def test_customer_transcription_key_persists_without_secret_echo(monkeypatch):
     import json
     monkeypatch.setenv('DEEPGRAM_API_KEY','environment-must-not-win')
@@ -389,3 +487,31 @@ def test_summary_instructions_roundtrip_clear_and_unicode_bounds():
     with pytest.raises(ValueError): settings.save({'summary_instructions':'x'*2001})
     settings.save({'summary_instructions':''})
     assert settings.value.summary().instructions==''
+
+
+def test_cleanup_keeps_inherited_provider_key_and_model_when_notes_switch():
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_provider':'Gemini','summary_model':'gemini-test',
+                   'summary_key':'gemini-secret','local_cleanup_provider':'Gemini'})
+    assert settings.value.cleanup()._api_key=='gemini-secret'
+    assert settings.value.cleanup().model=='gemini-test'
+    settings.save({'summary_provider':'Ollama','summary_model':'local-notes'})
+    assert settings.value.cleanup()._api_key=='gemini-secret'
+    assert settings.value.cleanup().model=='gemini-test'
+    reopened=DesktopSettings(settings.backend)
+    assert reopened.value.cleanup()._api_key=='gemini-secret'
+    assert reopened.value.cleanup().model=='gemini-test'
+    settings.save({'local_cleanup_key':'dedicated-cleanup-secret'})
+    assert settings.value.cleanup()._api_key=='dedicated-cleanup-secret'
+    assert settings.value.summary_keys['Gemini']=='gemini-secret'
+
+
+def test_cleanup_never_inherits_notes_key_for_another_endpoint():
+    settings=DesktopSettings(Vault())
+    settings.save({'summary_provider':'Gemini','summary_model':'gemini-test',
+                   'summary_key':'gemini-secret','local_cleanup_provider':'Gemini',
+                   'local_cleanup_model':'cleanup-model',
+                   'local_cleanup_endpoint':'https://other.example/v1'})
+    assert settings.value.cleanup() is None
+    settings.save({'summary_provider':'Ollama','summary_model':'local-notes'})
+    assert settings.value.cleanup() is None

@@ -3,6 +3,7 @@
 import re
 
 CAPTURE_ERRORS = {
+    'Default microphone recovery timed out': ('microphone_recovery_timeout','The system default microphone was unavailable or could not restart within five seconds. Reconnect an input device and start a new recording.'),
     'Meeting output stopped': ('capture_output_stopped','Meeting audio stopped unexpectedly while the selected source was still present or its status was unknown.'),
     'Invalid PCM frame or recorder timestamp': ('capture_invalid_frame','The recorder rejected an invalid audio frame or timestamp.'),
     'Microphone access is not authorized': ('microphone_permission','Microphone permission is not authorized for the app launching ScribeLoop. Enable it in macOS Microphone settings, then restart that app.'),

@@ -36,6 +36,7 @@ from .languages import (
 from .transcription_quality import TranscriptionQuality, recognition_audio
 
 STREAMS = ('loopback', 'mic')
+KEEPALIVE_INTERVAL_S = 3
 log = logging.getLogger(__name__)
 
 
@@ -280,6 +281,7 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
             provisional_end = None
             refresh = 0
             progress_refresh = 0
+            last_write = time.monotonic()
             while not cancelled.is_set():
                 if closing is None and time.monotonic() >= refresh:
                     finished = done.is_set()
@@ -300,6 +302,7 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
                     if end > sent:
                         pcm = pcm_window(frames,sent,end)
                         writes.send(np.clip(pcm*32767,-32768,32767).astype('<i2').tobytes())
+                        last_write = time.monotonic()
                         sent = end
                         frames[:]=[f for f in frames if sample_position(f)+f.pcm.size>sent*16]
                     if sent >= reserved_until and available > sent:
@@ -308,6 +311,9 @@ def _stream_cursor(cursor, sid, stream, emit, cancelled, done, *, config, budget
                     if finished and report['complete'] and sent >= available:
                         writes.send(json.dumps({'type':'CloseStream'}))
                         closing = time.monotonic()
+                    if closing is None and time.monotonic()-last_write >= KEEPALIVE_INTERVAL_S:
+                        writes.send(json.dumps({'type':'KeepAlive'}))
+                        last_write = time.monotonic()
                     if closing is None and (not report['caught_up'] or available>sent):
                         refresh = 0  # Catch up promptly; recv below still gets a turn.
                     if time.monotonic() >= progress_refresh:
@@ -412,14 +418,31 @@ def run_streaming(audio,sid,emit,cancelled,done, *, config,budget,language='auto
 
 class DeepgramRecordingRunner(CloudRecordingRunner):
     supported_languages = LANGUAGE_CHOICES
-    def __init__(self,*args,config=None,**kwargs):
+    def __init__(self,*args,config=None,cleanup_provider=None,**kwargs):
         config = config or DeepgramConfig()
         if not isinstance(config,DeepgramConfig):
             raise TypeError('The streaming app requires a Deepgram configuration')
         super().__init__(*args,config=config,**kwargs)
+        # Optional local transcript cleanup after Stop; independent of the
+        # transcription engine and of the notes provider.
+        self.cleanup_provider = cleanup_provider
         self.budget = StreamingBudget(config,{})
         self.language_hints = None
         self.quality = config.quality
+
+    async def _finish(self, session_id):
+        provider = self.cleanup_provider
+        if provider is not None and provider.configured and not self.closed \
+                and not self.cancel_processing.is_set() and self.store.segments(session_id):
+            from ..llm.transcript_cleanup import apply_cleanup
+            revisions = self.store.revisions(session_id)
+            asr_model = (revisions[0].get('model') if revisions else None) or 'nova-3'
+            # Cleanup is a presentation edit of the Deepgram transcript; keeping
+            # Deepgram provenance lets the session resume and reprocess later.
+            await apply_cleanup(self.store,session_id,provider,asr_model=asr_model,
+                provenance_provider='deepgram',publish=self.publish,
+                cancelled=self.cancel_processing)
+        await super()._finish(session_id)
 
     def _authorize(self,confirmed):
         if confirmed is not True:

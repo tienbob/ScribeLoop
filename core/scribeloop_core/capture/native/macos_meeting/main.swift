@@ -166,6 +166,12 @@ final class Resampler {
         }
     }
 
+    func needsRestart(format: AVAudioFormat, timestamp: UInt64) -> Bool {
+        guard let origin else { return input != format }
+        let expected = origin + UInt64(Double(inputSamples) * 1_000_000_000 / input.sampleRate)
+        return input != format || abs(Int64(timestamp)-Int64(expected)) > 2_000_000
+    }
+
     func send(_ pcm: AVAudioPCMBuffer, writer: PacketWriter, stream: UInt8) {
         if pcm.frameLength == 0 { return }
         writer.audio(pcm, stream: stream, timestamp: origin! + outputSamples * 1_000_000_000 / 16000)
@@ -278,16 +284,51 @@ final class StopRequest: @unchecked Sendable {
     }
 }
 
-final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
+final class MicrophoneRecoveryFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = false
+    private var configuring = false
+    func request() { lock.lock(); defer { lock.unlock() }; if !configuring { pending = true } }
+    func take() -> Bool { lock.lock(); defer { lock.unlock() }; let value = pending; pending = false; return value }
+    func configure(_ value: Bool) { lock.lock(); configuring = value; lock.unlock() }
+}
+
+struct DefaultMicrophoneRoute {
+    var currentID: String
+    var recoveringSince: TimeInterval?
+    mutating func needsRecovery(candidateID: String?, connected: Bool, running: Bool,
+                                interrupted: Bool, now: TimeInterval) -> Bool {
+        let needed = recoveringSince != nil || candidateID != currentID || !connected || !running || interrupted
+        if needed && recoveringSince == nil { recoveringSince = now }
+        return needed
+    }
+    func expired(at now: TimeInterval) -> Bool { recoveringSince.map { now-$0 >= 5 } ?? false }
+    mutating func recovered(_ id: String) { currentID = id; recoveringSince = nil }
+}
+
+// Converter state is confined to the shared delegate queue; cross-queue stop
+// signals use StopRequest's lock. Input replacement drains that queue first.
+final class CaptureOutput: NSObject, @unchecked Sendable, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let writer: PacketWriter
     let micSession: AVCaptureSession
     let stop: StopRequest
     var converters: [UInt8: Resampler] = [:]
+    let followsDefaultMicrophone: Bool
+    private var microphoneEnd: UInt64 = 0
 
-    init(writer: PacketWriter, micSession: AVCaptureSession, stop: StopRequest) {
+    init(writer: PacketWriter, micSession: AVCaptureSession, stop: StopRequest, followsDefaultMicrophone: Bool = false) {
         self.writer = writer
         self.micSession = micSession
         self.stop = stop
+        self.followsDefaultMicrophone = followsDefaultMicrophone
+    }
+
+    // Called only on the shared delegate queue, after detaching the mic delegate.
+    func resetMicrophone() {
+        if let converter = converters.removeValue(forKey: 1) {
+            converter.finish(writer: writer, stream: 1)
+            microphoneEnd = max(microphoneEnd, (converter.origin ?? 0) + converter.outputSamples * 1_000_000_000 / 16000)
+        }
     }
 
     func emit(_ sample: CMSampleBuffer, stream: UInt8, clock: CMClock?) {
@@ -311,11 +352,19 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, AVCapture
             frameCount: Int32(frames), into: pcm.mutableAudioBufferList) == noErr else {
             fail("Cannot copy native PCM buffer")
         }
-        let converter = converters[stream] ?? Resampler(format)
-        converters[stream] = converter
         let host = CMSyncConvertTime(sample.presentationTimeStamp, from: clock,
                                      to: CMClockGetHostTimeClock())
-        converter.push(pcm, timestamp: hostNS(host), writer: writer, stream: stream)
+        let timestamp = hostNS(host)
+        if stream == 1 && followsDefaultMicrophone {
+            if let prior = converters[1], prior.needsRestart(format: format, timestamp: timestamp) {
+                resetMicrophone()
+            }
+            // Reject a stale callback from the previous input, never overlap tracks.
+            if timestamp < microphoneEnd { return }
+        }
+        let converter = converters[stream] ?? Resampler(format)
+        converters[stream] = converter
+        converter.push(pcm, timestamp: timestamp, writer: writer, stream: stream)
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sample: CMSampleBuffer,
@@ -337,8 +386,81 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate, AVCapture
 
 @main
 struct MeetingCapture {
+    static func switchSelfTest() {
+        // Generated buffers only. Creating the session does not open a device.
+        let writer = PacketWriter(nonblocking: false)
+        let output = CaptureOutput(writer: writer, micSession: AVCaptureSession(),
+                                   stop: StopRequest(), followsDefaultMicrophone: true)
+        let base = hostNS(CMClockGetTime(CMClockGetHostTimeClock())) + 100_000_000
+        func send(_ rate: Double, channels: AVAudioChannelCount, track: UInt8, timestamp: UInt64) {
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate,
+                                      channels: channels, interleaved: false)!
+            let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(rate))!
+            pcm.frameLength = AVAudioFrameCount(rate)
+            for channel in 0..<Int(channels) {
+                for sample in 0..<Int(rate) { pcm.floatChannelData![channel][sample] = 0.02 }
+            }
+            let converter = Resampler(format)
+            output.converters[track] = converter
+            converter.push(pcm, timestamp: timestamp, writer: writer, stream: track)
+        }
+        send(48000, channels: 2, track: 0, timestamp: base)
+        send(48000, channels: 1, track: 1, timestamp: base)
+        output.resetMicrophone()
+        send(44100, channels: 2, track: 1, timestamp: base + 1_200_000_000)
+        for (track, converter) in output.converters { converter.finish(writer: writer, stream: track) }
+        writer.finish()
+    }
+
+    static func routeSelfTest() {
+        var route = DefaultMicrophoneRoute(currentID: "built-in")
+        precondition(!route.needsRecovery(candidateID: "built-in", connected: true, running: true, interrupted: false, now: 0))
+        precondition(route.needsRecovery(candidateID: "headset", connected: true, running: true, interrupted: false, now: 1))
+        precondition(!route.expired(at: 5.9))
+        route.recovered("headset")
+        precondition(!route.needsRecovery(candidateID: "headset", connected: true, running: true, interrupted: false, now: 6))
+        precondition(route.needsRecovery(candidateID: nil, connected: false, running: false, interrupted: false, now: 7))
+        precondition(route.expired(at: 12))
+        route.recovered("built-in")
+        precondition(route.needsRecovery(candidateID: "built-in", connected: true, running: true, interrupted: true, now: 13))
+        let flag = MicrophoneRecoveryFlag()
+        flag.request(); precondition(flag.take()); precondition(!flag.take())
+        flag.configure(true); flag.request(); precondition(!flag.take()); flag.configure(false)
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+        let changed = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: false)!
+        let converter = Resampler(format)
+        converter.origin = 1_000_000_000; converter.inputSamples = 480
+        precondition(!converter.needsRestart(format: format, timestamp: 1_010_000_000))
+        precondition(converter.needsRestart(format: changed, timestamp: 1_010_000_000))
+        precondition(converter.needsRestart(format: format, timestamp: 1_100_000_000))
+        print("Microphone route regressions passed: default switch, disconnect, recovery deadline, interruption, format and clock epochs")
+    }
+    static func switchMicrophone(_ device: AVCaptureDevice, session: AVCaptureSession,
+                                 audio: AVCaptureAudioDataOutput, output: CaptureOutput,
+                                 queue: DispatchQueue, stop: StopRequest,
+                                 recovery: MicrophoneRecoveryFlag) -> Bool {
+        guard !stop.requested(), device.isConnected,
+              let input = try? AVCaptureDeviceInput(device: device) else { return false }
+        recovery.configure(true)
+        defer { recovery.configure(false) }
+        audio.setSampleBufferDelegate(nil, queue: nil)
+        queue.sync { output.resetMicrophone() }
+        let oldInputs = session.inputs
+        session.beginConfiguration()
+        for prior in oldInputs { session.removeInput(prior) }
+        let canAttach = session.canAddInput(input)
+        if canAttach { session.addInput(input) }
+        else { for prior in oldInputs where session.canAddInput(prior) { session.addInput(prior) } }
+        session.commitConfiguration()
+        audio.setSampleBufferDelegate(output, queue: queue)
+        if !stop.requested() && !session.isRunning { session.startRunning() }
+        return canAttach && session.isRunning && device.isConnected
+    }
+
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
+        if args == ["--microphone-route-self-test"] { routeSelfTest(); return }
+        if args == ["--self-test-microphone-switch"] { switchSelfTest(); return }
         if args == ["--version"] { print("scribeloop-meeting 1; SLC2/SLP2; host ns; 16000 Hz mono Float32LE"); return }
         if args == ["--check-capture-access"] {
             // Read-only permission/source check: no SCStream, AVCaptureSession,
@@ -430,7 +552,7 @@ struct MeetingCapture {
         // Enumeration/selection never requests access. First-run permission UX is M4.
         guard permission() == "authorized" else { fail("Microphone access is not authorized; recording was not started") }
         let devices = microphones()
-        guard let device = microphone == "default" ? AVCaptureDevice.default(for: .audio) :
+        guard var device = microphone == "default" ? AVCaptureDevice.default(for: .audio) :
                 devices.first(where: { $0.uniqueID == microphone }) else { fail("Selected microphone is unavailable") }
         var captureStage = "microphone_setup"
         do {
@@ -444,7 +566,10 @@ struct MeetingCapture {
             session.commitConfiguration()
             let writer = PacketWriter()
             let stop = StopRequest()
-            let output = CaptureOutput(writer: writer, micSession: session, stop: stop)
+            let followsDefault = microphone == "default"
+            let recovery = MicrophoneRecoveryFlag()
+            let output = CaptureOutput(writer: writer, micSession: session, stop: stop,
+                                       followsDefaultMicrophone: followsDefault)
             let queue = DispatchQueue(label: "scribeloop.meeting-audio")
             DispatchQueue.global().async {
                 var command = Data()
@@ -458,9 +583,17 @@ struct MeetingCapture {
             }
             audio.setSampleBufferDelegate(output, queue: queue)
             let runtime = NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
-                object: session, queue: nil) { _ in fail("Microphone capture failed; restart the source") }
+                object: session, queue: nil) { _ in
+                    guard !stop.requested() else { return }
+                    if followsDefault { recovery.request() }
+                    else { fail("Microphone capture failed; restart the source") }
+                }
             let interruption = NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification,
-                object: session, queue: nil) { _ in fail("Microphone capture interrupted") }
+                object: session, queue: nil) { _ in
+                    guard !stop.requested() else { return }
+                    if followsDefault { recovery.request() }
+                    else { fail("Microphone capture interrupted") }
+                }
             var loopback: SCStream?
             if !micOnly {
                 captureStage = "output_enumeration"
@@ -492,11 +625,30 @@ struct MeetingCapture {
                 DispatchQueue.global().async { session.startRunning(); continuation.resume() }
             }
             var goneTicks = 0
+            var route = DefaultMicrophoneRoute(currentID: device.uniqueID)
+            var nextRecovery: TimeInterval = 0
             while !stop.requested() {
                 try await Task.sleep(nanoseconds: 100_000_000)
-                guard device.isConnected else { fail("Selected microphone disconnected") }
-                if microphone == "default" && AVCaptureDevice.default(for: .audio)?.uniqueID != device.uniqueID {
-                    fail("Default microphone changed; select and restart the source")
+                if stop.requested() { break }
+                if followsDefault {
+                    let target = AVCaptureDevice.default(for: .audio)
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if route.needsRecovery(candidateID: target?.uniqueID, connected: device.isConnected,
+                                           running: session.isRunning, interrupted: recovery.take(), now: now) {
+                        if route.expired(at: now) { fail("Default microphone recovery timed out") }
+                        if let target, target.isConnected, now >= nextRecovery {
+                            nextRecovery = now + 0.5
+                            let switched: Bool = await withCheckedContinuation { continuation in
+                                DispatchQueue.global().async {
+                                    continuation.resume(returning: switchMicrophone(target, session: session,
+                                        audio: audio, output: output, queue: queue, stop: stop, recovery: recovery))
+                                }
+                            }
+                            if switched { device = target; route.recovered(target.uniqueID) }
+                        }
+                    }
+                } else if !device.isConnected {
+                    fail("Selected microphone disconnected")
                 }
                 if scope == "application" {
                     goneTicks = stop.capturedGone() ? goneTicks + 1 : 0

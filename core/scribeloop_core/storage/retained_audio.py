@@ -53,6 +53,21 @@ class RetainedAudio:
                 task.exception()
             raise
 
+    async def export_worker(self,sid,call,*args):
+        """Own the audio/key lease through a bounded export, including cancellation."""
+        if self.busy:
+            raise ValueError('Audio is busy or unavailable')
+        self.require(sid)
+        self.busy=True
+        try:
+            return await self._worker(call,*args)
+        finally:
+            self.busy=False
+
+    def authenticated_durations(self,sid,tracks):
+        """Read/authenticate complete track durations inside an owned audio worker."""
+        return self._durations(sid,tracks)
+
     async def cleanup(self,*,authorized=None,on_expired=None):
         if self.busy:
             return []

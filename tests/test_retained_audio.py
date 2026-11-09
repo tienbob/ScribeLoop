@@ -6,6 +6,7 @@ import wave
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.storage.audio import SessionAudioStore
 from scribeloop_core.storage.db import connect, migrate
@@ -192,14 +193,17 @@ def test_api_startup_expiry_archive_and_playback_do_not_call_cloud(tmp_path,requ
         client.portal.call(app.state.store.accept_agreement,app.state.store.AGREEMENT_VERSION)
     with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
         async def await_expiry():
-            async with asyncio.timeout(3):
+            async with timeout(3):
                 while app.state.audio.status(expired)['available']:
                     await asyncio.sleep(.01)
         client.portal.call(await_expiry)
         ws.send_text(token)
         snapshot=ws.receive_json()
+        assert snapshot['paged'] is True and 'segments' not in snapshot
         assert snapshot['audio_states'][expired]['expired_at'] is not None
-        assert snapshot['segments'][expired] and snapshot['notes'][expired]
+        ws.send_json({'action':'conversation_page','session_id':expired})
+        page=ws.receive_json()
+        assert page['segments'] and page['notes']
         assert snapshot['audio_states'][archived]['archived']
         assert snapshot['audio_states'][archived]['available']
         ws.send_json({'action':'play_audio','session_id':recent,'stream':'mic'})

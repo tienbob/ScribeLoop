@@ -1,5 +1,23 @@
 # Internal Mac distribution
 
+## Local development permission refresh
+
+Routine rebuilds preserve existing local permissions. The canonical
+`dist/macos/ScribeLoop.app` build resets `ScreenCapture` and `Calendar` only for
+`ai.scribeloop.desktop` when the operator runs with `SCRIBELOOP_RESET_TCC=1`:
+
+```sh
+SCRIBELOOP_RESET_TCC=1 build/macos/venv13/bin/python packaging/macos/build_desktop.py
+```
+
+Use that opt-in only when replacing the canonical ad-hoc identity and refreshing
+its grants is intended. Quit the app before rebuilding, then approve Screen
+Recording and Calendar access locally for the new build as needed. Run the
+silent capture-access check before recording. The reset does not grant access.
+Preview/custom-destination builds never reset, and Microphone, Keychain, and
+other apps' permissions remain unchanged. Reset errors are surfaced by the
+build instead of claiming that the refresh succeeded.
+
 Updated October 30, 2026. Internal build **0.1.12 (13)** targets **Apple Silicon
 (M1 and newer), macOS 13 Ventura or later**. This is the build deployment target,
 verified against native dependency metadata. Runtime acceptance on an actual
@@ -11,10 +29,17 @@ recording** manually. macOS 11–12 and Intel are outside the selected release s
 
 ## Current installer
 
-The current Google Drive-ready package is `dist/macos/internal/ScribeLoop-0.1.12-13-arm64-internal-unsigned.dmg`.
-Upload that DMG and the adjacent `START_HERE.txt` and `.sha256` file. The JSON file is build metadata for the distributor.
-This packages the verified 0.1.12 app, including the Gemini HTTP 400 fix; no rebuild or new signing identity is introduced by packaging.
-The latest full Python suite passed 620 tests. Automatic call stop and successful notes were observed on the development Mac; second-Mac acceptance remains outstanding.
+The current Google Drive-ready folder is
+`dist/macos/drive/ScribeLoop-0.1.45-46/`. Upload its
+`ScribeLoop-0.1.45-46-arm64-internal-unsigned.dmg`, `START_HERE.txt` and
+`.sha256` file. The adjacent JSON file is build metadata for the distributor.
+
+This packages the verified `0.1.45 (46)` app, including bounded web reads,
+cleanup-provider resilience, Ollama lifecycle hardening and the opt-in TCC
+build gate. No rebuild or new signing identity is introduced by packaging.
+The latest full Python suite passed 816 tests. Automatic call stop and
+successful notes were previously observed on the development Mac; second-Mac
+acceptance remains outstanding.
 
 The optional local transcript-correction LLM was abandoned for this release under the user's small-library/small-model and no-extra-app requirements. No additional local runtime or model was installed or bundled.
 

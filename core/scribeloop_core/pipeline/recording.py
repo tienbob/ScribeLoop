@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 
+from ..capture.recording_gate import RecordingGate
 from ..storage.db import DATABASE_ERRORS
 from .failures import failure_diagnostic
 from .language import LanguageDetectionError
@@ -34,6 +35,17 @@ def automatic_notes_eligible(session_id, duration_ms, confirmed_segments):
     log.warning('Automatic notes skipped for session %s: duration_ms=%s confirmed_segments=%s',
                 session_id,duration_ms or 0,confirmed_segments)
     return False
+
+
+def recording_ready_for_notes(session):
+    if session.get('status') == 'completed':
+        return True
+    # A provider failure must remain visible, but confirmed speech is still
+    # usable for the notes already authorized at recording startup.
+    return (session.get('status') == 'failed'
+            and (session.get('failure') or {}).get('stage') == 'transcription'
+            and session.get('end_reason') == 'manual_stop'
+            and bool(session.get('transcript_revision')))
 
 
 class RecordingRunner:
@@ -65,6 +77,7 @@ class RecordingRunner:
         self._reason_lock = threading.Lock()
         self._stop_reason = None
         self._capture_end_reason = None
+        self.recording_gate = RecordingGate()
 
     def start(self, selection, source_metadata, title, *, consent_confirmed):
         if consent_confirmed is not True:
@@ -87,6 +100,7 @@ class RecordingRunner:
         self.cancel_processing.clear()
         self.capture_done.clear()
         self.storage_ready.clear()
+        self.recording_gate = RecordingGate()
         self.task = asyncio.create_task(self._run(session['id'], selection))
         return session
 
@@ -110,6 +124,16 @@ class RecordingRunner:
         if self.task:
             await self.task
 
+    @property
+    def paused(self):
+        return self.active_id is not None and self.recording_gate.paused
+
+    def set_paused(self, session_id, paused):
+        if (type(paused) is not bool or self.active_id is None
+                or self.active_id != session_id or self.stop_requested.is_set()):
+            raise ValueError('Select an active recording that is not stopping')
+        self.recording_gate.set_paused(paused)
+
     def _capture(self, session_id, selection, ready, checkpoint=None):
         writers = {}
         source = None
@@ -120,6 +144,7 @@ class RecordingRunner:
         created_key = False
         capture_failed = False
         samples = {'mic': 0, 'loopback': 0}
+        seen_streams = set()
         selected_streams = ('mic',) if getattr(selection,'scope',None) == 'microphone' else tuple(samples)
         from ..capture.microphone_processing import MicrophoneProcessing, MicrophoneProcessor
         config = getattr(self, 'microphone_processing', MicrophoneProcessing())
@@ -150,10 +175,15 @@ class RecordingRunner:
                     for frame in source.frames():
                         if abort.is_set():
                             break
-                        try:
-                            frames.put_nowait(frame)
-                        except queue.Full:
-                            raise RuntimeError('Recorder queue overflow; capture stopped') from None
+                        if frame.stream not in selected_streams:
+                            raise ValueError('Audio arrived outside the selected capture scope')
+                        if frame.pcm.size:
+                            seen_streams.add(frame.stream)
+                        for saved_frame in self.recording_gate.filter(frame):
+                            try:
+                                frames.put_nowait(saved_frame)
+                            except queue.Full:
+                                raise RuntimeError('Recorder queue overflow; capture stopped') from None
                 except Exception as exc:  # noqa: BLE001 - native source boundary
                     outcome.append(exc)
                 finally:
@@ -205,7 +235,7 @@ class RecordingRunner:
                 raise outcome[0]
             with self._reason_lock:
                 self._capture_end_reason = getattr(source,'end_reason',None)
-            if not all(samples[stream] for stream in selected_streams) and not self.stop_requested.is_set():
+            if not all(stream in seen_streams for stream in selected_streams) and not self.stop_requested.is_set():
                 raise RuntimeError('A selected capture stream produced no audio')
             for stream, writer in writers.items():
                 writer.close()
@@ -372,8 +402,9 @@ class RecordingRunner:
     async def _process(self, session_id, *, replace=False, live=False, finalize=True):
         # Bounded output queue keeps transcript persistence on the DB thread.
         chunks = queue.Queue(maxsize=64)
+        worker_cancelled = threading.Event()
         def emit(chunk):
-            while not self.cancel_processing.is_set():
+            while not worker_cancelled.is_set() and not self.cancel_processing.is_set():
                 try:
                     chunks.put(chunk, timeout=.1)
                     return
@@ -388,16 +419,18 @@ class RecordingRunner:
                 from .live import transcribe_live
                 transcriber = transcribe_live
             processing = asyncio.create_task(asyncio.to_thread(transcriber,
-                self.audio, session_id, emit, self.cancel_processing, self.capture_done,
+                self.audio, session_id, emit, worker_cancelled, self.capture_done,
                 language=self.language, locked_language=self.language_lock,
                 checkpoints=self.store.checkpoints(session_id),
                 confirmed_text={s:' '.join(r['text'] for r in self.store.segments(session_id) if r['stream']==s)
                                 for s in ('mic','loopback')}))
         else:
             processing = asyncio.create_task(asyncio.to_thread(self._transcribe,
-                self.audio, session_id, emit, self.cancel_processing))
+                self.audio, session_id, emit, worker_cancelled))
         try:
             while not processing.done() or not chunks.empty():
+                if self.cancel_processing.is_set():
+                    worker_cancelled.set()
                 try:
                     chunk = chunks.get_nowait()
                 except queue.Empty:
@@ -430,6 +463,11 @@ class RecordingRunner:
                     self.store.set_language_lock(session_id, chunk)
                     await self.publish({**chunk, 'session_id':session_id})
                     continue
+                if chunk.get('type') == 'speaker_turns_saved':
+                    self.store.save_turns(session_id,chunk['stream'],chunk['turns'],chunk['end_ms'])
+                    await self.publish({'type':'speaker_turns','session_id':session_id,
+                                        'turns':self.store.turns(session_id)})
+                    continue
                 if replace:
                     if len(replacement) >= 16000:
                         raise ValueError('Transcript exceeds segment limit')
@@ -440,10 +478,12 @@ class RecordingRunner:
                     await self.publish({'type': 'segment', 'session_id': session_id, 'segment': row})
             await processing
         except BaseException:
-            self.cancel_processing.set()
+            worker_cancelled.set()
+            # Drain the failed worker without replacing the original storage or
+            # provider exception with its secondary cancellation exception.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await processing
             raise
-        finally:
-            await processing
         if not finalize:
             return replacement if replace else None
         if self.closed:
