@@ -6,6 +6,7 @@ import threading
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.cloud_meeting import (
     Budget,
@@ -33,7 +34,7 @@ def state(tmp_path):
 
 
 async def wait_for(predicate):
-    async with asyncio.timeout(4):
+    async with timeout(4):
         while not predicate():
             await asyncio.sleep(.01)
 

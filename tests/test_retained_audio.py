@@ -6,6 +6,7 @@ import wave
 
 import numpy as np
 import pytest
+from scribeloop_core.async_compat import timeout
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.storage.audio import SessionAudioStore
 from scribeloop_core.storage.db import connect, migrate
@@ -192,7 +193,7 @@ def test_api_startup_expiry_archive_and_playback_do_not_call_cloud(tmp_path,requ
         client.portal.call(app.state.store.accept_agreement,app.state.store.AGREEMENT_VERSION)
     with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
         async def await_expiry():
-            async with asyncio.timeout(3):
+            async with timeout(3):
                 while app.state.audio.status(expired)['available']:
                     await asyncio.sleep(.01)
         client.portal.call(await_expiry)
