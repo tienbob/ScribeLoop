@@ -208,6 +208,8 @@ struct Notebook: View {
                     .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
                 Button { showAsk = true } label: { Label("Ask",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .disabled(!core.accepted || !core.connected || core.busy || core.summaryProvider["configured"] as? Bool != true)
+                    .keyboardShortcut("k",modifiers:.command)
+                    .help(core.summaryProvider["configured"] as? Bool == true ? "Ask questions about saved meetings" : "Set up a notes provider in Preferences to use Ask")
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
@@ -389,7 +391,7 @@ struct Notebook: View {
                 else if result.text("source_type") == "transcript" {
                     tab="Transcript"
                     core.loadPage(0,anchor:result.text("source_id"))
-                }
+                } else { tab="Transcript" }
             }.frame(width:760,height:620)
         }
         .sheet(isPresented:$showAsk) {
@@ -616,7 +618,10 @@ struct MeetingSearchView: View {
                         .onSubmit { runSearch() }
                         .onChange(of:query) { _ in scheduleSearch() }
                     if core.searchLoading { ProgressView().controlSize(.small) }
-                    if !query.isEmpty { Button { query=""; core.searchResults=[] } label: { Image(systemName:"xmark.circle.fill") }.buttonStyle(.borderless) }
+                    if !query.isEmpty {
+                        Button { query=""; core.search("") } label: { Image(systemName:"xmark.circle.fill") }
+                            .buttonStyle(.borderless).accessibilityLabel("Clear search")
+                    }
                 }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
                 HStack {
                     Picker("Meeting",selection:$meetingID) {
@@ -677,7 +682,7 @@ struct MeetingSearchView: View {
             }
         }.background(ScribeTheme.canvas)
         .onAppear { core.send(["action":"people_page"]) }
-        .onDisappear { debounce?.cancel() }
+        .onDisappear { debounce?.cancel(); core.search("") }
     }
     private func searchEmpty(_ title:String,_ icon:String,_ detail:String)->some View {
         VStack(spacing:10) {
@@ -702,6 +707,17 @@ struct MeetingAskView: View {
     private var scopeReady:Bool { scope != "current" || core.selectedID != nil }
     private var answer:Object { core.askResult["answer"] as? Object ?? [:] }
     private var evidence:[Record] { objects((core.askResult["evidence"] as? Object)?["passages"]) }
+    private var scopeLabel:String {
+        if scope == "current" { return core.selected?.text("title") ?? "No meeting selected" }
+        if scope == "selected" { return "\(selected.count) chosen meeting\(selected.count == 1 ? "" : "s")" }
+        let searched=(((core.askResult["evidence"] as? Object)?["scope"] as? Object)?["meeting_ids"] as? [String])?.count
+        return searched.map { "All \($0) saved meetings" } ?? "All saved meetings"
+    }
+    private var previousQuestion:String {
+        guard let previousAnswerID else { return "" }
+        return core.askHistory.first(where:{$0.id==previousAnswerID})?.text("question") ??
+            text((core.askResult["evidence"] as? Object)?["question"])
+    }
     private func refreshHistory() {
         guard scopeReady, scope != "selected" || !selected.isEmpty else { core.askHistory=[]; return }
         core.loadAskHistory(scope:scope,currentID:core.selectedID,selectedIDs:scopeIDs)
@@ -726,25 +742,47 @@ struct MeetingAskView: View {
                     Text("Current meeting").tag("current")
                     Text("Chosen meetings").tag("selected")
                     Text("All meetings").tag("all")
-                }.pickerStyle(.segmented).frame(maxWidth:430)
+                }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Meeting scope").frame(maxWidth:430)
                 if scope == "selected" {
-                    Button("Choose…") { showMeetings.toggle() }
-                    Text("\(selected.count) selected").font(.caption).foregroundStyle(.secondary)
+                    Button(showMeetings ? "Hide list" : "Choose…") { showMeetings.toggle() }.fixedSize()
                 }
                 Spacer()
                 Text("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"]))")
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }.padding(.horizontal,22).padding(.vertical,12)
+            HStack(spacing:6) {
+                Image(systemName:"scope").foregroundStyle(ScribeTheme.accent)
+                Text("Searching: \(scopeLabel)").lineLimit(1)
+                Spacer()
+            }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,22).padding(.bottom,10)
             if showMeetings && scope == "selected" {
-                ScrollView(.horizontal) {
+                VStack(spacing:8) {
                     HStack {
+                        Text("Choose meetings").font(.headline)
+                        Spacer()
+                        Button("Select visible") { selected=Set(core.sessions.map(\.id)); refreshHistory() }.buttonStyle(.borderless)
+                        Button("Clear") { selected=[]; refreshHistory() }.buttonStyle(.borderless).disabled(selected.isEmpty)
+                    }
+                    ScrollView {
+                        LazyVStack(spacing:4) {
                         ForEach(core.sessions) { row in
-                            Toggle(row.text("title"),isOn:Binding(get:{selected.contains(row.id)},set:{on in
-                                if on { selected.insert(row.id) } else { selected.remove(row.id) }; refreshHistory()
-                            })).toggleStyle(.button).lineLimit(1)
+                            Button {
+                                if selected.contains(row.id) { selected.remove(row.id) } else { selected.insert(row.id) }
+                                refreshHistory()
+                            } label: {
+                                HStack {
+                                    Image(systemName:selected.contains(row.id) ? "checkmark.square.fill" : "square")
+                                        .foregroundStyle(selected.contains(row.id) ? ScribeTheme.accent : .secondary)
+                                    Text(row.text("title")).lineLimit(2); Spacer()
+                                    Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),style:.date)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }.padding(7).contentShape(Rectangle())
+                            }.buttonStyle(.plain).accessibilityLabel("\(selected.contains(row.id) ? "Remove" : "Add") \(row.text("title"))")
                         }
-                    }.padding(.horizontal,22).padding(.bottom,10)
-                }.frame(maxHeight:48)
+                        }
+                    }.frame(maxHeight:150)
+                }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                    .padding(.horizontal,22).padding(.bottom,12)
             }
             Divider()
             ScrollView {
@@ -802,11 +840,13 @@ struct MeetingAskView: View {
                         Divider(); Text("Saved questions in this scope").font(.headline)
                         ForEach(core.askHistory.prefix(8)) { row in
                             HStack {
-                                VStack(alignment:.leading) {
-                                    Text(row.text("question")).lineLimit(2)
-                                    Text(row.raw["stale"] as? Bool == true ? "Outdated · ask again" : "\(row.text("provider")) · \(row.text("model"))")
-                                        .font(.caption).foregroundStyle(row.raw["stale"] as? Bool == true ? ScribeTheme.warning : .secondary)
-                                }; Spacer()
+                                Button { core.showAskHistory(row); previousAnswerID=nil } label: {
+                                    VStack(alignment:.leading) {
+                                        Text(row.text("question")).lineLimit(2)
+                                        Text(row.raw["stale"] as? Bool == true ? "Outdated · ask again" : "\(row.text("provider")) · \(row.text("model"))")
+                                            .font(.caption).foregroundStyle(row.raw["stale"] as? Bool == true ? ScribeTheme.warning : .secondary)
+                                    }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain).disabled(row.raw["stale"] as? Bool == true)
                                 if row.raw["stale"] as? Bool != true { Button("Follow up") { previousAnswerID=row.id; question="" } }
                             }.padding(.vertical,4)
                         }
@@ -814,19 +854,34 @@ struct MeetingAskView: View {
                 }.padding(22)
             }
             Divider()
-            HStack(spacing:10) {
-                TextField(previousAnswerID == nil ? "What did we agree about pricing?" : "Ask a follow-up",text:$question)
-                    .textFieldStyle(.roundedBorder).onSubmit { if !core.askLoading { submit() } }
-                if core.askLoading {
-                    ProgressView().controlSize(.small); Button("Cancel") { core.cancelAsk() }
-                } else {
-                    Button("Ask") { submit() }.buttonStyle(.borderedProminent)
-                        .disabled(question.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ||
-                                  !scopeReady || (scope == "selected" && selected.isEmpty))
+            VStack(alignment:.leading,spacing:8) {
+                if previousAnswerID != nil {
+                    HStack {
+                        Label("Following up: \(previousQuestion)",systemImage:"arrowshape.turn.up.left")
+                            .lineLimit(1).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button { previousAnswerID=nil } label: { Image(systemName:"xmark.circle.fill") }
+                            .buttonStyle(.borderless).accessibilityLabel("Cancel follow-up")
+                    }
+                }
+                HStack(spacing:10) {
+                    TextField(previousAnswerID == nil ? "What did we agree about pricing?" : "Ask a follow-up…",text:$question)
+                        .textFieldStyle(.roundedBorder).onSubmit { if !core.askLoading { submit() } }
+                    if core.askLoading {
+                        ProgressView().controlSize(.small); Button("Cancel") { core.cancelAsk() }
+                    } else {
+                        Button("Ask") { submit() }.buttonStyle(.borderedProminent)
+                            .disabled(question.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ||
+                                      !scopeReady || (scope == "selected" && selected.isEmpty))
+                    }
                 }
             }.padding(18)
         }.background(ScribeTheme.canvas)
-        .onAppear { if let id=core.selectedID { selected=[id] }; refreshHistory() }
+        .onAppear {
+            core.askResult=[:]; core.askError=nil; previousAnswerID=nil
+            if let id=core.selectedID { selected=[id] }
+            refreshHistory()
+        }
         .onChange(of:scope) { _ in previousAnswerID=nil; core.askResult=[:]; refreshHistory() }
     }
 }

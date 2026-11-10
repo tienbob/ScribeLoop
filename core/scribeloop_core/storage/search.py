@@ -15,7 +15,7 @@ import unicodedata
 
 from .db import DATABASE_ERRORS
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 
 def _fold(value: str) -> str:
@@ -111,7 +111,8 @@ class MeetingSearch:
             if self.fts:
                 for rowid in old_rows:
                     self.conn.execute("INSERT INTO search_documents_fts(search_documents_fts,rowid,content,title,speaker_name) "
-                                      "SELECT 'delete',rowid,content,title,COALESCE(speaker_name,'') FROM search_documents WHERE rowid=?",(rowid,))
+                                      "SELECT 'delete',rowid,content,CASE WHEN source_type='title' THEN title ELSE '' END,"
+                                      "COALESCE(speaker_name,'') FROM search_documents WHERE rowid=?",(rowid,))
             self.conn.execute('DELETE FROM search_documents WHERE session_id=?',(session_id,))
             for doc in docs:
                 fields=tuple(doc)
@@ -119,7 +120,9 @@ class MeetingSearch:
                                       tuple(doc.values()))
                 if self.fts:
                     self.conn.execute('INSERT INTO search_documents_fts(rowid,content,title,speaker_name) VALUES (?,?,?,?)',
-                                      (cur.lastrowid,doc['content'],doc['title'],doc['speaker_name'] or ''))
+                                      (cur.lastrowid,doc['content'],
+                                       doc['title'] if doc['source_type']=='title' else '',
+                                       doc['speaker_name'] or ''))
             self.conn.execute('INSERT INTO search_index_state(session_id,fingerprint,indexed_at,document_count) '
                               'VALUES (?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET '
                               'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,document_count=excluded.document_count',
@@ -153,7 +156,8 @@ class MeetingSearch:
 
     def purge_session(self, session_id: str) -> None:
         """Remove index text before the owning encrypted meeting is deleted."""
-        rows=list(self.conn.execute('SELECT rowid,content,title,COALESCE(speaker_name,\'\') '
+        rows=list(self.conn.execute("SELECT rowid,content,CASE WHEN source_type='title' THEN title ELSE '' END,"
+                                    "COALESCE(speaker_name,'') "
                                     'FROM search_documents WHERE session_id=?',(session_id,)))
         with self.conn:
             if self.fts:

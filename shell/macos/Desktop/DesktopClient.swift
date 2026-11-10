@@ -655,6 +655,16 @@ struct PreferencesSaveProgress {
         if scope == "selected" { command["selected_ids"]=selectedIDs }
         askHistoryRequest=send(command)
     }
+    func showAskHistory(_ row:Record) {
+        guard row.raw["stale"] as? Bool != true else { return }
+        askResult=["answer_id":row.id,"answer":row.raw["answer"] as? Object ?? [:],
+            "evidence":["passages":row.raw["evidence"] as? [Object] ?? [],
+                        "truncated":row.raw["truncated"] as? Bool ?? false],
+            "provider":row.text("provider"),"model":row.text("model"),
+            "usage":["duration_ms":row.int("duration_ms"),"input_bytes":row.int("input_bytes"),
+                     "output_bytes":row.int("output_bytes"),"requests":1,"max_output_tokens":2000]]
+        askError=nil
+    }
     func cancelAsk() { guard askLoading else { return }; send(["action":"cancel_ask"]) }
     func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }

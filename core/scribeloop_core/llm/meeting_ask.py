@@ -61,6 +61,14 @@ def _retrieval_query(question: str) -> str:
     return ' '.join(dict.fromkeys(terms)) or question.strip()
 
 
+def _evidence_hash(row) -> str:
+    """Fingerprint every provider-visible source field, including person/title edits."""
+    fields=('meeting_title','revision','source_type','source_id','start_ms','end_ms',
+            'speaker_id','speaker_name','text')
+    payload={field:row.get(field) for field in fields}
+    return hashlib.sha256(json.dumps(payload,ensure_ascii=True,sort_keys=True).encode()).hexdigest()
+
+
 class MeetingEvidence:
     """Build the only evidence packet that an Ask generation may receive."""
 
@@ -168,10 +176,15 @@ class MeetingAsk:
                 raise ValueError('Prior Ask answer is outside the current scope')
             await MeetingSearch(self.store).sync_async()
             for source in sources:
-                document=self.store.conn.execute('SELECT revision,content FROM search_documents WHERE id=?',
+                document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=?',
                                                  (source['citation_id'],)).fetchone()
-                if (not document or document['revision']!=source['revision'] or
-                        hashlib.sha256(document['content'].encode()).hexdigest()!=source['content_hash']):
+                passage=({'meeting_title':document['title'],'revision':document['revision'],
+                    'source_type':document['source_type'],'source_id':document['source_id'],
+                    'start_ms':document['start_ms'],'end_ms':document['end_ms'],
+                    'speaker_id':document['speaker_id'],'speaker_name':document['speaker_name'],
+                    'text':document['content']} if document else None)
+                if (not passage or document['revision']!=source['revision'] or
+                        _evidence_hash(passage)!=source['content_hash']):
                     raise ValueError('Prior Ask answer is outdated')
             prior={'question':row['question'],'answer':json.loads(row['answer_json'])}
             retrieval_question=(row['question']+' '+question)[-MAX_QUESTION_CHARS:]
@@ -197,7 +210,7 @@ class MeetingAsk:
                 json.dumps(answer,ensure_ascii=False,separators=(',',':')),packet['evidence_bytes'],
                 int(packet['truncated']),int(time.time()*1000),duration_ms,input_bytes,output_bytes))
             for row in packet['passages']:
-                digest=hashlib.sha256(row['text'].encode()).hexdigest()
+                digest=_evidence_hash(row)
                 self.store.conn.execute('INSERT INTO meeting_answer_sources '
                     '(answer_id,session_id,revision,citation_id,content_hash) VALUES (?,?,?,?,?)',
                     (answer_id,row['meeting_id'],row['revision'],row['citation_id'],digest))
@@ -224,16 +237,25 @@ class MeetingAsk:
             if not source_ids or not source_ids<=allowed:
                 continue
             stale=False
+            evidence=[]
             for source in sources:
-                document=self.store.conn.execute('SELECT revision,content FROM search_documents WHERE id=? AND session_id=?',
+                document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=? AND session_id=?',
                     (source['citation_id'],source['session_id'])).fetchone()
-                if (not document or document['revision']!=source['revision'] or
-                        hashlib.sha256(document['content'].encode()).hexdigest()!=source['content_hash']):
+                passage=({'citation_id':document['id'],'meeting_id':document['session_id'],
+                    'meeting_title':document['title'],'revision':document['revision'],
+                    'source_type':document['source_type'],'source_id':document['source_id'],
+                    'start_ms':document['start_ms'],'end_ms':document['end_ms'],
+                    'speaker_id':document['speaker_id'],'speaker_name':document['speaker_name'],
+                    'text':document['content']} if document else None)
+                if (not passage or document['revision']!=source['revision'] or
+                        _evidence_hash(passage)!=source['content_hash']):
                     stale=True
                     break
+                evidence.append(passage)
             item=dict(row); item['scope']=json.loads(item.pop('scope_json'))
             item['answer']=json.loads(item.pop('answer_json')); item['stale']=stale
             item['citation_ids']=[source['citation_id'] for source in sources]
+            item['evidence']=[] if stale else evidence
             result.append(item)
             if len(result)>=limit:
                 break

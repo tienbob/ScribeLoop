@@ -112,7 +112,19 @@ async def test_ask_generation_is_single_request_cited_saved_and_revision_aware()
     assert result['usage']['requests']==1 and result['usage']['max_output_tokens']==2000
     assert result['usage']['input_bytes']>0 and result['usage']['output_bytes']>0
     history=await MeetingAsk(store,provider).history(scope)
-    assert len(history)==1 and not history[0]['stale']
+    assert len(history)==1 and not history[0]['stale'] and history[0]['evidence']
+    original_title=store.get(sid)['title']
+    store.rename_conversation(sid,'Renamed pricing decision')
+    assert (await MeetingAsk(store,provider).history(scope))[0]['stale']
+    store.rename_conversation(sid,original_title)
+    assert not (await MeetingAsk(store,provider).history(scope))[0]['stale']
+    speaker=store.conn.execute('SELECT id,local_label FROM session_speakers WHERE session_id=?',(sid,)).fetchone()
+    store.conn.execute('UPDATE session_speakers SET local_label=? WHERE id=?',('Alex',speaker['id']))
+    store.conn.commit()
+    assert (await MeetingAsk(store,provider).history(scope))[0]['stale']
+    store.conn.execute('UPDATE session_speakers SET local_label=? WHERE id=?',(speaker['local_label'],speaker['id']))
+    store.conn.commit()
+    assert not (await MeetingAsk(store,provider).history(scope))[0]['stale']
     segment=store.segments(sid)[0]
     store.conn.execute('UPDATE segments SET text=? WHERE id=?',('Pricing was changed',segment['id']))
     store.conn.commit()

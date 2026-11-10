@@ -25,6 +25,15 @@ dependent answer. Follow-ups require the exact same scope and a non-stale prior
 answer. Provider errors and cancellation preserve earlier answers and never retry
 automatically.
 
+UX/lifecycle audit (2026-11-10): saved-answer fingerprints now cover every
+provider-visible source field, so speaker-name and meeting-title changes invalidate
+answers as well as transcript edits. Saved questions reopen their complete answer
+and evidence instead of acting only as follow-up shortcuts. The native sheet shows
+the active scope, uses a vertically scannable meeting chooser, exposes follow-up
+context and cancellation, and clears results when scope or sheet context changes.
+F1 Search clearing now invalidates its outstanding request so a late response cannot
+repopulate a cleared field; title hits consistently open the transcript view.
+
 ```mermaid
 flowchart LR
     Q[Question + visible scope] --> R[Local revision-aware lexical retrieval]

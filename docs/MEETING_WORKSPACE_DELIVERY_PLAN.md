@@ -118,6 +118,13 @@ cooperatively yields between fingerprint batches and indexed meetings, preventin
 the cold build from monopolizing the event loop. Latest-request binding prevents
 an older queued result from replacing a newer query or a cleared field.
 
+UX audit remediation (2026-11-10): FTS index version 3 no longer duplicates each
+meeting title into every transcript and summary row. Title queries therefore return
+the dedicated title result instead of unrelated passages from that meeting. Delete
+commands now use the exact indexed column values, preventing orphaned title tokens
+during rename/reconciliation. Clearing or closing Search invalidates the outstanding
+request so a late response cannot repopulate the sheet; title hits open Transcript.
+
 Recorded development-Mac scale result for a synthetic 1,000-meeting/100,000-segment
 SQLCipher workspace: 101,000 search documents, 4.419 s cold build, 71.05 ms warm
 p50, 79.63 ms warm p95 and 82.12 ms warm maximum over 100 queries. This passes the
