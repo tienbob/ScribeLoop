@@ -1,4 +1,5 @@
 """Cloud-only production router and a historical model-comparison harness."""
+from .assemblyai_meeting import AssemblyAIConfig
 from .deepgram_meeting import DeepgramConfig, DeepgramRecordingRunner
 
 
@@ -63,7 +64,7 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         self.cloud=config
 
     def profiles(self):
-        return {'deepgram':{**self.cloud.public(),'duration_profiles':{
+        return {self.cloud.provider:{**self.cloud.public(),'duration_profiles':{
             '300':{'label':'5 minutes · development','budget_usd':self.base_config.budget_usd},
             '3600':{'label':'1 hour','budget_usd':3},
             '10800':{'label':'3 hours','budget_usd':8}}}}
@@ -71,11 +72,11 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
     def _duration(self,duration):
         if duration not in {300,3600,10800} or self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Invalid duration or busy recorder')
-        self.cloud=(self.base_config if duration==300 else DeepgramConfig(api_key=self.base_config.api_key,
-            connector=self.base_config.connector,batch_transport=self.base_config.batch_transport,
-            budget_usd=3 if duration==3600 else 8,
-            max_requests=1800 if duration==3600 else 4800,
-            write_timeout_s=self.base_config.write_timeout_s, quality=self.base_config.quality))
+        import copy
+        self.cloud = copy.copy(self.base_config)
+        if duration != 300:
+            self.cloud.budget_usd = 3 if duration == 3600 else 8
+            self.cloud.max_requests = 1800 if duration == 3600 else 4800
         self.max_s=duration
 
     def _saved_duration(self,sid):
@@ -83,17 +84,17 @@ class CloudRecordingRouter(DeepgramRecordingRunner):
         self._duration(session.get('capture',{}).get('duration_s') or 300)
 
     def select_model(self,model):
-        if model != 'deepgram' or self.closed or self.active_id or (self.task and not self.task.done()):
+        if model != self.cloud.provider or self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Only cloud streaming transcription is available; wait for active work')
 
     def start(self,selection,metadata,title,*,consent_confirmed):
         self._duration(metadata.get('duration_s') or 300)
-        return super().start(selection,{**metadata,'engine':'deepgram'},title,
+        return super().start(selection,{**metadata,'engine':self.cloud.provider},title,
                              consent_confirmed=consent_confirmed)
 
     def resume(self,sid,*,language='auto',cloud_consent=False,language_hints=None):
         self._saved_duration(sid)
-        if self.store.segments(sid) and self.store.transcript_provider(sid) != 'deepgram':
+        if self.store.segments(sid) and self.store.transcript_provider(sid) != self.cloud.provider:
             raise ValueError('Use Transcribe again to replace a historical local transcript')
         return super().resume(sid,language=language,cloud_consent=cloud_consent,language_hints=language_hints)
 
@@ -113,12 +114,12 @@ class TranscriptionRouter:
     def __init__(self,*args,cloud_config=None,local_config=None,cleanup_provider=None):
         from .local_transcription import LocalRecordingRunner
         self._args = args
-        self.runners = {'deepgram':CloudRecordingRouter(*args,cloud_config=cloud_config,
-            cleanup_provider=cleanup_provider)}
+        self.runners = {name:CloudRecordingRouter(*args,cloud_config=(cloud_config if cloud_config is not None and cloud_config.provider == name else getattr(cloud_config,'alternatives',{}).get(name) or factory(api_key='')),
+            cleanup_provider=cleanup_provider) for name,factory in [('deepgram',DeepgramConfig),('assemblyai',AssemblyAIConfig)]}
         self.local_config = local_config
         if local_config is not None:
             self.runners['ollama'] = LocalRecordingRunner(*args,config=local_config)
-        self.selected = 'ollama' if local_config is not None else 'deepgram'
+        self.selected = 'ollama' if local_config is not None else (cloud_config.provider if cloud_config else 'deepgram')
         self.closed = False
 
     def configure(self,*,cloud_config,local_config,cleanup_provider=None):
@@ -126,16 +127,18 @@ class TranscriptionRouter:
         from .local_transcription import LocalRecordingRunner
         if self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Wait for recording and processing to finish')
-        cloud = self.runners['deepgram']
-        cloud.configure_cloud(cloud_config)
-        cloud.cleanup_provider = cleanup_provider
+        for name in ('deepgram','assemblyai'):
+            config = cloud_config if name == cloud_config.provider else getattr(cloud_config,'alternatives',{}).get(name)
+            if config is not None:
+                self.runners[name].configure_cloud(config)
+            self.runners[name].cleanup_provider = cleanup_provider
         self.local_config = local_config
         if local_config is not None:
             if 'ollama' in self.runners:
                 self.runners['ollama'].config = local_config
             else:
                 self.runners['ollama'] = LocalRecordingRunner(*self._args,config=local_config)
-        self.selected = 'ollama' if local_config is not None else 'deepgram'
+        self.selected = 'ollama' if local_config is not None else (cloud_config.provider if cloud_config else 'deepgram')
 
     def refresh_cleanup(self,provider):
         """Re-sync the idle cleanup engines with the latest saved settings.
@@ -147,7 +150,8 @@ class TranscriptionRouter:
         """
         if self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Wait for recording and processing to finish')
-        self.runners['deepgram'].cleanup_provider = provider
+        for name in ('deepgram','assemblyai'):
+            self.runners[name].cleanup_provider = provider
         if 'ollama' in self.runners:
             self.runners['ollama'].config.cleanup_provider = provider
 
@@ -162,7 +166,7 @@ class TranscriptionRouter:
         return getattr(runner,'cloud',None) or getattr(runner,'config',None)
 
     def profiles(self):
-        profiles = self.runners['deepgram'].profiles()
+        profiles = {**self.runners['deepgram'].profiles(),**self.runners['assemblyai'].profiles()}
         if 'ollama' in self.runners:
             profiles['ollama'] = self.runners['ollama'].config.public()
         return profiles
@@ -181,14 +185,14 @@ class TranscriptionRouter:
 
     def resume(self,sid,*,language='auto',cloud_consent=False,language_hints=None):
         runner = self.runners[self.selected]
-        if self.selected == 'deepgram':
+        if self.selected in {'deepgram','assemblyai'}:
             return runner.resume(sid,language=language,cloud_consent=cloud_consent,
                                  language_hints=language_hints)
         return runner.resume(sid,language=language)
 
     def reprocess(self,sid,*,language,cloud_consent=False,language_hints=None):
         runner = self.runners[self.selected]
-        if self.selected == 'deepgram':
+        if self.selected in {'deepgram','assemblyai'}:
             return runner.reprocess(sid,language=language,cloud_consent=cloud_consent,
                                     language_hints=language_hints)
         return runner.reprocess(sid,language=language)

@@ -77,7 +77,7 @@ class StartRecording(SelectSource):
     language_hints: LanguageHints | None = None
     consent_confirmed: bool = Field(strict=True)
     cloud_consent: bool = False
-    model: Literal['deepgram','ollama'] = 'deepgram'
+    model: Literal['deepgram','assemblyai','ollama'] = 'deepgram'
     duration_s: Literal[300,3600,10800] = 300
 
     @field_validator('title')
@@ -96,7 +96,7 @@ class ReprocessRecording(BaseModel):
     session_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     language: LanguageChoice = 'auto'
     language_hints: LanguageHints | None = None
-    model: Literal['deepgram','ollama'] = 'deepgram'
+    model: Literal['deepgram','assemblyai','ollama'] = 'deepgram'
 
 
 class SavedMeeting(BaseModel):
@@ -107,7 +107,7 @@ class SavedMeeting(BaseModel):
     language_hints: LanguageHints | None = None
     confirmed: bool = False
     cloud_consent: bool = False
-    model: Literal['deepgram','ollama'] = 'deepgram'
+    model: Literal['deepgram','assemblyai','ollama'] = 'deepgram'
 
 
 class ConversationPage(BaseModel):
@@ -152,7 +152,7 @@ class AcceptCall(BaseModel):
     candidate_id: str = Field(min_length=1,max_length=600)
     app_id: str = Field(min_length=1,max_length=256)
     microphone_id: str = Field(default='default',min_length=1,max_length=256)
-    model: Literal['deepgram','ollama'] = 'deepgram'
+    model: Literal['deepgram','assemblyai','ollama'] = 'deepgram'
     duration_s: Literal[300,3600,10800] = 300
     language: LanguageChoice = 'auto'
     language_hints: LanguageHints | None = None
@@ -477,6 +477,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             retention_task = None
             rolling_task = None
             try:
+                if desktop and not desktop.settings.value.detection_enabled:
+                    await app.state.discovery.set_enabled(False)
                 await app.state.discovery.start()
                 closing = False
                 monitor_task = asyncio.create_task(monitor_calls())
@@ -893,6 +895,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if action == 'set_detection':
                                 if recording_busy() or set(command)!={'action','enabled'}:
                                     raise ValueError('Stop recording before pausing observation')
+                                candidate = desktop.settings.prepare({'detection_enabled':command['enabled']})
+                                await asyncio.to_thread(desktop.settings.persist,candidate)
+                                desktop.settings.value = candidate
                                 await app.state.discovery.set_enabled(command['enabled'])
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
@@ -924,7 +929,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             expected = desktop.settings.value.transcription_engine
                             if action == 'resume':
                                 previous = store.transcript_provider(sid)
-                                known = {'deepgram':'deepgram','local-ollama':'ollama'}
+                                known = {'deepgram':'deepgram','assemblyai':'assemblyai','local-ollama':'ollama'}
                                 if previous in known:
                                     expected = known[previous]
                                 elif store.segments(sid):
@@ -1037,7 +1042,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if not recorder or app.state.runner.active_id or not request.consent_confirmed:
                                 raise ValueError('Recording unavailable or permission missing')
                             grant = None
-                            if request.automatic_summary:
+                            if request.automatic_summary and (not desktop or desktop.settings.value.automatic_notes):
                                 if not summary_provider or not summary_provider.public()['configured']:
                                     raise ValueError('Summary not configured')
                                 grant = {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
@@ -1151,7 +1156,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 **({'language_hints':request.language_hints} if request.language_hints is not None else {}),
                                 **({'cloud_consent':request.cloud_consent} if hasattr(app.state.recording,'cloud') else {}))
                             automatic_scheduled.add(request.session_id)
-                            if summary_provider and summary_provider.public()['configured']:
+                            if summary_provider and summary_provider.public()['configured'] and (not desktop or desktop.settings.value.automatic_notes):
                                 grant = {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
                                 task = asyncio.create_task(automatic_notes(request.session_id,grant_override=grant,
                                     expected_task=app.state.recording.task,previous_revision=previous_revision))
@@ -1227,7 +1232,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if hasattr(recorder,'select_model'):
                                 recorder.select_model(request.model)
                             grant=({key:summary_provider.public()[key] for key in ('provider','model','endpoint')}
-                                   if summary_provider and summary_provider.public()['configured'] else None)
+                                   if summary_provider and summary_provider.public()['configured'] and
+                                   (not desktop or desktop.settings.value.automatic_notes) else None)
                             source = {**source,'auto_workflow':True,'auto_title':request.title.strip() in {'Meeting conversation','Meeting test'},'auto_summary':grant,'language':request.language,'language_hints':request.language_hints,'duration_s':request.duration_s,'cloud_consent':request.cloud_consent,
                                       'asr_engine':request.model if hasattr(recorder,'select_model') else recorder.cloud.public()['model'] if hasattr(recorder,'cloud') else 'test'}
                             if desktop:
@@ -1271,7 +1277,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1291,6 +1297,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     if action=='save_settings' else
                                     'Stop recording before changing detection. The previous detection state remains available in Preferences.'
                                     if action=='set_detection' else
+                                    'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'
+                                    if action=='search_meetings' else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
                             continue
                         meeting = (isinstance(action, str) and action

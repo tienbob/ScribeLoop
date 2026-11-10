@@ -132,6 +132,29 @@ class DesktopContract:
             return self.snapshot(app, summary_provider, active_id, summary_id)
         if action == 'history_page' and not set(command)-{'action','cursor'}:
             return self.history(app.state.store,command.get('cursor'))
+        if action == 'search_meetings':
+            allowed={'action','query','limit','offset','meeting_id','person_id','date_from','date_to'}
+            if set(command)-allowed:
+                raise ValueError('Invalid search request')
+            for field in ('meeting_id','person_id'):
+                value=command.get(field)
+                if value is not None and (not isinstance(value,str) or not ID.fullmatch(value)):
+                    raise ValueError('Invalid search filter')
+            for field in ('date_from','date_to'):
+                value=command.get(field)
+                if value is not None and (type(value) is not int or value<0):
+                    raise ValueError('Invalid search date')
+            recorder=app.state.recording
+            recording_task=getattr(recorder,'task',None)
+            if (not app.state.store.agreement()['accepted'] or active_id or summary_id or
+                    (recording_task and not recording_task.done())):
+                raise ValueError('Search is available after setup and while recording is idle')
+            from ..storage.search import MeetingSearch
+            result=await MeetingSearch(app.state.store).query_async(command.get('query'),
+                limit=command.get('limit',50),offset=command.get('offset',0),
+                meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
+                date_from=command.get('date_from'),date_to=command.get('date_to'))
+            return {'type':'search_results',**result}
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
         if action in {'audio_info','audio_window'}:

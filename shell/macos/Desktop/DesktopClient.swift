@@ -3,6 +3,7 @@ import Combine
 import Security
 import AppKit
 import AVFoundation
+import CoreGraphics
 import Darwin
 
 typealias Object = [String: Any]
@@ -96,6 +97,10 @@ struct PreferencesSaveProgress {
         }
     }
     @Published var sessions: [Record] = []
+    @Published var searchResults: [Record] = []
+    @Published var searchIndex: Object = [:]
+    @Published var searchLoading = false
+    private var searchRequest: String?
     @Published var selectedID: String?
     @Published var detail: Object = [:] {
         didSet {
@@ -186,9 +191,9 @@ struct PreferencesSaveProgress {
         if action == "resume", selectedID == sessionID {
             let previous = text(detail["transcript_provider"])
             if previous == "local-ollama" { engine = "ollama" }
-            else if previous == "deepgram" { engine = "deepgram" }
+            else if ["deepgram","assemblyai"].contains(previous) { engine = previous }
         }
-        guard ["deepgram","ollama"].contains(engine) else { return nil }
+        guard ["deepgram","assemblyai","ollama"].contains(engine) else { return nil }
         return ["action":action,"session_id":sessionID,"model":engine,
                 "language":settings["language"] ?? "auto","language_hints":settings["language_hints"] ?? ["en","vi"]]
     }
@@ -215,10 +220,46 @@ struct PreferencesSaveProgress {
         if pending >= 2000 { return String(format:"Awaiting confirmed text · %.1f s of audio pending",pending/1000) }
         return "Live transcription connected"
     }
+    @Published var meetingAudioPermissionGranted = false
+    var meetingAudioPermissionLabel:String { meetingAudioPermissionGranted ? "Allowed" : "Allow meeting apps & browsers" }
+    func refreshMeetingAudioPermission() {
+        meetingAudioPermissionGranted = CGPreflightScreenCaptureAccess()
+    }
+    func requestMeetingAudioAccess() {
+        guard connected, !busy else { return }
+        refreshMeetingAudioPermission()
+        guard !meetingAudioPermissionGranted else { return }
+        let granted = CGRequestScreenCaptureAccess()
+        refreshMeetingAudioPermission()
+        captureAccessReady = nil
+        captureAccessMessage = granted ? "Checking meeting-audio access…" : "Allow ScribeLoop in Screen & System Audio Recording, then return and check again. macOS may require an app restart."
+        if granted {
+            send(["action":"check_capture_access"])
+        } else if let url = URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    var transcriptionReady: Bool {
+        text(settings["transcription_engine"]) == "ollama"
+            ? settings["local_transcription_configured"] as? Bool == true
+            : transcription["configured"] as? Bool == true
+    }
+    var wantsNotes: Bool { settings["automatic_notes"] as? Bool ?? true }
+    var notesReady: Bool { wantsNotes && summaryProvider["configured"] as? Bool == true }
+    var microphoneReady: Bool { text(discovery["permission"]) == "authorized" }
+    var audioDestination: String { text(settings["transcription_engine"]) == "ollama" ? "On this Mac" : text(settings["transcription_engine"]) == "assemblyai" ? "AssemblyAI · Cloud" : "Deepgram · Cloud" }
+    var notesDestination: String { notesReady ? "\(text(summaryProvider["provider"])) · \(["Ollama","LM Studio"].contains(text(summaryProvider["provider"])) ? "On this Mac" : "Cloud")" : wantsNotes ? "Needs setup" : "Off · transcript only" }
+    var cleanupDestination: String {
+        guard settings["local_transcript_cleanup"] as? Bool == true else { return "Off" }
+        guard settings["local_cleanup_configured"] as? Bool == true else { return "Needs setup · currently skipped" }
+        let provider = text(settings["local_cleanup_provider"])
+        return "\(provider) · \(["Ollama","LM Studio"].contains(provider) ? "On this Mac" : "Cloud")"
+    }
+    @Published var captureAccessReady: Bool? = nil
     var monitorLabel: String {
         guard connected else { return state }
         switch text(discovery["status"]) {
-        case "available": return "Watching for calls"
+        case "available": return transcriptionReady && microphoneReady ? "Detection on · Ready to record" : "Detection on · Setup needed"
         case "paused": return "Detection paused"
         default: return "Detection unavailable"
         }
@@ -237,6 +278,8 @@ struct PreferencesSaveProgress {
     }
     func start() {
         guard !running else { return }
+        captureAccessReady = nil; captureAccessMessage = nil
+        refreshMeetingAudioPermission()
         clearConnection(); port = nil; buffer = Data(); boot = ""; stopping = false
         sessions = []; detail = [:]; partials = [:]; streamingProgress = [:]; activeID = nil; processingID = nil; summaryID = nil; selectedID = nil
         for id in mutationIDs { requests[id] = "unknown" }
@@ -400,6 +443,9 @@ struct PreferencesSaveProgress {
             if id == pageRequest && ["rejected","unknown"].contains(status) {
                 navigationPending = false; refreshAfterPage = false
             }
+            if id == searchRequest && ["rejected","unknown"].contains(status) {
+                searchLoading = false
+            }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
@@ -407,6 +453,11 @@ struct PreferencesSaveProgress {
             let page = objects(v["sessions"])
             for row in page { if !sessions.contains(where: { $0.id == row.id }) { sessions.append(row) } }
             nextCursor = v["next_cursor"] as? [Any]
+        case "search_results":
+            guard text(v["response_to"]) == searchRequest else { return }
+            searchResults = objects(v["results"])
+            searchIndex = v["index"] as? Object ?? [:]
+            searchLoading = false
         case "meeting_page":
             guard text((v["session"] as? Object)?["id"]) == selectedID,
                 text(v["response_to"]) == pageRequest else { return }
@@ -509,6 +560,7 @@ struct PreferencesSaveProgress {
         case "people": people = objects(v["people"]); nextPeopleOffset = v["next_offset"] as? Int
         case "auto_call_status": applyCallStatus(v)
         case "capture_access":
+            captureAccessReady = v["ok"] as? Bool == true && v["output_access"] as? Bool == true
             if v["ok"] as? Bool == true {
                 captureAccessMessage = "Meeting-audio access: \(v["output_access"] as? Bool == true ? "allowed" : "unavailable"). Microphone: \(text(v["microphone"])). Display: \(v["display_available"] as? Bool == true ? "available" : "unavailable"). No audio was recorded."
             } else {
@@ -547,6 +599,19 @@ struct PreferencesSaveProgress {
         else { sessions.insert(row,at:0) }
     }
     func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1) }
+    func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
+                dateFrom:Int? = nil, dateTo:Int? = nil) {
+        let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchLoading=false; return }
+        var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
+        if let meetingID { command["meeting_id"]=meetingID }
+        if let personID { command["person_id"]=personID }
+        if let dateFrom { command["date_from"]=dateFrom }
+        if let dateTo { command["date_to"]=dateTo }
+        searchLoading=true
+        searchRequest=send(command)
+        if searchRequest == nil { searchLoading=false }
+    }
     func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }
         if !scroll && navigationPending { refreshAfterPage = true; return }
@@ -625,7 +690,7 @@ struct PreferencesSaveProgress {
         var command: Object
         if let candidate {
             command = ["action":"accept_call","candidate_id":candidate.id,"app_id":candidate.text("app_id"),
-                "automatic_summary":summaryProvider["configured"] as? Bool == true,
+                "automatic_summary":notesReady,
                 "summary_provider":text(summaryProvider["provider"]),"summary_model":text(summaryProvider["model"]),
                 "summary_endpoint":text(summaryProvider["endpoint"])]
         } else {

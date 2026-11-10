@@ -56,7 +56,7 @@ class DiscoveryService:
 
     async def start(self):
         await self.refresh()
-        if self._has_providers:
+        if self._has_providers and self.enabled:
             self._task = asyncio.create_task(self._run())
 
     async def set_enabled(self, enabled):
@@ -116,7 +116,7 @@ class DiscoveryService:
             await self._load_devices()
             try:
                 await self._load_apps()
-                if self._observer is not None:
+                if self.enabled and self._observer is not None:
                     snapshot = await asyncio.to_thread(self._observer.snapshot)
                     self._detector.update(snapshot)
                     self._observed_at = snapshot.observed_at

@@ -25,16 +25,11 @@ def reset_local_capture_permission(app, *, fixture=False):
     """Refresh this Mac's grant after replacing its canonical ad-hoc app."""
     if fixture or Path(app).resolve() != APP.resolve():
         return False
-    # Routine rebuilds must not discard local TCC grants. Only an explicit
-    # build-side opt-in replaces the canonical ad-hoc identity's approvals.
-    if os.environ.get('SCRIBELOOP_RESET_TCC') != '1':
-        return False
-    # Never reset All, another app, Microphone, or the user's Keychain grants.
-    # A reset requires fresh local approval; it does not grant access.
-    # Calendar is Apple's tccutil service name for EventKit event access.
-    for service in ('ScreenCapture', 'Calendar'):
+    # Requested development behavior: ad-hoc rebuilds must ask for fresh capture
+    # grants. Never clear another app, Keychain, calendar or all system grants.
+    for service in ('ScreenCapture', 'Microphone'):
         run('/usr/bin/tccutil', 'reset', service, 'ai.scribeloop.desktop')
-    print('ScribeLoop Screen Recording and Calendar permissions reset. Approve access locally for this build when needed.')
+    print('ScribeLoop microphone and meeting-audio permissions reset. Approve access locally for this build when needed.')
     return True
 
 
@@ -107,7 +102,7 @@ def main(*, app=APP, fixture=False):
         plistlib.dump({'CFBundleExecutable': 'ScribeLoop', 'CFBundleName': 'ScribeLoop Preview' if fixture else 'ScribeLoop',
             'CFBundleIdentifier': 'ai.scribeloop.desktop.preview' if fixture else 'ai.scribeloop.desktop', 'CFBundlePackageType': 'APPL',
             'CFBundleIconFile': 'ScribeLoop.icns',
-            'CFBundleShortVersionString': '0.1.45', 'CFBundleVersion': '46',
+            'CFBundleShortVersionString': '0.1.50', 'CFBundleVersion': '51',
             'LSMinimumSystemVersion': MINIMUM_MACOS, 'NSHighResolutionCapable': True,
             'NSMicrophoneUsageDescription': 'Record your microphone only when you choose Record for a conversation.',
             'NSAudioCaptureUsageDescription': 'Record selected meeting audio only when you choose Record.',

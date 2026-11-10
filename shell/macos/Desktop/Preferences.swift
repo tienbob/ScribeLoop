@@ -7,7 +7,10 @@ struct Preferences: View {
     @ObservedObject var calendar:CalendarCoordinator
     var initialPage = "Recording"
     @Environment(\.dismiss) private var dismiss
+    @State private var automaticNotes = true
     @State private var summaryKey = ""
+    @State private var assemblyKey = ""
+    @State private var removeAssemblyKey = false
     @State private var transcriptionKey = ""
     @State private var removeTranscriptionKey = false
     private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey, localModel, cleanupEndpoint, cleanupModel, cleanupKey }
@@ -63,9 +66,10 @@ struct Preferences: View {
     private var savedSummaryModels: [String:String] { core.settings["summary_models"] as? [String:String] ?? [:] }
     private var cleanupIsCloud: Bool { cleanupProvider != "Ollama" && cleanupProvider != "LM Studio" }
     private var localSummary: Bool { provider == "Ollama" || provider == "LM Studio" }
+    private let assemblyLanguages = Set("af ar yue ca da nl en et fi fr gl de he hi it ja ko zh mr no nn fa pt ro ru es sv tr ur vi xh zu".split(separator:" ").map(String.init))
     private var languageChoices: [(String,String)] {
         let names = core.settings["supported_language_hints"] as? [String:String] ?? ["en":"English","vi":"Tiếng Việt"]
-        return names.map { ($0.key,$0.value) }.filter {
+        return names.filter { transcriptionEngine != "assemblyai" || assemblyLanguages.contains($0.key) }.map { ($0.key,$0.value) }.filter {
             languageSearch.isEmpty || ($0.0 + " " + $0.1 + ($0.0 == "vi" ? " Vietnamese" : "")).localizedCaseInsensitiveContains(languageSearch)
         }.sorted {
             let left = $0.0 == "en" ? 0 : $0.0 == "vi" ? 1 : 2
@@ -73,8 +77,8 @@ struct Preferences: View {
             return left == right ? $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending : left < right
         }
     }
-    private var valuesSignature: String { [endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate)].joined(separator:"\u{001f}") }
-    private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !cleanupKey.isEmpty || removeTranscriptionKey }
+    private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate)].joined(separator:"\u{001f}") }
+    private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
     private var keyPreview: String {
         guard let preview = savedKeyPreviews[provider] else { return "" }
@@ -128,10 +132,10 @@ struct Preferences: View {
                 if page == "Account" {
                 Section("Account and plan") {
                     if core.account["configured"] as? Bool != true {
-                        Text("Google sign-in is awaiting account-service setup.").foregroundStyle(.secondary)
+                        Text("Optional sign-in is not available in this build.").foregroundStyle(.secondary)
                         Button("Sign in with Google") { core.send(["action":"account_sign_in"]) }
                             .disabled(true).help("The account-service address and verification key must be configured first.")
-                        Text("Your current internal workspace remains available.").font(.caption).foregroundStyle(.secondary)
+                        Text("No account is needed to record and use your notebook.").font(.caption).foregroundStyle(.secondary)
                     } else if text(core.account["phase"]) == "signing_in" {
                         HStack { ProgressView().controlSize(.small); Text("Finish Google sign-in in your browser.") }
                         Button("Cancel sign-in") { core.send(["action":"account_cancel"]) }.disabled(core.busy)
@@ -166,29 +170,56 @@ struct Preferences: View {
                 Section("Transcription") {
                     Picker("Engine",selection:$transcriptionEngine) {
                         Text("Deepgram · Cloud").tag("deepgram")
+                        Text("AssemblyAI · Cloud").tag("assemblyai")
                         Text("Ollama · Local").tag("ollama")
                     }
                     .accessibilityLabel("Transcription engine")
-                    .onChange(of:transcriptionEngine) { _ in saveError = nil }
+                    .onChange(of:transcriptionEngine) { engine in
+                        saveError = nil
+                        if engine == "assemblyai" {
+                            selectedLanguages = selectedLanguages.intersection(assemblyLanguages)
+                            if selectedLanguages.isEmpty { selectedLanguages = ["en","vi"] }
+                        }
+                    }
                     if transcriptionEngine == "deepgram" {
                         VStack(alignment:.leading,spacing:8) {
                             HStack {
                                 Text("Your Deepgram API key").font(.callout).foregroundStyle(.secondary)
                                 Spacer()
-                                if core.settings["transcription_configured"] as? Bool == true && !removeTranscriptionKey {
+                                if core.settings["deepgram_configured"] as? Bool == true && !removeTranscriptionKey {
                                     Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
                                 }
                             }
-                            SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["transcription_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
+                            SecureField("Deepgram API key",text:$transcriptionKey,prompt:Text(core.settings["deepgram_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your Deepgram API key"))
                                 .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(nil).autocorrectionDisabled(true)
                                 .focused($focusedField,equals:.transcriptionKey)
                                 .accessibilityLabel("Deepgram API key")
                                 .disabled(removeTranscriptionKey)
                         }.padding(.vertical,4)
-                        if core.settings["transcription_configured"] as? Bool == true {
+                        if core.settings["deepgram_configured"] as? Bool == true {
                             Toggle("Remove saved transcription key",isOn:$removeTranscriptionKey)
                         }
                         Text("Stored in Keychain. Audio is sent to Deepgram; recording and transcription reruns are billed to your API account.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if transcriptionEngine == "assemblyai" {
+                        VStack(alignment:.leading,spacing:8) {
+                            HStack {
+                                Text("Your AssemblyAI API key").font(.callout).foregroundStyle(.secondary)
+                                Spacer()
+                                if core.settings["assemblyai_configured"] as? Bool == true && !removeAssemblyKey {
+                                    Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
+                                }
+                            }
+                            SecureField("AssemblyAI API key",text:$assemblyKey,prompt:Text(core.settings["assemblyai_configured"] as? Bool == true ? "Enter a new key to replace the saved key" : "Enter your AssemblyAI API key"))
+                                .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large).textContentType(nil).autocorrectionDisabled(true)
+                                .focused($focusedField,equals:.transcriptionKey)
+                                .accessibilityLabel("AssemblyAI API key")
+                                .disabled(removeAssemblyKey)
+                        }.padding(.vertical,4)
+                        if core.settings["assemblyai_configured"] as? Bool == true {
+                            Toggle("Remove saved transcription key",isOn:$removeAssemblyKey)
+                        }
+                        Text("Stored in Keychain. Audio is sent to AssemblyAI; recording and transcription reruns are billed to your API account.").font(.caption).foregroundStyle(.secondary)
                     }
                     if transcriptionEngine == "ollama" {
                         VStack(alignment:.leading,spacing:8) {
@@ -245,6 +276,8 @@ struct Preferences: View {
                 }
                 }
                 Section("Conversation notes") {
+                    Toggle("Generate notes after recording",isOn:$automaticNotes)
+                    Text("Turn off for transcript-only recordings. You can generate notes later after configuring a notes provider.").font(.caption).foregroundStyle(.secondary)
                     Picker("Provider",selection:Binding(get:{provider},set:selectProvider)) {
                         Text("OpenAI · Cloud").tag("OpenAI")
                         Text("Gemini · Cloud").tag("Gemini")
@@ -295,7 +328,7 @@ struct Preferences: View {
                     }.padding(.vertical,4)
                 }
                 Section("Transcript cleanup") {
-                    Toggle("Clean up transcript locally",isOn:$localTranscriptCleanup)
+                    Toggle("Improve transcript wording",isOn:$localTranscriptCleanup)
                     if localTranscriptCleanup {
                         Picker("Provider",selection:$cleanupProvider) {
                             Text("OpenAI · Cloud").tag("OpenAI")
@@ -386,6 +419,40 @@ struct Preferences: View {
                 }
                 }
                 if page == "Recording" {
+                Section("Permissions and call detection") {
+                    HStack(spacing:12) {
+                        Image(systemName:"mic").font(.title3).foregroundStyle(ScribeTheme.accent).frame(width:24)
+                        VStack(alignment:.leading,spacing:4) {
+                            Text("Microphone").font(.callout.weight(.medium))
+                            Text(text(core.discovery["permission"]) == "authorized" ? "Ready to record your voice" : "Allow access to record your voice").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(text(core.discovery["permission"]) == "authorized" ? "Allowed" : "Allow access") { core.send(["action":"microphone_permission"]) }
+                            .disabled(!core.connected || core.busy || text(core.discovery["permission"]) == "authorized")
+                    }.padding(.vertical,5)
+                    HStack(spacing:12) {
+                        Image(systemName:"speaker.wave.2").font(.title3).foregroundStyle(ScribeTheme.accent).frame(width:24)
+                        VStack(alignment:.leading,spacing:4) {
+                            Text("Meeting audio").font(.callout.weight(.medium))
+                            Text("Teams, Slack, Zoom and browser calls · Screen & System Audio Recording").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button(core.meetingAudioPermissionLabel) { core.requestMeetingAudioAccess() }.disabled(!core.connected || core.busy || core.meetingAudioPermissionGranted)
+                    }.padding(.vertical,5)
+                    Button("Check capture access without recording") {
+                        core.captureAccessMessage = "Checking access without recording…"
+                        if core.send(["action":"check_capture_access"]) == nil { core.captureAccessMessage = core.message }
+                    }
+                        .disabled(!core.connected || core.busy)
+                    if let result = core.captureAccessMessage { Text(result).font(.caption).foregroundStyle(.secondary) }
+                    Toggle(isOn:$detectionDraft) {
+                        Label("Detect calls automatically",systemImage:"phone.badge.waveform")
+                    }.toggleStyle(.switch).disabled(!core.connected || core.busy)
+                    Toggle("Stop after meeting app releases microphone",isOn:$stopOnMicrophoneRelease)
+                    Text("Stops after 60 seconds without the meeting app’s microphone activity. Muted calls can trigger this too; choose Keep recording during the countdown to continue. Applies only to meeting-app capture.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Open ScribeLoop at login",isOn:$login)
+                    if !loginStatus.isEmpty { Text(loginStatus).font(.caption) }
+                }
                 Section("Recording preferences") {
                     Picker("Maximum duration",selection:$duration) { Text(transcriptionEngine == "ollama" ? "5 minutes" : "5 minutes · $0.25 audio cap").tag(300); Text(transcriptionEngine == "ollama" ? "1 hour" : "1 hour · $3 audio cap").tag(3600); Text(transcriptionEngine == "ollama" ? "3 hours" : "3 hours · $8 audio cap").tag(10800) }
                     VStack(alignment:.leading,spacing:10) {
@@ -413,41 +480,7 @@ struct Preferences: View {
                         if languageChoices.isEmpty { Text("No matching languages").font(.caption).foregroundStyle(.secondary) }
                         Button("Reset to English and Vietnamese") { selectedLanguages = ["en","vi"]; languageSearch = "" }
                     }
-                    Text(transcriptionEngine == "ollama" ? "These hints apply to Deepgram. Ollama detects the spoken language using your selected local model." : "Choose the languages you expect to hear. Deepgram uses them as hints; accuracy can vary. Keep at least one selected.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Permissions and call detection") {
-                    HStack(spacing:12) {
-                        Image(systemName:"mic").font(.title3).foregroundStyle(ScribeTheme.accent).frame(width:24)
-                        VStack(alignment:.leading,spacing:4) {
-                            Text("Microphone").font(.callout.weight(.medium))
-                            Text(text(core.discovery["permission"]) == "authorized" ? "Ready to record your voice" : "Allow access to record your voice").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button(text(core.discovery["permission"]) == "authorized" ? "Allowed" : "Allow access") { core.send(["action":"microphone_permission"]) }
-                            .disabled(!core.connected || core.busy || text(core.discovery["permission"]) == "authorized")
-                    }.padding(.vertical,5)
-                    HStack(spacing:12) {
-                        Image(systemName:"speaker.wave.2").font(.title3).foregroundStyle(ScribeTheme.accent).frame(width:24)
-                        VStack(alignment:.leading,spacing:4) {
-                            Text("Meeting audio").font(.callout.weight(.medium))
-                            Text("Capture sound from call apps and browsers").font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Open settings") { if let url = URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") { NSWorkspace.shared.open(url) } }
-                    }.padding(.vertical,5)
-                    Button("Check capture access without recording") {
-                        core.captureAccessMessage = "Checking access without recording…"
-                        if core.send(["action":"check_capture_access"]) == nil { core.captureAccessMessage = core.message }
-                    }
-                        .disabled(!core.connected || core.busy)
-                    if let result = core.captureAccessMessage { Text(result).font(.caption).foregroundStyle(.secondary) }
-                    Toggle(isOn:$detectionDraft) {
-                        Label("Detect calls automatically",systemImage:"phone.badge.waveform")
-                    }.toggleStyle(.switch).disabled(!core.connected || core.busy)
-                    Toggle("Stop after meeting app releases microphone",isOn:$stopOnMicrophoneRelease)
-                    Text("Stops after 60 seconds without the meeting app’s microphone activity. Muted calls can trigger this too; choose Keep recording during the countdown to continue. Applies only to meeting-app capture.").font(.caption).foregroundStyle(.secondary)
-                    Toggle("Open ScribeLoop at login",isOn:$login)
-                    if !loginStatus.isEmpty { Text(loginStatus).font(.caption) }
+                    Text(transcriptionEngine == "ollama" ? "These hints apply to cloud transcription. Ollama detects the spoken language using your selected local model." : "Choose the languages you expect to hear. The cloud provider uses them as hints; accuracy can vary. Keep at least one selected.").font(.caption).foregroundStyle(.secondary)
                 }
                 }
             }.formStyle(.grouped).id(page).disabled(applying)
@@ -458,6 +491,8 @@ struct Preferences: View {
             page = initialPage
             endpoint = text(core.settings["summary_endpoint"])
             model = text(core.settings["summary_model"])
+            automaticNotes = core.settings["automatic_notes"] as? Bool ?? true
+            core.refreshMeetingAudioPermission()
             provider = text(core.settings["summary_provider"])
             instructions = text(core.settings["summary_instructions"])
             if instructions.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { instructions = defaultInstructions }
@@ -473,7 +508,7 @@ struct Preferences: View {
             asrMicrophoneSource = core.settings["asr_microphone_source"] as? String ?? "processed"
             finalTranscription = core.settings["final_transcription"] as? Bool ?? false
             transcriptionEngine = text(core.settings["transcription_engine"])
-            if transcriptionEngine != "ollama" { transcriptionEngine = "deepgram" }
+            if !["deepgram","assemblyai","ollama"].contains(transcriptionEngine) { transcriptionEngine = "deepgram" }
             localModel = text(core.settings["local_transcription_model"])
             if localModel.isEmpty { localModel = "gemma4:e2b" }
             localSpeakerLabels = core.settings["local_speaker_labels"] as? Bool ?? false
@@ -493,14 +528,14 @@ struct Preferences: View {
             saveProgress.initialValues = valuesSignature
             saveProgress.initialDetection = core.detection; detectionDraft = saveProgress.initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
-            summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
+            summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
             loginStatus = SMAppService.mainApp.status == .requiresApproval ? "Approve ScribeLoop in Login Items settings." : ""
         }.onChange(of:core.requests[pendingSave ?? ""]) { status in
             guard pendingSave != nil else { return }
             if status == "accepted" {
                 let action = text(pendingSaveCommand?["action"])
                 saveProgress.accept(action:action,values:valuesSignature,detection:detectionDraft)
-                if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false }
+                if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; removeTranscriptionKey = false }
                 pendingSave = nil; pendingSaveCommand = nil; saveNext()
             }
             else if status == "rejected" || status == "unknown" {
@@ -509,7 +544,8 @@ struct Preferences: View {
             }
         }.interactiveDismissDisabled(applying)
         .onChange(of:core.accepted) { accepted in if !accepted { cancel() } }
-        .onDisappear { summaryKey = ""; transcriptionKey = ""; cleanupKey = "" }
+        .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)) { _ in core.refreshMeetingAudioPermission() }
+        .onDisappear { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = "" }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
@@ -522,7 +558,7 @@ struct Preferences: View {
     }
     private func cancel() {
         guard !applying else { return }
-        focusedField = nil; summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; dismiss()
+        focusedField = nil; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; dismiss()
     }
     private func finish() {
         focusedField = nil
@@ -544,6 +580,7 @@ struct Preferences: View {
             value["vocabulary"] = vocabularyTerms
             value["asr_microphone_source"] = asrMicrophoneSource
             value["final_transcription"] = finalTranscription
+            value["automatic_notes"] = automaticNotes
             value["transcription_engine"] = transcriptionEngine
             value["local_transcription_model"] = localModel.trimmingCharacters(in:.whitespacesAndNewlines)
             value["local_speaker_labels"] = localSpeakerLabels
@@ -553,6 +590,8 @@ struct Preferences: View {
             value["local_cleanup_endpoint"] = cleanupEndpoint.trimmingCharacters(in:.whitespacesAndNewlines)
             value["local_cleanup_validate"] = cleanupValidate
             if !cleanupKey.isEmpty { value["local_cleanup_key"] = cleanupKey }
+            if removeAssemblyKey { value["assemblyai_key"] = "" }
+            else if !assemblyKey.isEmpty { value["assemblyai_key"] = assemblyKey }
             if removeTranscriptionKey { value["deepgram_key"] = "" }
             else if !transcriptionKey.isEmpty { value["deepgram_key"] = transcriptionKey }
             saveCommands.append(["action":"save_settings","settings":value])
@@ -579,12 +618,12 @@ struct Preferences: View {
             } catch {
                 applying = false
                 saveProgress.initialValues = valuesSignature; saveProgress.initialDetection = detectionDraft
-                summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; removeTranscriptionKey = false
+                summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; removeTranscriptionKey = false
                 saveError = "Other settings were saved, but the login setting could not be changed. Check System Settings → Login Items."
                 return
             }
         }
-        applying = false; summaryKey = ""; transcriptionKey = ""; cleanupKey = ""; dismiss()
+        applying = false; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; dismiss()
     }
 }
 
@@ -594,6 +633,8 @@ struct AudioView: View {
     @State private var rerunCommand:Object?
     var audio: Object { core.detail["audio"] as? Object ?? [:] }
     var available: Bool { audio["available"] as? Bool == true }
+    private var cloudProvider:String { text(core.settings["transcription_engine"]) == "assemblyai" ? "AssemblyAI" : "Deepgram" }
+    private var reviewedCloudProvider:String { text(rerunCommand?["model"]) == "assemblyai" ? "AssemblyAI" : "Deepgram" }
     private var localTranscription:Bool { text(core.settings["transcription_engine"]) == "ollama" }
     private var reviewedLocalTranscription:Bool { text(rerunCommand?["model"]) == "ollama" }
     var body: some View {
@@ -612,7 +653,7 @@ struct AudioView: View {
                 } else { Label("Audio is unavailable or expired. Transcript and notes are preserved.",systemImage:"waveform.slash").foregroundStyle(.secondary) }
                 VStack(alignment:.leading,spacing:10) {
                     Label("Transcribe again",systemImage:"arrow.clockwise").font(.headline)
-                    Text(localTranscription ? "Transcribe the saved recording on this Mac with Ollama. Your current transcript stays available until the new version is ready." : "Send the saved recording to Deepgram. Your current transcript stays available until the new version is ready. Your provider bills your API account.").font(.callout).foregroundStyle(.secondary)
+                    Text(localTranscription ? "Transcribe the saved recording on this Mac with Ollama. Your current transcript stays available until the new version is ready." : "Send the saved recording to \(cloudProvider). Your current transcript stays available until the new version is ready. Your provider bills your API account.").font(.callout).foregroundStyle(.secondary)
                     Button("Transcribe again…") {
                         guard let id = core.selectedID, let command = core.savedTranscriptionCommand(action:"reprocess",sessionID:id) else {
                             core.message = "Choose a transcription engine in Preferences first."; return
@@ -623,8 +664,8 @@ struct AudioView: View {
             }.padding(28).frame(maxWidth:850,alignment:.leading)
         }
         .onDisappear { core.stopAudio() }
-        .confirmationDialog(reviewedLocalTranscription ? "Transcribe again on this Mac with Ollama?" : "Send this saved audio to Deepgram?",isPresented:$rerun,titleVisibility:.visible) {
-            Button(reviewedLocalTranscription ? "Transcribe locally" : "Upload to Deepgram") {
+        .confirmationDialog(reviewedLocalTranscription ? "Transcribe again on this Mac with Ollama?" : "Send this saved audio to \(reviewedCloudProvider)?",isPresented:$rerun,titleVisibility:.visible) {
+            Button(reviewedLocalTranscription ? "Transcribe locally" : "Upload to \(reviewedCloudProvider)") {
                 core.stopAudio()
                 if let command = rerunCommand { core.send(command) }
             }

@@ -117,6 +117,14 @@ struct ScribeLoopApp: App {
         Window("ScribeLoop",id:"notebook") {
             Notebook(core:core,calendar:calendar).onAppear { delegate.core = core; core.onCandidate = { [weak controller = delegate] row in controller?.showCall(row) }; if !core.running { core.start() } }
         }.defaultSize(width:1160,height:780)
+        .commands {
+            CommandGroup(after:.help) {
+                Button("Review setup…") {
+                    openWindow(id:"notebook"); NSApp.activate(ignoringOtherApps:true)
+                    NotificationCenter.default.post(name:Notification.Name("ScribeLoopReviewSetup"),object:nil)
+                }.disabled(!core.connected || core.busy)
+            }
+        }
         MenuBarExtra {
             Text(core.activeID == nil ? (core.summaryID == nil ? core.monitorLabel : "Preparing notes") : "Recording · microphone and selected source")
             if core.activeID != nil { Button("Stop recording",role:.destructive) { core.stopRecording() } }
@@ -164,6 +172,8 @@ private struct TranscriptJumpButton: View {
 struct Notebook: View {
     @ObservedObject var core: DesktopClient
     @ObservedObject var calendar:CalendarCoordinator
+    @AppStorage("firstUseSetupCompleted") private var setupCompleted = false
+    @State private var showSetup = false
     @State private var showCalendar = false
     @State private var calendarConversation:Record?
     @State private var emailSharing:EmailSharingContext?
@@ -173,6 +183,7 @@ struct Notebook: View {
     @State private var preferencesRequest:SettingsDestination?
     @State private var calendarSettingsRequested = false
     @State private var showPeople = false
+    @State private var showSearch = false
     @State private var tab = "Notes"
     @State private var confirmed: String?
     @State private var renaming: Record?
@@ -192,6 +203,8 @@ struct Notebook: View {
                 Button { candidate = nil; retryCapture = nil; recording = true } label: { Label("New recording",systemImage:"plus").frame(maxWidth:.infinity).padding(.vertical,5) }.buttonStyle(.borderedProminent).tint(ScribeTheme.action)
                     .disabled(!core.accepted || !core.connected || core.busy)
                 Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
+                Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
+                    .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
@@ -281,7 +294,11 @@ struct Notebook: View {
                 if core.processingID != nil {
                     HStack { ProgressView().controlSize(.small); Text(core.processingLabel); Spacer(); Text("Your saved transcript stays available.").foregroundStyle(.secondary) }.font(.callout).padding(18).background(ScribeTheme.subtle)
                 }
-                if let selected = core.selected {
+                if core.connected && core.accepted && (showSetup || (core.sessions.isEmpty && !setupCompleted)) {
+                    FirstUseSetup(core:core,openSettings:{ preferencesRequest = SettingsDestination(id:$0) },
+                        testRecording:{ candidate = nil; retryCapture = nil; recording = true },
+                        finish:{ setupCompleted = true; showSetup = false })
+                } else if let selected = core.selected {
                     VStack(alignment:.leading,spacing:18) {
                         HStack(alignment:.top,spacing:20) {
                             VStack(alignment:.leading,spacing:12) {
@@ -330,6 +347,8 @@ struct Notebook: View {
                     if tab == "Transcript" { transcript }
                     else if tab == "Audio" { AudioView(core:core) }
                     else { notes }
+                } else if core.connected && !core.accepted {
+                    Spacer()
                 } else {
                     Spacer()
                     ScribeMark(size:86).padding(.bottom,10)
@@ -345,6 +364,12 @@ struct Notebook: View {
         .foregroundStyle(.primary)
         .tint(ScribeTheme.accent)
         .background(InteractiveWindowActivation())
+        .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)) { _ in core.refreshMeetingAudioPermission() }
+        .onReceive(NotificationCenter.default.publisher(for:Notification.Name("ScribeLoopOpenSettings"))) { _ in
+            NSApp.activate(ignoringOtherApps:true)
+            preferencesRequest = SettingsDestination(id:"Models")
+        }
+        .onReceive(NotificationCenter.default.publisher(for:Notification.Name("ScribeLoopReviewSetup"))) { _ in showSetup = true }
         .onChange(of:core.selectedID) { value in if let value { core.select(value) } }
         .sheet(isPresented:$showCalendar,onDismiss:{
             if calendarSettingsRequested { calendarSettingsRequested = false; preferencesRequest = SettingsDestination(id:"Calendar") }
@@ -353,6 +378,17 @@ struct Notebook: View {
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate,initialCapture:retryCapture) }
         .sheet(item:$preferencesRequest) { destination in Preferences(core:core,calendar:calendar,initialPage:destination.id).frame(width:650,height:720) }
         .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
+        .sheet(isPresented:$showSearch) {
+            MeetingSearchView(core:core) { result in
+                showSearch=false
+                core.select(result.text("session_id"))
+                if result.text("source_type") == "summary" { tab="Notes" }
+                else if result.text("source_type") == "transcript" {
+                    tab="Transcript"
+                    core.loadPage(0,anchor:result.text("source_id"))
+                }
+            }.frame(width:760,height:620)
+        }
         .sheet(item:$renaming) { row in RenameConversation(core:core,conversation:row) }
         .alert("Delete this conversation permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
             Button("Cancel",role:.cancel) { confirmed = nil }
@@ -363,9 +399,12 @@ struct Notebook: View {
         VStack(alignment:.leading,spacing:12) {
             Text("Before your first recording").font(.title2)
             Text("Record only with permission from everyone captured. You choose Record / Not now for each call. Browser recording captures all tabs in that browser.")
-            Text("Audio streams to Deepgram; transcript text and speaker labels go to your configured summary endpoint (OpenAI by default). Provider charges apply. Longer meetings use section notes and a final summary, limited to 128 requests and 8 MB of request text per meeting across retries, with up to 4,000 output tokens per request. Recording presets cap estimated audio spending.")
-            Text("Saved audio, transcripts and notes are encrypted locally. Unarchived audio expires after 30 days while the app is running and idle. Archive to keep it. Manual reruns upload retained audio again. Exports are readable plaintext. Naming a speaker never enables voice recognition. Use Stop recording to end capture, or quit ScribeLoop to stop pending processing. Saved meetings remain.")
-            Button("Agree and continue") { core.send(["action":"accept_agreement","version":text(core.agreement["version"])]) }.buttonStyle(.borderedProminent)
+            Text("You choose Record or Not now for every call. Cloud transcription sends audio to your selected provider; notes and optional transcript cleanup send text to their configured providers. Provider charges may apply.")
+            Text("Your notebook is encrypted on this Mac. Audio is kept for 30 days unless you archive it. You can stop recording at any time.")
+            DisclosureGroup("Privacy and storage details") {
+                Text("Browser recording includes all tabs in that browser. Unarchived audio expires while the app is running and idle. Reruns upload saved audio again. Exports are readable outside the app. Naming people does not enable voice recognition. Local transcription, cleanup and notes can be configured independently; check each destination in setup.").font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Agree and set up") { core.send(["action":"accept_agreement","version":text(core.agreement["version"])]) }.buttonStyle(.borderedProminent)
         }.font(.callout).padding(24).background(Color.green.opacity(0.06))
     }
     @ViewBuilder private func meetingActions(_ row: Record) -> some View {
@@ -458,6 +497,186 @@ struct Notebook: View {
     }
 }
 
+struct FirstUseSetup: View {
+    @ObservedObject var core:DesktopClient
+    var openSettings:(String)->Void
+    var testRecording:()->Void
+    var finish:()->Void
+    private var notesSettled:Bool { !core.wantsNotes || core.notesReady }
+    private var ready:Bool { core.transcriptionReady && notesSettled && core.microphoneReady }
+    private func status(_ title:String,_ detail:String,ready:Bool) -> some View {
+        HStack(alignment:.top,spacing:12) {
+            Image(systemName:ready ? "checkmark.circle.fill" : "circle").foregroundStyle(ready ? ScribeTheme.accent : .secondary)
+            VStack(alignment:.leading,spacing:4) { Text(title).font(.headline); Text(detail).font(.callout).foregroundStyle(.secondary) }
+            Spacer()
+        }
+    }
+    var body:some View {
+        ScrollView {
+            VStack(alignment:.leading,spacing:22) {
+                Text("Make room for the conversation.").font(.system(size:30,design:.serif))
+                Text("A few choices, then you’re ready. Nothing records until you choose Record.").foregroundStyle(.secondary)
+                VStack(alignment:.leading,spacing:12) {
+                    status("1. Connect transcription",core.transcriptionReady ? core.audioDestination+" · Configuration saved" : "Choose where your audio is transcribed and add your API key.",ready:core.transcriptionReady)
+                    Button(core.transcriptionReady ? "Change transcription…" : "Connect transcription…") { openSettings("Models") }
+                    Text("Saving a key does not verify provider access or credits. No paid API test runs automatically.").font(.caption).foregroundStyle(.secondary)
+                }.notebookCard()
+                VStack(alignment:.leading,spacing:12) {
+                    status("2. Choose your notes",core.notesDestination,ready:notesSettled)
+                    HStack {
+                        Button("Configure notes…") { openSettings("Models") }
+                        if core.wantsNotes {
+                            Button("Use transcript only") { core.send(["action":"save_settings","settings":["automatic_notes":false]]) }.disabled(core.busy)
+                        } else {
+                            Button("Enable automatic notes") { core.send(["action":"save_settings","settings":["automatic_notes":true]]) }.disabled(core.busy)
+                        }
+                    }
+                    Text("Transcript cleanup, calendars and sign-in are optional. Add them later in Settings.").font(.caption).foregroundStyle(.secondary)
+                }.notebookCard()
+                VStack(alignment:.leading,spacing:12) {
+                    status("3. Allow your microphone",core.microphoneReady ? "Ready to record your voice." : "macOS needs your permission to capture your voice.",ready:core.microphoneReady)
+                    if !core.microphoneReady {
+                        Button("Allow microphone") { core.send(["action":"microphone_permission"]) }.disabled(core.busy)
+                        Button("Open microphone settings") { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!) }
+                    }
+                    Divider()
+                    Text("Meeting apps & browsers").font(.headline)
+                    Text("Allow ScribeLoop to hear Teams, Slack, Zoom and browser calls. macOS calls this Screen & System Audio Recording. Microphone-only recording does not need it.").font(.callout).foregroundStyle(.secondary)
+                    Button(core.meetingAudioPermissionLabel) { core.requestMeetingAudioAccess() }.disabled(core.busy || core.meetingAudioPermissionGranted)
+                    Button("Check meeting-audio access again") {
+                        core.captureAccessMessage = "Checking access…"
+                        core.send(["action":"check_capture_access"])
+                    }.disabled(core.busy)
+                    if let result = core.captureAccessMessage { Text(result).font(.caption).foregroundStyle(.secondary) }
+                }.notebookCard()
+                Text("Languages: \(core.transcriptionLanguageLabel)").font(.callout)
+                Button("Change languages or permissions…") { openSettings("Recording") }
+                HStack {
+                    Button("Try a short recording…") { testRecording() }.disabled(!ready || core.busy)
+                    Spacer()
+                    Button("Finish setup") { finish() }.buttonStyle(.borderedProminent).tint(ScribeTheme.action).disabled(!ready || core.busy)
+                }
+                Text(ready ? "The test is optional. Detected calls will offer Record / Not now; you can also start manually." : "Complete transcription, choose notes or transcript-only, and allow the microphone to finish.").font(.caption).foregroundStyle(.secondary)
+            }.padding(30).frame(maxWidth:740,alignment:.leading).frame(maxWidth:.infinity)
+        }
+    }
+}
+
+struct MeetingSearchView: View {
+    @ObservedObject var core:DesktopClient
+    let open:(Record)->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query=""
+    @State private var meetingID=""
+    @State private var personID=""
+    @State private var dateRange=0
+    @State private var debounce:Task<Void,Never>?
+
+    private func runSearch() {
+        let now=Int(Date().timeIntervalSince1970*1000)
+        let from=dateRange == 0 ? nil : now-dateRange*86_400_000
+        core.search(query,meetingID:meetingID.isEmpty ? nil : meetingID,
+                    personID:personID.isEmpty ? nil : personID,dateFrom:from)
+    }
+    private func scheduleSearch() {
+        debounce?.cancel()
+        debounce=Task { @MainActor in
+            try? await Task.sleep(nanoseconds:250_000_000)
+            guard !Task.isCancelled else { return }
+            runSearch()
+        }
+    }
+    var body:some View {
+        VStack(spacing:0) {
+            HStack {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("Search conversations").font(.system(size:24,weight:.semibold,design:.serif))
+                    Text("Titles, current transcripts and current notes · searched privately on this Mac")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(22)
+            Divider()
+            VStack(spacing:12) {
+                HStack {
+                    Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search decisions, names or phrases",text:$query)
+                        .textFieldStyle(.plain).font(.title3)
+                        .onSubmit { runSearch() }
+                        .onChange(of:query) { _ in scheduleSearch() }
+                    if core.searchLoading { ProgressView().controlSize(.small) }
+                    if !query.isEmpty { Button { query=""; core.searchResults=[] } label: { Image(systemName:"xmark.circle.fill") }.buttonStyle(.borderless) }
+                }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                HStack {
+                    Picker("Meeting",selection:$meetingID) {
+                        Text("All meetings").tag("")
+                        ForEach(core.sessions) { row in Text(row.text("title")).tag(row.id) }
+                    }.frame(maxWidth:260)
+                    Picker("Date",selection:$dateRange) {
+                        Text("Any time").tag(0); Text("Past 7 days").tag(7)
+                        Text("Past 30 days").tag(30); Text("Past year").tag(365)
+                    }.frame(maxWidth:180)
+                    Picker("Person",selection:$personID) {
+                        Text("Anyone").tag("")
+                        ForEach(core.people) { row in Text(row.text("canonical_name")).tag(row.id) }
+                    }.frame(maxWidth:220)
+                }.onChange(of:meetingID) { _ in runSearch() }
+                    .onChange(of:dateRange) { _ in runSearch() }
+                    .onChange(of:personID) { _ in runSearch() }
+            }.padding(18)
+            Divider()
+            Group {
+                if query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
+                    searchEmpty("Find a conversation","text.magnifyingglass",
+                                "Try a project name, a decision, or words someone used.")
+                } else if !core.searchLoading && core.searchResults.isEmpty {
+                    searchEmpty("No matches","magnifyingglass",
+                                "Try fewer words or broaden the meeting, date or person filters.")
+                } else {
+                    List(core.searchResults) { result in
+                        Button { open(result) } label: {
+                            VStack(alignment:.leading,spacing:7) {
+                                HStack {
+                                    Text(result.text("title")).font(.headline).lineLimit(1)
+                                    Spacer()
+                                    Text(result.text("source_type").capitalized).font(.caption).foregroundStyle(.secondary)
+                                    if result.int("start_ms") > 0 {
+                                        Text(String(format:"%d:%02d",result.int("start_ms")/60000,result.int("start_ms")/1000%60))
+                                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                    }
+                                }
+                                if !result.text("speaker_name").isEmpty { Text(result.text("speaker_name")).font(.caption).foregroundStyle(ScribeTheme.accent) }
+                                Text(result.text("snippet")).font(.body).lineLimit(3).multilineTextAlignment(.leading)
+                                Text(Date(timeIntervalSince1970:Double(result.int("started_at"))/1000),style:.date)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.padding(.vertical,7).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }.listStyle(.inset)
+                }
+            }.frame(maxWidth:.infinity,maxHeight:.infinity)
+            if !core.searchIndex.isEmpty {
+                Divider()
+                HStack {
+                    let pending=core.searchIndex["pending"] as? Int ?? 0
+                    Label(pending == 0 ? "Index current" : "Indexing · \(pending) meetings remaining",
+                          systemImage:pending == 0 ? "checkmark.circle" : "clock")
+                    Spacer()
+                    Text(text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
+                }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,20).padding(.vertical,10)
+            }
+        }.background(ScribeTheme.canvas)
+        .onAppear { core.send(["action":"people_page"]) }
+        .onDisappear { debounce?.cancel() }
+    }
+    private func searchEmpty(_ title:String,_ icon:String,_ detail:String)->some View {
+        VStack(spacing:10) {
+            Image(systemName:icon).font(.system(size:30)).foregroundStyle(.secondary)
+            Text(title).font(.title3.weight(.semibold))
+            Text(detail).foregroundStyle(.secondary)
+        }.frame(maxWidth:.infinity,maxHeight:.infinity)
+    }
+}
+
 struct RecordingReview: View {
     @ObservedObject var core: DesktopClient
     var candidate: Record?
@@ -469,6 +688,12 @@ struct RecordingReview: View {
     @State private var microphone = "default"
     @State private var pendingRecord: String?
     @State private var recordError: String?
+    private func openModelSettings() {
+        closeReview()
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.35) {
+            NotificationCenter.default.post(name:Notification.Name("ScribeLoopOpenSettings"),object:nil)
+        }
+    }
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
             Text(candidate == nil ? "A new conversation" : "Take notes for this call?").font(.system(size:30,design:.serif))
@@ -478,40 +703,40 @@ struct RecordingReview: View {
                 if scope == "application" { Picker("Application",selection:$app) { Text("Choose an application").tag(""); ForEach(objects(core.discovery["apps"])) { row in Text(row.text("name")).tag(row.id) } } }
             }
             Picker("Microphone",selection:$microphone) { ForEach(objects(core.discovery["microphones"])) { row in Text(row.text("name")).tag(row.id) } }
-            Text("Browser capture includes every tab in the selected browser. Check that everyone captured has agreed to recording.").font(.callout).foregroundStyle(.secondary)
-            VStack(alignment:.leading,spacing:8) {
-                if text(core.settings["transcription_engine"]) == "ollama" {
-                    Label("Ollama · Local transcription after the recording ends",systemImage:"waveform")
-                } else {
-                    Label("Deepgram · Cloud transcription with speaker separation",systemImage:"waveform")
-                }
-                Label("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"])) notes",systemImage:"note.text")
-            }.font(.callout).notebookCard()
-            let duration = core.settings["duration_s"] as? Int ?? 3600
-            let localEngine = text(core.settings["transcription_engine"]) == "ollama"
-            Text(localEngine
-                ? "Limit: \(duration/60) minutes · Languages: \(core.transcriptionLanguageLabel). Transcription and notes run on this Mac after the recording ends; nothing is uploaded or charged."
-                : "Limit: \(duration/60) minutes · estimated audio cap $\(duration == 300 ? "0.25" : duration == 3600 ? "3" : "8"). Provider charges apply. Languages: \(core.transcriptionLanguageLabel)").font(.callout)
-            if localEngine {
-                Text("Transcription starts after you press Stop — there is no live transcript while recording.\(core.settings["local_speaker_labels"] as? Bool == true ? " Anonymous speaker labels are generated locally." : "")").font(.caption).foregroundStyle(.secondary)
-                if core.settings["local_transcription_configured"] as? Bool != true {
-                    Label("Choose an Ollama transcription model in Preferences before recording.",systemImage:"cpu").foregroundStyle(.orange)
-                }
+            if candidate != nil || scope == "application" {
+                Text("Browser capture includes all tabs in the selected browser. Make sure everyone captured agrees to recording.").font(.callout).foregroundStyle(.secondary)
             } else {
-                if core.settings["final_transcription"] as? Bool == true {
-                    Text("Includes an extra billed Deepgram pass after Stop before notes are generated.").font(.caption).foregroundStyle(.secondary)
-                }
-                Text("Microphone transcription: \(core.settings["asr_microphone_source"] as? String == "raw" ? "original audio" : "processed audio") · \((core.settings["vocabulary"] as? [String] ?? []).count) vocabulary hints").font(.caption).foregroundStyle(.secondary)
-                if core.transcription["configured"] as? Bool != true {
-                    Label("Add your Deepgram API key in Preferences before recording.",systemImage:"key").foregroundStyle(.orange)
+                Text("Make sure everyone captured agrees to recording.").font(.callout).foregroundStyle(.secondary)
+            }
+            VStack(alignment:.leading,spacing:8) {
+                Label("Audio · \(core.audioDestination)",systemImage:"waveform")
+                Label("Notes · \(core.notesDestination)",systemImage:"note.text")
+                Label("Transcript cleanup · \(core.cleanupDestination)",systemImage:"text.badge.checkmark")
+            }.font(.callout).notebookCard()
+            if !core.transcriptionReady {
+                Label("Connect a transcription provider to start.",systemImage:"key").foregroundStyle(.orange)
+                Button("Set up transcription…") { openModelSettings() }
+            }
+            if candidate != nil || scope != "microphone" {
+                Button(core.meetingAudioPermissionLabel) { core.requestMeetingAudioAccess() }.disabled(core.busy || core.meetingAudioPermissionGranted)
+                if let result = core.captureAccessMessage { Text(result).font(.caption).foregroundStyle(.secondary) }
+            }
+            if core.wantsNotes && !core.notesReady {
+                Text("Notes are not set up. You can record a transcript now and add notes later.").font(.callout).foregroundStyle(.secondary)
+                Button("Set up notes…") { openModelSettings() }
+            }
+            Text(core.notesReady ? "Press Stop when you’re finished. Notes follow automatically." : "Press Stop when you’re finished. This recording will save a transcript without automatic notes.").font(.callout)
+            DisclosureGroup("Recording details") {
+                Text("Limit: \((core.settings["duration_s"] as? Int ?? 3600)/60) minutes · Languages: \(core.transcriptionLanguageLabel). Cloud provider charges apply to the stages marked Cloud. Live text may take a few seconds to appear.").font(.caption).foregroundStyle(.secondary)
+                if candidate != nil || scope == "application" {
+                    Text("Call-end detection can be affected by mute or other browser tabs. Press Stop if the call has ended; choose Keep recording if prompted during a pause.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text(candidate == nil && scope != "application" ? "Press Stop to end this recording. Notes follow automatically." : (core.settings["stop_on_microphone_release"] as? Bool == true ? "Recording stops after 60 seconds of known app inactivity or after the app releases its microphone. Muted calls may also trigger the countdown; choose Keep recording to continue. Stop is always available." : "Recording stops after 60 seconds of known app inactivity. Other browser tabs can keep audio active; press Stop if the call has ended. Unknown activity keeps recording.")).font(.caption).foregroundStyle(.secondary)
             if let recordError { Label(recordError,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(ScribeTheme.warning) }
             HStack {
                 Button("Not now") { if let candidate { core.send(["action":"dismiss_candidate","candidate_id":candidate.id]) }; closeReview() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(pendingRecord == nil ? "Record & take notes" : "Starting…") {
+                Button(pendingRecord == nil ? (core.notesReady ? "Record & take notes" : "Record transcript only") : "Starting…") {
                     recordError = nil
                     pendingRecord = core.record(scope:scope,app:app.isEmpty ? nil : app,microphone:microphone,candidate:candidate)
                     if pendingRecord == nil { recordError = core.message ?? "Recording could not be requested. Reconnect and try again." }
@@ -525,6 +750,7 @@ struct RecordingReview: View {
             }
         }.padding(32).frame(width:580)
         .onAppear {
+            core.refreshMeetingAudioPermission()
             if let initialCapture {
                 scope = text(initialCapture["scope"])
                 if scope.isEmpty { scope = "microphone" }

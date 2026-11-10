@@ -124,45 +124,73 @@ enum CalendarAccessRoute {
     @Published var truncated = false
     @Published var accessBlocked = false
     @Published var permissionNeedsRequest = false
+    @Published private(set) var accessReady = false
+    var connected:Bool { enabled && accessReady }
+    private let authorization:() -> EKAuthorizationStatus
+    private var activationObserver:NSObjectProtocol?
     private let defaults:UserDefaults
     private let store = EKEventStore()
     private var observer:NSObjectProtocol?
     private lazy var reads = CalendarReadQueue { ids,token in Self.read(ids:ids,now:Date(),cancelled:token) }
     private var generation = UUID()
-    init(defaults:UserDefaults = .standard) {
+    private var requestingAccess = false
+    init(defaults:UserDefaults = .standard,authorization:@escaping () -> EKAuthorizationStatus = { EKEventStore.authorizationStatus(for:.event) }) {
         self.defaults = defaults
+        self.authorization = authorization
         enabled = defaults.bool(forKey:"calendar.enabled")
         selected = Set(defaults.stringArray(forKey:"calendar.selected") ?? [])
+        updateAuthorization()
+        activationObserver = NotificationCenter.default.addObserver(forName:NSApplication.didBecomeActiveNotification,object:nil,queue:.main) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
         observer = NotificationCenter.default.addObserver(forName:.EKEventStoreChanged,object:nil,queue:.main) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
     }
-    deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+    }
     static var canRead:Bool {
         CalendarAccessRoute.route(EKEventStore.authorizationStatus(for:.event)) == .ready
     }
+    private var accessRoute:CalendarAccessRoute { CalendarAccessRoute.route(authorization()) }
+    private func updateAuthorization() {
+        accessReady = accessRoute == .ready
+        permissionNeedsRequest = enabled && accessRoute == .request
+        accessBlocked = accessRoute == .settings
+    }
     func enable() {
         guard !loading else { return }
-        loading = true; message = nil
+        if accessRoute == .ready {
+            enabled = true; defaults.set(true,forKey:"calendar.enabled"); refresh(); return
+        }
+        generation = UUID(); let ticket = generation
+        loading = true; requestingAccess = true; message = nil
         Task {
             do {
                 let granted:Bool
                 if #available(macOS 14.0,*) { granted = try await store.requestFullAccessToEvents() }
                 else { granted = try await store.requestAccess(to:.event) }
-                loading = false
+                guard ticket == generation else { return }
+                loading = false; requestingAccess = false
+                updateAuthorization()
                 guard granted else {
-                    permissionNeedsRequest = CalendarAccessRoute.route(EKEventStore.authorizationStatus(for:.event)) == .request
+                    permissionNeedsRequest = accessRoute == .request
                     accessBlocked = !permissionNeedsRequest
                     message = permissionNeedsRequest ? "Calendar access was not approved. You can request access again." : "In System Settings, open Privacy & Security → Calendars and allow ScribeLoop."
                     return
                 }
                 accessBlocked = false; permissionNeedsRequest = false
                 enabled = true; defaults.set(true,forKey:"calendar.enabled"); refresh()
-            } catch { loading = false; message = "Calendar access could not be enabled. Manual recording still works." }
+            } catch {
+                guard ticket == generation else { return }
+                loading = false; requestingAccess = false; updateAuthorization(); message = "Calendar access could not be enabled. Manual recording still works."
+            }
         }
     }
     func disable() {
-        generation = UUID(); reads.cancel()
+        generation = UUID(); reads.cancel(); requestingAccess = false
         enabled = false; defaults.set(false,forKey:"calendar.enabled")
         accessBlocked = false; permissionNeedsRequest = false
         meetings = []; calendars = []; refreshed = nil; message = nil; loading = false
@@ -173,10 +201,11 @@ enum CalendarAccessRoute {
     }
     func refresh() {
         #if !CALENDAR_LAYOUT_PREVIEW
-        if accessBlocked && Self.canRead { accessBlocked = false; enabled = true; defaults.set(true,forKey:"calendar.enabled") }
+        guard !requestingAccess else { return }
+        updateAuthorization()
         guard enabled else { return }
-        guard Self.canRead else {
-            permissionNeedsRequest = CalendarAccessRoute.route(EKEventStore.authorizationStatus(for:.event)) == .request
+        guard accessReady else {
+            permissionNeedsRequest = accessRoute == .request
             accessBlocked = !permissionNeedsRequest
             generation = UUID(); reads.cancel(); meetings = []; calendars = []; refreshed = nil; loading = false
             message = permissionNeedsRequest ? nil : "Calendar permission is unavailable. Enable access in macOS Privacy & Security, or keep using manual recording."; return
@@ -186,7 +215,7 @@ enum CalendarAccessRoute {
         loading = true; message = nil
         reads.schedule(ids:ids) { [weak self] result in
             guard let self, ticket == self.generation, self.enabled else { return }
-            guard Self.canRead else { self.refresh(); return }
+            guard self.accessRoute == .ready else { self.refresh(); return }
             self.calendars = result.calendars; self.meetings = result.meetings
             self.truncated = result.truncated; self.refreshed = Date(); self.loading = false
             if ids.isEmpty { self.message = "Choose the calendars to show. No calendars are selected by default." }
@@ -290,7 +319,7 @@ struct CalendarPanel: View {
                     Text(conversation == nil ? "Your schedule, ready when you are." : "Choose the event that belongs to this recording.").font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Settings",systemImage:"gearshape") { onOpenSettings() }.help("Manage Calendar in Settings")
+                if calendar.connected { Button("Settings",systemImage:"gearshape") { onOpenSettings() }.help("Manage Calendar in Settings") }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
             if let conversation {
@@ -393,30 +422,32 @@ struct CalendarSettings:View {
     @ObservedObject var calendar:CalendarCoordinator
     var body:some View {
         Group {
-            Section("macOS Calendar") {
-                HStack {
-                    Label(calendar.enabled ? "Calendar connected" : "Calendar disconnected",systemImage:"calendar")
-                    Spacer()
-                    if calendar.enabled {
-                        Button("Disconnect Calendar",role:.destructive) { calendar.disable() }
+            Section("Calendar connection") {
+                if calendar.connected {
+                    HStack {
+                        Label("Calendar connected",systemImage:"checkmark.circle.fill").foregroundStyle(ScribeTheme.accent)
+                        Spacer()
+                        Button("Disconnect",role:.destructive) { calendar.disable() }
+                    }
+                    Text("Your selected calendars appear in Your meetings. Events stay in macOS Calendar; ScribeLoop does not change them.").font(.caption).foregroundStyle(.secondary)
+                    Button("Refresh calendars") { calendar.refresh() }.disabled(calendar.loading)
+                } else {
+                    Label(calendar.accessBlocked ? "Calendar access needs attention" : "Bring your meetings into ScribeLoop",systemImage:"calendar.badge.plus").font(.headline)
+                    Text(calendar.accessBlocked ? "Your connection is saved, but macOS is not allowing access. Enable ScribeLoop in Calendar privacy settings, then check again." : "Connect macOS Calendar, then choose which calendars appear. This is optional and does not affect recording.").font(.callout).foregroundStyle(.secondary)
+                    if calendar.accessBlocked {
+                        Button("Open Calendar privacy settings") { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!) }.buttonStyle(.borderedProminent).tint(ScribeTheme.action)
+                        Button("Check access again") { calendar.refresh() }.disabled(calendar.loading)
                     } else {
-                        Button("Connect Calendar") { calendar.enable() }.disabled(calendar.loading)
+                        Button(calendar.permissionNeedsRequest ? "Allow Calendar access" : "Connect Calendar") { calendar.enable() }.buttonStyle(.borderedProminent).tint(ScribeTheme.action).disabled(calendar.loading)
                     }
                 }
-                Text("Read meetings from macOS Calendar. ScribeLoop does not modify events. Calendar changes apply immediately.").font(.caption).foregroundStyle(.secondary)
-                if calendar.accessBlocked {
-                    Text("Calendar access is off in macOS. Allow access, then refresh.").font(.callout).foregroundStyle(ScribeTheme.warning)
-                    Button("Open Calendar privacy settings") { NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!) }
-                } else if calendar.permissionNeedsRequest {
-                    Button("Allow Calendar access") { calendar.enable() }.disabled(calendar.loading)
-                }
-                if calendar.enabled {
-                    Button("Refresh calendars") { calendar.refresh() }.disabled(calendar.loading)
-                }
-                if calendar.loading { ProgressView().controlSize(.small) }
+                if calendar.loading { HStack { ProgressView().controlSize(.small); Text("Connecting to Calendar…").font(.caption) } }
                 if let message = calendar.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                if calendar.connected {
+                    Text("Calendar changes apply immediately. Disconnecting does not revoke macOS permission or remove your selections.").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            if calendar.enabled && !calendar.accessBlocked && !calendar.permissionNeedsRequest {
+            if calendar.connected {
                 Section("Calendars to show") {
                     ForEach(calendar.calendars) { choice in
                         Toggle(choice.title,isOn:Binding(get:{calendar.selected.contains(choice.id)},set:{_ in calendar.toggle(choice.id)})).toggleStyle(.checkbox)

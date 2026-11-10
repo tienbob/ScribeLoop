@@ -4,6 +4,11 @@ import Foundation
 @main struct DesktopAuditTests {
     @MainActor static func main() {
         let client = DesktopClient()
+        client.meetingAudioPermissionGranted = true
+        client.auditReceive(["type":"capture_access","ok":false,"diagnostic":["message":"No display available"]])
+        precondition(client.meetingAudioPermissionLabel == "Allowed" && client.meetingAudioPermissionGranted,"A capture check failure must not revoke an OS permission grant")
+        client.meetingAudioPermissionGranted = false
+        precondition(client.meetingAudioPermissionLabel == "Allow meeting apps & browsers")
         client.settings = ["transcription_engine":"ollama","language":"auto"]
         client.selectedID = "saved"
         client.detail = ["transcript_provider":"local-ollama"]
