@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 18
 
 DDL = """
 CREATE TABLE sessions (
@@ -307,6 +307,37 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
               document_count INTEGER NOT NULL
             );
             """)
+            conn.execute("PRAGMA user_version=16")
+    if version < 17:
+        with conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS meeting_answers (
+              id TEXT PRIMARY KEY, question TEXT NOT NULL, scope_kind TEXT NOT NULL,
+              scope_json TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+              answer_json TEXT NOT NULL, evidence_bytes INTEGER NOT NULL,
+              truncated INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS meeting_answer_sources (
+              answer_id TEXT NOT NULL REFERENCES meeting_answers(id) ON DELETE CASCADE,
+              session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL,
+              citation_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+              PRIMARY KEY(answer_id,citation_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_meeting_answer_sources_session
+              ON meeting_answer_sources(session_id);
+            CREATE TRIGGER IF NOT EXISTS purge_meeting_answers_before_session_delete
+              BEFORE DELETE ON sessions BEGIN
+                DELETE FROM meeting_answers WHERE id IN
+                  (SELECT answer_id FROM meeting_answer_sources WHERE session_id=OLD.id);
+            END;
+            """)
+            conn.execute("PRAGMA user_version=17")
+    if version < 18:
+        with conn:
+            answer_columns={row[1] for row in conn.execute('PRAGMA table_info(meeting_answers)')}
+            for column in ('duration_ms','input_bytes','output_bytes'):
+                if column not in answer_columns:
+                    conn.execute(f'ALTER TABLE meeting_answers ADD COLUMN {column} INTEGER')
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
 

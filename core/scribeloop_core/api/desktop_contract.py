@@ -176,6 +176,26 @@ class DesktopContract:
                                    selected_ids=selected)
             result=await MeetingEvidence(app.state.store).retrieve(command.get('question'),scope)
             return {'type':'ask_evidence',**result}
+        if action == 'ask_history':
+            allowed={'action','scope','current_id','selected_ids','limit'}
+            if set(command)-allowed:
+                raise ValueError('Invalid Ask history request')
+            selected=command.get('selected_ids')
+            if selected is not None and (not isinstance(selected,list) or
+                    any(not isinstance(value,str) or not ID.fullmatch(value) for value in selected)):
+                raise ValueError('Invalid Ask meetings')
+            current=command.get('current_id')
+            if current is not None and (not isinstance(current,str) or not ID.fullmatch(current)):
+                raise ValueError('Invalid current meeting')
+            if not app.state.store.agreement()['accepted']:
+                raise ValueError('Ask is available after setup')
+            from ..llm.meeting_ask import AskScope, MeetingAsk
+            scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
+                                   selected_ids=selected)
+            result=await MeetingAsk(app.state.store,summary_provider).history(
+                scope,limit=command.get('limit',50))
+            return {'type':'ask_history','scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
+                    'answers':result}
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
         if action in {'audio_info','audio_window'}:

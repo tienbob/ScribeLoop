@@ -325,7 +325,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
 
     def recording_busy():
         recorder = app.state.recording
-        return bool(app.state.runner.active_id or (recorder and (recorder.active_id or
+        ask_busy=any(not task.done() for task in app.state.ask_tasks)
+        return bool(ask_busy or app.state.runner.active_id or (recorder and (recorder.active_id or
                     (recorder.task and not recorder.task.done()))))
 
     def recording_state():
@@ -543,6 +544,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     app.state.settings_saving = False
     app.state.settings_task = None
     app.state.email_exports = email_exports
+    app.state.ask_tasks = set()
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]'])
 
     @app.middleware('http')
@@ -601,6 +603,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         queue = asyncio.Queue(maxsize=128)
         sender = reader = None
         playback_pending = False
+        ask_task = None
 
         async def text_frame(limit):
             frame = await ws.receive()
@@ -713,7 +716,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         return
 
             async def receive_commands():
-                nonlocal summary_task,playback_pending,summary_provider
+                nonlocal summary_task,playback_pending,summary_provider,ask_task
                 while True:
                     command = None
                     owns_playback = False
@@ -739,6 +742,55 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if app.state.settings_saving and action not in {'stop','stop_recording','revoke_agreement'}:
                                 raise ValueError('Wait for the settings save to finish')
                             desktop.receipt(dispatch_id,'dispatching')
+                            if action == 'ask_question':
+                                from ..llm.meeting_ask import AskScope, MeetingAsk
+                                allowed={'action','question','scope','current_id','selected_ids','previous_answer_id'}
+                                selected=command.get('selected_ids')
+                                current=command.get('current_id')
+                                def valid_id(value):
+                                    return (isinstance(value,str) and len(value)==32 and
+                                            all(c in '0123456789abcdef' for c in value))
+                                if (set(command)-allowed or ask_task and not ask_task.done() or recording_busy() or
+                                        summary_task is not None or not store.agreement()['accepted'] or
+                                        not summary_provider or not summary_provider.public()['configured'] or
+                                        (selected is not None and (not isinstance(selected,list) or
+                                         any(not valid_id(value) for value in selected))) or
+                                        (current is not None and not valid_id(current))):
+                                    raise ValueError('Ask is unavailable or invalid')
+                                scope=AskScope.resolve(store,command.get('scope'),current_id=current,selected_ids=selected)
+                                question=command.get('question')
+                                previous_answer_id=command.get('previous_answer_id')
+                                if previous_answer_id is not None and not valid_id(previous_answer_id):
+                                    raise ValueError('Invalid prior Ask answer')
+                                ask_provider=summary_provider
+                                async def run_ask(request_id=dispatch_id,question=question,scope=scope,
+                                                  ask_provider=ask_provider,previous_answer_id=previous_answer_id):
+                                    try:
+                                        await publish({'type':'ask_started','request_id':request_id,
+                                            'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}})
+                                        result=await MeetingAsk(store,ask_provider).answer(
+                                            question,scope,previous_answer_id=previous_answer_id)
+                                        await publish({'type':'ask_answer','request_id':request_id,**result})
+                                    except asyncio.CancelledError:
+                                        await publish({'type':'ask_cancelled','request_id':request_id})
+                                        raise
+                                    except Exception:  # noqa: BLE001 - provider responses and keys stay private
+                                        await publish({'type':'ask_error','request_id':request_id,
+                                            'message':'Ask could not finish. Check the notes provider, quota and network, then retry explicitly.'})
+                                ask_task=asyncio.create_task(run_ask())
+                                app.state.ask_tasks.add(ask_task)
+                                ask_task.add_done_callback(app.state.ask_tasks.discard)
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action == 'cancel_ask':
+                                if set(command)!={'action'} or not ask_task or ask_task.done():
+                                    raise ValueError('No Ask request is running')
+                                ask_task.cancel()
+                                with contextlib.suppress(asyncio.CancelledError):
+                                    await ask_task
+                                ask_task=None
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                             if action in {'account_sign_in','account_cancel','account_refresh','account_sign_out'}:
                                 try:
                                     if set(command)!={'action'} or account is None or not account.config.configured:
@@ -1277,7 +1329,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1300,7 +1352,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'
                                     if action=='search_meetings' else
                                     'Ask could not prepare evidence. Check the question and meeting scope; your saved conversations are unchanged.'
-                                    if action=='ask_evidence' else
+                                    if action in {'ask_evidence','ask_history','ask_question','cancel_ask'} else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
                             continue
                         meeting = (isinstance(action, str) and action
@@ -1335,6 +1387,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             pass
         finally:
             clients.discard(queue)
+            if ask_task and not ask_task.done():
+                ask_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await ask_task
             for task in (sender, reader):
                 if task:
                     task.cancel()

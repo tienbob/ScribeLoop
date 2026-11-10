@@ -3,7 +3,7 @@ import pytest
 from scribeloop_core.api.desktop_fixture import FixtureKeys
 from scribeloop_core.llm.grounded import transcript_hash
 from scribeloop_core.speakers.registry import SpeakerRegistry
-from scribeloop_core.storage.db import migrate
+from scribeloop_core.storage.db import SCHEMA_VERSION, migrate
 from scribeloop_core.storage.encrypted import encrypted_database
 from scribeloop_core.storage.sessions import SessionStore
 
@@ -51,7 +51,7 @@ def test_v10_missing_stream_provenance_is_repaired_idempotently(tmp_path,require
         assert store.segments(sid)==before
         revision=store.revisions(sid)[0]
         assert revision['origin']=='confirmed' and revision['provider']=='deepgram'
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==16
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
         migrate(conn)
         assert len(store.revisions(sid))==1
         assert_naming_and_summary(store,sid)

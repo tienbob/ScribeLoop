@@ -91,6 +91,7 @@ Summary hits open the summary source; transcript hits open the passage. Support
 expired audio by offering transcript navigation without a broken Play action.
 
 Implementation slices:
+
 1. Revision-aware index and incremental, resumable backfill. **Implemented; acceptance measurement pending.**
 2. Bounded paged query API, ranking and filters. **Implemented; corpus ranking measurement pending.**
 3. Native search entry/results, keyboard navigation and source opening. **Implemented; installed-app UX validation pending.**
@@ -142,6 +143,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] All currently selected saved revisions are indexed; old revisions do not leak
   into default results. Interrupted backfill resumes without duplicated hits.
 - [ ] Title, transcript and summary search plus all three filters work in the native
@@ -168,13 +170,12 @@ No new embedding provider in this increment. Explain when lexical retrieval foun
 insufficient evidence rather than claiming exhaustive knowledge.
 
 Implementation slices:
-1. Retrieval/evidence contract, source scopes and request budget. **Implementation started:**
-   explicit current/selected/all scope resolution, revision-stable citation packets,
-   cooperative lexical retrieval and the 20-passage/48-KB bounds are implemented;
-   provider generation and native UX remain pending.
-2. Structured cited-answer generation, validation and cancellation.
-3. Native Ask interface, evidence drawer and follow-up questions.
-4. Revision-aware history, invalidation and grounded-answer evaluation.
+
+1. Retrieval/evidence contract, source scopes and request budget. **Implemented.**
+2. Structured cited-answer generation, validation and cancellation. **Implemented.**
+3. Native Ask interface, evidence drawer and follow-up questions. **Implemented.**
+4. Revision-aware history and invalidation. **Implemented; the labelled 40-question
+   human grounding evaluation remains a release gate.**
 
 Initial bounds: retrieve ≤20 passages and ≤48 KB evidence per answer, generate
 ≤2,000 output tokens, and make at most one generation request per submitted
@@ -197,6 +198,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] Scope is visible and enforced server-side for retrieval, generation, follow-up
   history and every citation. No answer draws from a meeting outside the scope.
 - [ ] All rendered citation IDs resolve to the correct permitted meeting/revision;
@@ -240,6 +242,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] All six built-in templates produce the intended sections on representative
   fixtures; absent facts are omitted rather than invented to fill headings.
 - [ ] Default selection and per-meeting overrides survive quit/reopen; changing a
@@ -277,6 +280,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] User can accept/edit/dismiss suggestions, create a manual task, mark done and
   reopen; state persists across restart and is independent of summary regeneration.
 - [ ] Repeated generation cannot duplicate accepted tasks or overwrite manual
@@ -322,6 +326,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] Exact user text autosaves within 1 second of inactivity and immediately on
   navigation/normal quit. Force-stop recovery preserves acknowledged saves; unsaved
   status is visible. No LLM output overwrites the personal-note document.
@@ -368,6 +373,7 @@ flowchart TD
 ```
 
 **F6a finished only when:**
+
 - [ ] Draft generation uses selected decisions/tasks and current evidence; no
   invented promise, deadline or owner appears in the acceptance fixtures.
 - [ ] User edits survive navigation/restart and are not overwritten by regeneration
@@ -400,6 +406,7 @@ flowchart TD
 ```
 
 **F6b finished only when:**
+
 - [ ] Slack posting and Linear task creation each pass a real sandbox-account
   end-to-end test, including destination selection, preview and returned remote link.
 - [ ] Cancel before final confirmation performs no write. The exact reviewed
@@ -417,15 +424,15 @@ flowchart TD
 
 ## Architecture and data work
 
-| Area | Planned addition | Existing path to extend |
-|---|---|---|
-| Search | Revision-aware documents, local FTS, backfill cursor, paged queries | `storage/sessions.py`, database migrations; assess `storage/vectors.py` later |
-| Ask | Scoped retrieval, evidence contract, cited answers/history, invalidation | `llm/summary_provider.py`, `api/desktop_contract.py`, authenticated command receipts |
-| Templates | Versioned templates, default and meeting override, provenance | Existing structured summary and rolling-notes pipeline |
-| Tasks | Durable tasks, suggestion/source links, edits and status | Existing grounded summary action items and people links |
-| Personal notes | Separate authored documents, marks, autosave and evidence IDs | Encrypted workspace, recording timeline and playback |
-| Follow-up | Saved drafts, evidence selection and destination adapters | `api/email_exports.py`, native `EmailSharing.swift` |
-| Connectors | Keychain credentials, destination mappings, dispatch receipts | Existing account/provider-secret patterns; no transcript-controlled tools |
+| Area           | Planned addition                                                         | Existing path to extend                                                                  |
+| -------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Search         | Revision-aware documents, local FTS, backfill cursor, paged queries      | `storage/sessions.py`, database migrations; assess `storage/vectors.py` later        |
+| Ask            | Scoped retrieval, evidence contract, cited answers/history, invalidation | `llm/summary_provider.py`, `api/desktop_contract.py`, authenticated command receipts |
+| Templates      | Versioned templates, default and meeting override, provenance            | Existing structured summary and rolling-notes pipeline                                   |
+| Tasks          | Durable tasks, suggestion/source links, edits and status                 | Existing grounded summary action items and people links                                  |
+| Personal notes | Separate authored documents, marks, autosave and evidence IDs            | Encrypted workspace, recording timeline and playback                                     |
+| Follow-up      | Saved drafts, evidence selection and destination adapters                | `api/email_exports.py`, native `EmailSharing.swift`                                  |
+| Connectors     | Keychain credentials, destination mappings, dispatch receipts            | Existing account/provider-secret patterns; no transcript-controlled tools                |
 
 Schema decisions must be reviewed per increment. Every new source-bearing table
 needs revision handling and tested delete/forget cleanup; avoid large catch-all
@@ -450,15 +457,15 @@ JSON state that makes those dependencies invisible.
 
 ## Delivery tracking
 
-| Increment | Status | Depends on | Closeout artifact |
-|---|---|---|---|
-| F1 Search | Not started | Existing selected revisions | `SEARCH_CLOSEOUT.md` |
-| F2 Ask | Not started | F1 | `MEETING_CHAT_CLOSEOUT.md` |
-| F3 Templates | Not started | Existing summary schema | `TEMPLATES_CLOSEOUT.md` |
-| F4 Tasks | Not started | Existing action extraction | `ACTION_TRACKING_CLOSEOUT.md` |
-| F5 Personal notes | Not started | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md` |
-| F6a Drafts | Not started | F3/F4 and evidence contract | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
-| F6b Integrations | Not started | F6a + connector credentials | `INTEGRATIONS_CLOSEOUT.md` |
+| Increment         | Status      | Depends on                            | Closeout artifact               |
+| ----------------- | ----------- | ------------------------------------- | ------------------------------- |
+| F1 Search         | Not started | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
+| F2 Ask            | Implemented; acceptance evaluation pending | F1                | `MEETING_CHAT_CLOSEOUT.md`    |
+| F3 Templates      | Not started | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
+| F4 Tasks          | Not started | Existing action extraction            | `ACTION_TRACKING_CLOSEOUT.md` |
+| F5 Personal notes | Not started | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md`  |
+| F6a Drafts        | Not started | F3/F4 and evidence contract           | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
+| F6b Integrations  | Not started | F6a + connector credentials           | `INTEGRATIONS_CLOSEOUT.md`    |
 
 The next implementation task is F1 slice 1: encrypted, revision-aware local search
 index and its update/delete contracts, followed by the native search surface.

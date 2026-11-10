@@ -1,6 +1,8 @@
 """Pydantic schemas for summaries (Flow 2 step 4 — provisional & final share this)."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -53,3 +55,19 @@ class GroundedSummary(BaseModel):
     action_items: list[CitedAction] = Field(max_length=20)
     open_questions: list[CitedText] = Field(max_length=20)
     uncertainties: list[CitedText] = Field(max_length=20)
+
+
+class AskClaim(BaseModel):
+    """One independently cited statement in a meeting answer."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+    text: str = Field(min_length=1,max_length=2000)
+    kind: Literal['decision','proposal','fact','conflict','uncertainty']
+    citation_ids: list[str] = Field(min_length=1,max_length=10)
+
+
+class MeetingAnswer(BaseModel):
+    """Strict Ask output; evidence identities are validated after decoding."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+    claims: list[AskClaim] = Field(max_length=20)
+    insufficient_evidence: bool
+    caveat: str | None = Field(default=None,max_length=1000)
