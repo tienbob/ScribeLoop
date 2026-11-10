@@ -100,6 +100,7 @@ struct PreferencesSaveProgress {
     @Published var searchResults: [Record] = []
     @Published var searchIndex: Object = [:]
     @Published var searchLoading = false
+    private var searchRequest: String?
     @Published var selectedID: String?
     @Published var detail: Object = [:] {
         didSet {
@@ -442,6 +443,9 @@ struct PreferencesSaveProgress {
             if id == pageRequest && ["rejected","unknown"].contains(status) {
                 navigationPending = false; refreshAfterPage = false
             }
+            if id == searchRequest && ["rejected","unknown"].contains(status) {
+                searchLoading = false
+            }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
@@ -450,6 +454,7 @@ struct PreferencesSaveProgress {
             for row in page { if !sessions.contains(where: { $0.id == row.id }) { sessions.append(row) } }
             nextCursor = v["next_cursor"] as? [Any]
         case "search_results":
+            guard text(v["response_to"]) == searchRequest else { return }
             searchResults = objects(v["results"])
             searchIndex = v["index"] as? Object ?? [:]
             searchLoading = false
@@ -597,14 +602,15 @@ struct PreferencesSaveProgress {
     func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
                 dateFrom:Int? = nil, dateTo:Int? = nil) {
         let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !value.isEmpty else { searchResults=[]; searchLoading=false; return }
+        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchLoading=false; return }
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }
         if let dateFrom { command["date_from"]=dateFrom }
         if let dateTo { command["date_to"]=dateTo }
         searchLoading=true
-        if send(command) == nil { searchLoading=false }
+        searchRequest=send(command)
+        if searchRequest == nil { searchLoading=false }
     }
     func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }

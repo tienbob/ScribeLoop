@@ -144,8 +144,13 @@ class DesktopContract:
                 value=command.get(field)
                 if value is not None and (type(value) is not int or value<0):
                     raise ValueError('Invalid search date')
+            recorder=app.state.recording
+            recording_task=getattr(recorder,'task',None)
+            if (not app.state.store.agreement()['accepted'] or active_id or summary_id or
+                    (recording_task and not recording_task.done())):
+                raise ValueError('Search is available after setup and while recording is idle')
             from ..storage.search import MeetingSearch
-            result=MeetingSearch(app.state.store).query(command.get('query'),
+            result=await MeetingSearch(app.state.store).query_async(command.get('query'),
                 limit=command.get('limit',50),offset=command.get('offset',0),
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))

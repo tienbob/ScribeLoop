@@ -108,6 +108,21 @@ person filters and opens transcript citations or notes. Do not mark F1 complete
 until the remaining fixture, performance, playback and installed-app gates below
 are measured.
 
+Audit remediation (2026-11-10): default search now indexes only grounded summaries
+whose revision and transcript hash are current; unverifiable legacy/provisional
+notes are excluded and index version 2 forces stale documents to rebuild. Both the
+native control and backend require the first-use agreement and an idle recording/
+processing state. Desktop reconciliation stays on the owning database thread but
+cooperatively yields between fingerprint batches and indexed meetings, preventing
+the cold build from monopolizing the event loop. Latest-request binding prevents
+an older queued result from replacing a newer query or a cleared field.
+
+Recorded development-Mac scale result for a synthetic 1,000-meeting/100,000-segment
+SQLCipher workspace: 101,000 search documents, 4.419 s cold build, 71.05 ms warm
+p50, 79.63 ms warm p95 and 82.12 ms warm maximum over 100 queries. This passes the
+warm ≤500 ms gate. Cold indexing remains reported rather than hidden; physical
+search-during-recording is prevented by UI and server controls.
+
 ```mermaid
 flowchart TD
     A[Open Search and enter words] --> B[Choose scope and optional filters]

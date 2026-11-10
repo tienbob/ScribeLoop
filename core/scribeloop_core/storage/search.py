@@ -6,6 +6,7 @@ and explicitly reports its reduced capability.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -14,7 +15,7 @@ import unicodedata
 
 from .db import DATABASE_ERRORS
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 def _fold(value: str) -> str:
@@ -92,43 +93,61 @@ class MeetingSearch:
                 docs.append({**common,'id':f"{session_id}:r{revision}:summary:{summary['id']}",
                     'revision':revision,'source_type':'summary','source_id':summary['id'],
                     'start_ms':None,'end_ms':None,'speaker_id':None,'speaker_name':None,'content':content})
-        elif self.store.notes(session_id):
-            content=self.store.notes(session_id)
-            docs.append({**common,'id':f'{session_id}:notes','revision':revision,
-                'source_type':'summary','source_id':'notes','start_ms':None,'end_ms':None,
-                'speaker_id':None,'speaker_name':None,'content':content})
         return docs
 
-    def sync(self, *, limit: int | None = None):
-        rows=list(self.conn.execute('SELECT id FROM sessions ORDER BY started_at DESC,id DESC'))
+    def _changed(self):
         changed=[]
-        for row in rows:
+        for row in self.conn.execute('SELECT id FROM sessions ORDER BY started_at DESC,id DESC'):
             fingerprint=self._fingerprint(row['id'])
             known=self.conn.execute('SELECT fingerprint FROM search_index_state WHERE session_id=?',(row['id'],)).fetchone()
             if not known or known['fingerprint'] != fingerprint:
                 changed.append((row['id'],fingerprint))
+        return changed
+
+    def _sync_session(self, session_id, fingerprint):
+        docs=self._documents(session_id)
+        with self.conn:
+            old_rows=[r[0] for r in self.conn.execute('SELECT rowid FROM search_documents WHERE session_id=?',(session_id,))]
+            if self.fts:
+                for rowid in old_rows:
+                    self.conn.execute("INSERT INTO search_documents_fts(search_documents_fts,rowid,content,title,speaker_name) "
+                                      "SELECT 'delete',rowid,content,title,COALESCE(speaker_name,'') FROM search_documents WHERE rowid=?",(rowid,))
+            self.conn.execute('DELETE FROM search_documents WHERE session_id=?',(session_id,))
+            for doc in docs:
+                fields=tuple(doc)
+                cur=self.conn.execute(f"INSERT INTO search_documents ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})",
+                                      tuple(doc.values()))
+                if self.fts:
+                    self.conn.execute('INSERT INTO search_documents_fts(rowid,content,title,speaker_name) VALUES (?,?,?,?)',
+                                      (cur.lastrowid,doc['content'],doc['title'],doc['speaker_name'] or ''))
+            self.conn.execute('INSERT INTO search_index_state(session_id,fingerprint,indexed_at,document_count) '
+                              'VALUES (?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET '
+                              'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,document_count=excluded.document_count',
+                              (session_id,fingerprint,int(time.time()*1000),len(docs)))
+
+    def sync(self, *, limit: int | None = None):
+        changed=self._changed()
         selected=changed if limit is None else changed[:limit]
         for session_id,fingerprint in selected:
-            docs=self._documents(session_id)
-            with self.conn:
-                old_rows=[r[0] for r in self.conn.execute('SELECT rowid FROM search_documents WHERE session_id=?',(session_id,))]
-                if self.fts:
-                    for rowid in old_rows:
-                        self.conn.execute("INSERT INTO search_documents_fts(search_documents_fts,rowid,content,title,speaker_name) "
-                                          "SELECT 'delete',rowid,content,title,COALESCE(speaker_name,'') FROM search_documents WHERE rowid=?",(rowid,))
-                self.conn.execute('DELETE FROM search_documents WHERE session_id=?',(session_id,))
-                for doc in docs:
-                    fields=tuple(doc)
-                    cur=self.conn.execute(f"INSERT INTO search_documents ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})",
-                                          tuple(doc.values()))
-                    if self.fts:
-                        self.conn.execute('INSERT INTO search_documents_fts(rowid,content,title,speaker_name) VALUES (?,?,?,?)',
-                                          (cur.lastrowid,doc['content'],doc['title'],doc['speaker_name'] or ''))
-                self.conn.execute('INSERT INTO search_index_state(session_id,fingerprint,indexed_at,document_count) '
-                                  'VALUES (?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET '
-                                  'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,document_count=excluded.document_count',
-                                  (session_id,fingerprint,int(time.time()*1000),len(docs)))
+            self._sync_session(session_id,fingerprint)
         return {'complete':len(selected)==len(changed),'pending':len(changed)-len(selected),
+                'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM search_index_state').fetchone()[0],
+                'engine':'fts5' if self.fts else 'basic'}
+
+    async def sync_async(self):
+        """Reconcile on the owning DB thread while yielding between meetings."""
+        changed=[]
+        for index,row in enumerate(self.conn.execute('SELECT id FROM sessions ORDER BY started_at DESC,id DESC')):
+            fingerprint=self._fingerprint(row['id'])
+            known=self.conn.execute('SELECT fingerprint FROM search_index_state WHERE session_id=?',(row['id'],)).fetchone()
+            if not known or known['fingerprint'] != fingerprint:
+                changed.append((row['id'],fingerprint))
+            if index % 25 == 24:
+                await asyncio.sleep(0)
+        for session_id,fingerprint in changed:
+            self._sync_session(session_id,fingerprint)
+            await asyncio.sleep(0)
+        return {'complete':True,'pending':0,
                 'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM search_index_state').fetchone()[0],
                 'engine':'fts5' if self.fts else 'basic'}
 
@@ -146,11 +165,25 @@ class MeetingSearch:
 
     def query(self, query: str, *, limit=50, offset=0, meeting_id=None,
               person_id=None, date_from=None, date_to=None):
+        self._validate_query(query,limit,offset)
+        return self._query(query,self.sync(),limit=limit,offset=offset,meeting_id=meeting_id,
+                           person_id=person_id,date_from=date_from,date_to=date_to)
+
+    async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
+                          person_id=None, date_from=None, date_to=None):
+        self._validate_query(query,limit,offset)
+        status=await self.sync_async()
+        return self._query(query,status,limit=limit,offset=offset,meeting_id=meeting_id,
+                           person_id=person_id,date_from=date_from,date_to=date_to)
+
+    @staticmethod
+    def _validate_query(query,limit,offset):
         if not isinstance(query,str) or not 1 <= len(query.strip()) <= 200:
             raise ValueError('Enter from 1 to 200 search characters')
         if type(limit) is not int or not 1<=limit<=100 or type(offset) is not int or not 0<=offset<=10_000:
             raise ValueError('Invalid search page')
-        status=self.sync()
+
+    def _query(self, query, status, *, limit, offset, meeting_id, person_id, date_from, date_to):
         where=[]; args=[]
         if meeting_id:
             where.append('d.session_id=?'); args.append(meeting_id)

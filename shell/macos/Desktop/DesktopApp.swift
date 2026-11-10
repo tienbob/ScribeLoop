@@ -204,7 +204,7 @@ struct Notebook: View {
                     .disabled(!core.accepted || !core.connected || core.busy)
                 Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                 Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
-                    .keyboardShortcut("f",modifiers:.command).disabled(!core.connected)
+                    .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
