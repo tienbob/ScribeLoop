@@ -164,17 +164,19 @@ class MeetingSearch:
             self.conn.execute('DELETE FROM search_index_state WHERE session_id=?',(session_id,))
 
     def query(self, query: str, *, limit=50, offset=0, meeting_id=None,
-              person_id=None, date_from=None, date_to=None):
+              meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True):
         self._validate_query(query,limit,offset)
         return self._query(query,self.sync(),limit=limit,offset=offset,meeting_id=meeting_id,
-                           person_id=person_id,date_from=date_from,date_to=date_to)
+                           meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
+                           match_all=match_all)
 
     async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
-                          person_id=None, date_from=None, date_to=None):
+                          meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True):
         self._validate_query(query,limit,offset)
         status=await self.sync_async()
         return self._query(query,status,limit=limit,offset=offset,meeting_id=meeting_id,
-                           person_id=person_id,date_from=date_from,date_to=date_to)
+                           meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
+                           match_all=match_all)
 
     @staticmethod
     def _validate_query(query,limit,offset):
@@ -183,10 +185,20 @@ class MeetingSearch:
         if type(limit) is not int or not 1<=limit<=100 or type(offset) is not int or not 0<=offset<=10_000:
             raise ValueError('Invalid search page')
 
-    def _query(self, query, status, *, limit, offset, meeting_id, person_id, date_from, date_to):
+    def _query(self, query, status, *, limit, offset, meeting_id, meeting_ids,
+               person_id, date_from, date_to, match_all):
         where=[]; args=[]
+        if meeting_id and meeting_ids is not None:
+            raise ValueError('Choose one meeting scope')
         if meeting_id:
             where.append('d.session_id=?'); args.append(meeting_id)
+        if meeting_ids is not None:
+            if (not isinstance(meeting_ids,(list,tuple)) or not meeting_ids or
+                    len(meeting_ids)>100 or any(not isinstance(value,str) for value in meeting_ids)):
+                raise ValueError('Invalid meeting scope')
+            values=tuple(dict.fromkeys(meeting_ids))
+            where.append('d.session_id IN ('+','.join('?' for _ in values)+')')
+            args.extend(values)
         if person_id:
             where.append('(d.speaker_id=? OR EXISTS (SELECT 1 FROM person_links pl WHERE pl.session_id=d.session_id '
                          'AND pl.revision=d.revision AND pl.person_id=?))'); args.extend((person_id,person_id))
@@ -197,7 +209,8 @@ class MeetingSearch:
         clause=(' AND '+' AND '.join(where)) if where else ''
         terms=[t for t in re.findall(r"[\wÀ-ỹ]+",query,flags=re.UNICODE) if t]
         if self.fts and terms:
-            match=' AND '.join('"'+term.replace('"','""')+'"*' for term in terms[:12])
+            operator=' AND ' if match_all else ' OR '
+            match=operator.join('"'+term.replace('"','""')+'"*' for term in terms[:12])
             sql=('SELECT d.*,bm25(search_documents_fts,1.0,2.5,1.5) AS score '
                  'FROM search_documents_fts JOIN search_documents d ON d.rowid=search_documents_fts.rowid '
                  'WHERE search_documents_fts MATCH ?'+clause+

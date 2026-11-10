@@ -1277,7 +1277,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1299,6 +1299,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     if action=='set_detection' else
                                     'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'
                                     if action=='search_meetings' else
+                                    'Ask could not prepare evidence. Check the question and meeting scope; your saved conversations are unchanged.'
+                                    if action=='ask_evidence' else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
                             continue
                         meeting = (isinstance(action, str) and action

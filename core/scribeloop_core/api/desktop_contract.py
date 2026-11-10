@@ -155,6 +155,27 @@ class DesktopContract:
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))
             return {'type':'search_results',**result}
+        if action == 'ask_evidence':
+            allowed={'action','question','scope','current_id','selected_ids'}
+            if set(command)-allowed:
+                raise ValueError('Invalid Ask request')
+            selected=command.get('selected_ids')
+            if selected is not None and (not isinstance(selected,list) or
+                    any(not isinstance(value,str) or not ID.fullmatch(value) for value in selected)):
+                raise ValueError('Invalid Ask meetings')
+            current=command.get('current_id')
+            if current is not None and (not isinstance(current,str) or not ID.fullmatch(current)):
+                raise ValueError('Invalid current meeting')
+            recorder=app.state.recording
+            recording_task=getattr(recorder,'task',None)
+            if (not app.state.store.agreement()['accepted'] or active_id or summary_id or
+                    (recording_task and not recording_task.done())):
+                raise ValueError('Ask is available after setup and while recording is idle')
+            from ..llm.meeting_ask import AskScope, MeetingEvidence
+            scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
+                                   selected_ids=selected)
+            result=await MeetingEvidence(app.state.store).retrieve(command.get('question'),scope)
+            return {'type':'ask_evidence',**result}
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
         if action in {'audio_info','audio_window'}:

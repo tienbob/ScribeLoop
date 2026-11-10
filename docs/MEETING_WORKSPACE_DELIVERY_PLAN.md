@@ -168,7 +168,10 @@ No new embedding provider in this increment. Explain when lexical retrieval foun
 insufficient evidence rather than claiming exhaustive knowledge.
 
 Implementation slices:
-1. Retrieval/evidence contract, source scopes and request budget.
+1. Retrieval/evidence contract, source scopes and request budget. **Implementation started:**
+   explicit current/selected/all scope resolution, revision-stable citation packets,
+   cooperative lexical retrieval and the 20-passage/48-KB bounds are implemented;
+   provider generation and native UX remain pending.
 2. Structured cited-answer generation, validation and cancellation.
 3. Native Ask interface, evidence drawer and follow-up questions.
 4. Revision-aware history, invalidation and grounded-answer evaluation.
