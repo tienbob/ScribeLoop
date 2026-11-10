@@ -14,21 +14,18 @@ def builder():
     return module
 
 
-def test_permission_reset_requires_explicit_opt_in(tmp_path,monkeypatch):
+def test_permission_reset_is_automatic_for_canonical_rebuild(tmp_path,monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'packaging/macos'))
     build = builder()
     target = tmp_path/'ScribeLoop.app'
     monkeypatch.setattr(build,'APP',target)
     calls = []
     monkeypatch.setattr(build,'run',lambda *args:calls.append(args))
-    monkeypatch.delenv('SCRIBELOOP_RESET_TCC',raising=False)
     assert not build.reset_local_capture_permission(target,fixture=True)
-    assert not build.reset_local_capture_permission(target)
     assert calls == []
-    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
     assert build.reset_local_capture_permission(target)
     assert calls == [('/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop')
-                     for service in ('ScreenCapture','Calendar')]
+                     for service in ('ScreenCapture','Microphone')]
 
 
 def test_permission_reset_is_scoped_to_local_production_rebuild(tmp_path,monkeypatch):
@@ -38,13 +35,12 @@ def test_permission_reset_is_scoped_to_local_production_rebuild(tmp_path,monkeyp
     monkeypatch.setattr(build,'APP',target)
     calls = []
     monkeypatch.setattr(build,'run',lambda *args:calls.append(args))
-    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
     assert not build.reset_local_capture_permission(target,fixture=True)
     assert not build.reset_local_capture_permission(tmp_path/'Other.app')
     assert calls == []
     assert build.reset_local_capture_permission(target)
     assert calls == [('/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop')
-                     for service in ('ScreenCapture','Calendar')]
+                     for service in ('ScreenCapture','Microphone')]
 
 
 
@@ -83,19 +79,15 @@ def test_main_permission_reset_is_gated_by_build_success_and_scope(tmp_path,monk
     monkeypatch.setattr(build,'run',run)
     def resets():
         return [args for args in commands if args[:2] == ['/usr/bin/tccutil','reset']
-                and args[2] in ('ScreenCapture','Calendar')
+                and args[2] in ('ScreenCapture','Microphone')
                 and args[3] == 'ai.scribeloop.desktop']
 
-    monkeypatch.delenv('SCRIBELOOP_RESET_TCC',raising=False)
-    build.main(app=production,fixture=False)
-    assert resets() == []
     build.main(app=preview,fixture=True)
     assert resets() == []
 
-    monkeypatch.setenv('SCRIBELOOP_RESET_TCC','1')
     build.main(app=production,fixture=False)
     assert resets() == [['/usr/bin/tccutil','reset',service,'ai.scribeloop.desktop']
-                        for service in ('ScreenCapture','Calendar')]
+                        for service in ('ScreenCapture','Microphone')]
     validation_index = commands.index(['codesign','--verify','--deep','--strict',str(production)])
     reset_index = commands.index(resets()[0])
     assert validation_index < reset_index

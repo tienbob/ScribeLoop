@@ -150,7 +150,7 @@ class SessionStore:
         if key is None:
             return None
         import re
-        if not re.fullmatch(r'(deepgram|moss|ollama):[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
+        if not re.fullmatch(r'(deepgram|assemblyai|moss|ollama):[0-9a-f]{32}:'+stream+r':[0-9]{1,4}',key):
             raise ValueError('Invalid speaker identity scope')
         identity = session_id+':'+key
         existing = self.conn.execute('SELECT id FROM session_speakers WHERE id=?',(identity,)).fetchone()
@@ -497,6 +497,42 @@ class SessionStore:
             known.move_to_end(count_key)
         return result
 
+    def relabel_speech(self, session_id, stream, original, revised):
+        """Apply provider speaker corrections without changing words/checkpoints.
+
+        A live turn may split into several speakers after the provider's final
+        clustering. Only the exact original span may be replaced; edited text
+        or a stale transcript revision is never overwritten.
+        """
+        from ..pipeline.replay import ReplayChunk
+        old = [{**ReplayChunk.model_validate(row).model_dump(),'stream':row.get('stream')} for row in original]
+        new = [{**ReplayChunk.model_validate(row).model_dump(),'stream':row.get('stream')} for row in revised]
+        if not old or not new or stream not in {'mic','loopback'}:
+            raise ValueError('Invalid speaker correction')
+        if (' '.join(r['text'] for r in old) != ' '.join(r['text'] for r in new)
+                or old[0]['start_ms'] != new[0]['start_ms']
+                or old[-1]['end_ms'] != new[-1]['end_ms']
+                or any(not r['is_final'] or r['stream'] != stream for r in old+new)):
+            raise ValueError('Speaker correction changed transcript content')
+        revision = self.conn.execute('SELECT MAX(revision) FROM segments WHERE session_id=?',
+                                     (session_id,)).fetchone()[0]
+        existing = self.conn.execute('SELECT * FROM segments WHERE session_id=? AND revision=? AND stream=? '
+            'AND start_ms>=? AND end_ms<=? ORDER BY start_ms,end_ms,id',
+            (session_id,revision,stream,old[0]['start_ms'],old[-1]['end_ms'])).fetchall()
+        if [(r['start_ms'],r['end_ms'],r['text']) for r in existing] != [
+                (r['start_ms'],r['end_ms'],r['text']) for r in old]:
+            raise ValueError('Speaker correction no longer matches saved transcript')
+        with self.conn:
+            identities = [self._speaker(session_id,stream,r['speaker_key']) for r in new]
+            for row in existing:
+                self.conn.execute('DELETE FROM segments WHERE id=?',(row['id'],))
+            for row,identity in zip(new,identities,strict=True):
+                self.conn.execute('INSERT INTO segments '
+                    '(id,session_id,stream,start_ms,end_ms,text,language,confidence,source,revision,local_speaker_id) '
+                    'VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    (uuid4().hex,session_id,stream,row['start_ms'],row['end_ms'],row['text'],
+                     row['language'],row['confidence'],'stream',revision,identity))
+
     def revise_transcript(self, session_id, chunks, *, provider=None, model=None):
         from ..pipeline.replay import ReplayChunk
         if not chunks:
@@ -712,6 +748,8 @@ class SessionStore:
         """Delete dependent data in FK order; callers have already retired audio keys."""
         self.memory_cache.invalidate(session_id)
         self._cloud_usage_cache.pop(session_id,None)
+        from .search import MeetingSearch
+        MeetingSearch(self).purge_session(session_id)
         has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
         if has_vectors:
             from .vectors import load_vec_extension

@@ -109,7 +109,7 @@ class StreamingBudget:
                 raise DeepgramError('Cloud audio budget reached; recording remains encrypted')
             ack = threading.Event()
             emit({'type':'cloud_request','ack':ack,'reservation':{
-                'provider':'deepgram','model':'nova-3','stream':stream,
+                'provider':self.config.provider,'model':self.config.model,'stream':stream,
                 'billed_audio_s':seconds,'estimated_usd':usd,'reserved_at_ms':round(time.time()*1000)}})
             while not ack.wait(.05):
                 if cancelled.is_set():
@@ -440,19 +440,20 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
             # Cleanup is a presentation edit of the Deepgram transcript; keeping
             # Deepgram provenance lets the session resume and reprocess later.
             await apply_cleanup(self.store,session_id,provider,asr_model=asr_model,
-                provenance_provider='deepgram',publish=self.publish,
+                provenance_provider=self.cloud.provider,publish=self.publish,
                 cancelled=self.cancel_processing)
         await super()._finish(session_id)
 
     def _authorize(self,confirmed):
         if confirmed is not True:
-            raise ValueError('Explicit consent to send audio to Deepgram is required')
+            raise ValueError(f'Explicit consent to send audio to {self.cloud.provider} is required')
         if not self.cloud.api_key:
-            raise ValueError('Configure DEEPGRAM_API_KEY locally')
+            raise ValueError(f'Configure the {self.cloud.provider} API key in Preferences')
 
     def start(self,selection,metadata,title, *, consent_confirmed):
         if self.closed or self.active_id or (self.task and not self.task.done()):
             raise ValueError('Wait for recording and processing to finish')
+        self.revision_model = None
         self._authorize(metadata.get('cloud_consent'))
         if metadata.get('language','auto') not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
@@ -462,7 +463,7 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         hints = validate_language_hints(hints) if hints is not None else None
         self.quality = TranscriptionQuality.model_validate(metadata.get('transcription_quality') or self.cloud.quality)
         self.keep_raw_microphone = self.quality.asr_microphone_source == 'raw'
-        result = RecordingRunner.start(self,selection,{**metadata,'transcription_quality':self.quality.model_dump(),'provider':'deepgram','model':'nova-3',
+        result = RecordingRunner.start(self,selection,{**metadata,'transcription_quality':self.quality.model_dump(),'provider':self.cloud.provider,'model':self.cloud.model,
             'cloud_budget_usd':self.cloud.budget_usd},title,consent_confirmed=consent_confirmed)
         self.language_hints = hints
         return result
@@ -470,14 +471,14 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
     def _saved_authorization(self,sid,cloud_consent):
         self._saved(sid)
         self._authorize(cloud_consent)
-        self.store.grant_cloud(sid,'nova-3',provider='deepgram')
+        self.store.grant_cloud(sid,self.cloud.model,provider=self.cloud.provider)
         self.budget = StreamingBudget(self.cloud,self.store.cloud_usage(sid))
 
     def resume(self,sid, *, language='auto',cloud_consent=False,language_hints=None):
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         self._saved(sid)
-        if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,'deepgram'}:
+        if self.store.segments(sid) and self.store.transcript_provider(sid) not in {None,self.cloud.provider}:
             raise ValueError('Saved transcript uses another provider; explicitly replace it instead of mixing backends')
         hints = validate_language_hints(language_hints) if language_hints is not None else None
         self.quality = TranscriptionQuality.model_validate(self.store.get(sid)['capture'].get('transcription_quality') or {}).model_copy(update={'final_transcription':False})
@@ -487,6 +488,7 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
 
     def reprocess(self,sid, *, language,cloud_consent=False,language_hints=None):
         self._saved(sid)
+        self.revision_model = 'universal-2' if self.cloud.provider == 'assemblyai' else None
         if language not in LANGUAGE_CHOICES:
             raise ValueError('Select Auto or a supported conversation language')
         hints = validate_language_hints(language_hints) if language_hints is not None else None
@@ -496,11 +498,18 @@ class DeepgramRecordingRunner(CloudRecordingRunner):
         return result
 
     def _live(self,audio,sid,emit,cancelled,done,**kwargs):
-        return run_streaming(recognition_audio(audio,self.quality),sid,emit,cancelled,done,config=self._quality_config(),budget=self.budget,
+        if self.cloud.provider == 'assemblyai':
+            from .assemblyai_meeting import run_streaming as stream
+        else:
+            stream = run_streaming
+        return stream(recognition_audio(audio,self.quality),sid,emit,cancelled,done,config=self._quality_config(),budget=self.budget,
                              language_hints=self.language_hints,**kwargs)
 
     def _batch(self,audio,sid,emit,cancelled):
-        from .deepgram_batch import run_batch
+        if self.cloud.provider == 'assemblyai':
+            from .assemblyai_meeting import run_batch
+        else:
+            from .deepgram_batch import run_batch
         return run_batch(recognition_audio(audio,self.quality),sid,emit,cancelled,config=self._quality_config(),budget=self.budget,
                          language=self.language,language_hints=self.language_hints)
 

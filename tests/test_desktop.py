@@ -515,3 +515,38 @@ def test_cleanup_never_inherits_notes_key_for_another_endpoint():
     assert settings.value.cleanup() is None
     settings.save({'summary_provider':'Ollama','summary_model':'local-notes'})
     assert settings.value.cleanup() is None
+
+
+def test_transcript_only_preference_survives_provider_changes_and_restart():
+    vault = Vault()
+    settings = DesktopSettings(vault)
+    assert settings.value.automatic_notes is True  # Existing settings preserve behavior.
+    settings.save({'automatic_notes':False})
+    settings.save({'summary_provider':'Gemini','summary_model':'test-model'})
+    reopened = DesktopSettings(vault)
+    assert reopened.value.public()['automatic_notes'] is False
+    reopened.save({'automatic_notes':True})
+    assert DesktopSettings(vault).value.automatic_notes is True
+    with pytest.raises(ValueError):
+        reopened.save({'automatic_notes':'false'})
+
+
+def test_detection_pause_survives_core_restart():
+    vault = Vault()
+    settings = DesktopSettings(vault)
+    def open_app(settings):
+        return create_app(desktop=DesktopContract(settings,Path('/fake/helper')),
+                          summary_provider=settings.value.summary())
+    app,token = open_app(settings)
+    with TestClient(app) as client, client.websocket_connect('ws://127.0.0.1/ws') as ws:
+        ws.send_text(token)
+        receive(ws,'snapshot')
+        ws.send_json(envelope({'action':'set_detection','enabled':False}))
+        assert receive(ws,'discovery')['discovery']['enabled'] is False
+        assert receive(ws,'receipt')['status']=='accepted'
+    reopened = DesktopSettings(vault)
+    assert reopened.value.detection_enabled is False
+    app,token = open_app(reopened)
+    with TestClient(app) as client, client.websocket_connect('ws://127.0.0.1/ws') as ws:
+        ws.send_text(token)
+        assert receive(ws,'snapshot')['discovery']['enabled'] is False

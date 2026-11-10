@@ -21,6 +21,24 @@ final class ReadProbe: @unchecked Sendable {
             precondition(CalendarAccessRoute.route(.writeOnly) == .request)
             precondition(CalendarAccessRoute.route(.fullAccess) == .ready)
         } else { precondition(CalendarAccessRoute.route(.authorized) == .ready) }
+        let suite = "ScribeLoop.CalendarTests."+UUID().uuidString
+        let defaults = UserDefaults(suiteName:suite)!
+        defer { defaults.removePersistentDomain(forName:suite) }
+        defaults.set(true,forKey:"calendar.enabled")
+        defaults.set(["work"],forKey:"calendar.selected")
+        let granted:EKAuthorizationStatus
+        if #available(macOS 14.0,*) { granted = .fullAccess } else { granted = .authorized }
+        let connected = CalendarCoordinator(defaults:defaults,authorization:{ granted })
+        precondition(connected.connected && !connected.permissionNeedsRequest)
+        let reopened = CalendarCoordinator(defaults:defaults,authorization:{ granted })
+        precondition(reopened.connected && reopened.selected == ["work"],"Reopening must preserve the integration and selected calendars")
+        let revoked = CalendarCoordinator(defaults:defaults,authorization:{ .denied })
+        precondition(!revoked.connected && revoked.accessBlocked && revoked.enabled,"Denied access is not a connected state, and must not erase saved intent")
+        let reset = CalendarCoordinator(defaults:defaults,authorization:{ .notDetermined })
+        precondition(!reset.connected && reset.permissionNeedsRequest)
+        reset.disable()
+        let disconnected = CalendarCoordinator(defaults:defaults,authorization:{ granted })
+        precondition(!disconnected.connected && disconnected.selected == ["work"],"Disconnect keeps selections without pretending that macOS revoked its grant")
         for url in ["https://meet.google.com/abc-defg-hij","https://teams.microsoft.com/l/meetup-join/test","https://company.zoom.us/j/123","https://company.webex.com/meet/user"] {
             precondition(MeetingLink.validated(URL(string:url)!) != nil)
         }

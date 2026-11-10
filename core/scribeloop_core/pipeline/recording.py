@@ -444,6 +444,12 @@ class RecordingRunner:
                 if chunk.get('type') == 'recorded_checkpoint':
                     self.store.checkpoint(session_id,chunk['stream'],recorded_ms=chunk['end_ms'])
                     continue
+                if chunk.get('type') == 'speaker_relabel':
+                    self.store.relabel_speech(session_id,chunk['stream'],chunk['original'],chunk['revised'])
+                    await self.publish({'type':'transcript_replaced','session_id':session_id,
+                        'segments':self.store.segments(session_id),
+                        'transcript_revisions':self.store.revisions(session_id)})
+                    continue
                 if chunk.get('type') == 'confirmed_window':
                     rows = self.store.commit_window(session_id,chunk['stream'],chunk['segments'],chunk['end_ms'])
                     for row in rows:
@@ -498,7 +504,7 @@ class RecordingRunner:
         provenance = config.public() if config is not None else {}
         self.store.revise_transcript(session_id, replacement,
             provider=provenance.get('provider',getattr(self,'provider',None)),
-            model=provenance.get('model'))
+            model=getattr(self,'revision_model',None) or provenance.get('model'))
         await self.publish({'type':'transcript_replaced','session_id':session_id,
                             'segments':self.store.segments(session_id),
                             'transcript_revisions':self.store.revisions(session_id)})

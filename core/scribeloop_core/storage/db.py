@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 DDL = """
 CREATE TABLE sessions (
@@ -285,6 +285,28 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
                 conn.execute('BEGIN')
             conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_revision_speaker "
                          "ON segments(session_id,revision,local_speaker_id)")
+            conn.execute("PRAGMA user_version=15")
+    if version < 16:
+        with conn:
+            if not conn.in_transaction:
+                conn.execute('BEGIN')
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS search_documents (
+              id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+              revision INTEGER, source_type TEXT NOT NULL,
+              source_id TEXT NOT NULL, start_ms INTEGER, end_ms INTEGER,
+              speaker_id TEXT, speaker_name TEXT, content TEXT NOT NULL,
+              started_at INTEGER NOT NULL, title TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_search_documents_session ON search_documents(session_id);
+            CREATE INDEX IF NOT EXISTS idx_search_documents_date ON search_documents(started_at);
+            CREATE INDEX IF NOT EXISTS idx_search_documents_person ON search_documents(speaker_id);
+            CREATE TABLE IF NOT EXISTS search_index_state (
+              session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+              fingerprint TEXT NOT NULL, indexed_at INTEGER NOT NULL,
+              document_count INTEGER NOT NULL
+            );
+            """)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
 

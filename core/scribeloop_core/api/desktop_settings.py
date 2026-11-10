@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..llm.summary_provider import SummaryProvider
+from ..pipeline.assemblyai_meeting import STREAMING_LANGUAGES, AssemblyAIConfig
 from ..pipeline.deepgram_meeting import DeepgramConfig
 from ..pipeline.languages import AUTO_LANGUAGES, HINT_LANGUAGE_NAMES, LanguageHints
 from ..pipeline.transcription_quality import TranscriptionQuality
@@ -26,7 +27,10 @@ OLLAMA_ENDPOINT = 'http://localhost:11434/v1'
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
+    detection_enabled: bool = True
+    automatic_notes: bool = True
     summary_key: str = Field(default='', max_length=2048, repr=False)
+    assemblyai_key: str = Field(default='', max_length=512, repr=False)
     deepgram_key: str = Field(default='', max_length=512, repr=False)
     summary_endpoint: str = Field(default='https://api.openai.com/v1', max_length=500)
     summary_model: str = Field(default='gpt-5.4-mini', min_length=1, max_length=100)
@@ -41,7 +45,7 @@ class Settings(BaseModel):
     vocabulary: list[str] = Field(default_factory=list, max_length=50)
     asr_microphone_source: Literal['processed', 'raw'] = 'processed'
     final_transcription: bool = False
-    transcription_engine: Literal['deepgram', 'ollama'] = 'deepgram'
+    transcription_engine: Literal['deepgram', 'assemblyai', 'ollama'] = 'deepgram'
     local_transcription_endpoint: str = Field(default=OLLAMA_ENDPOINT, max_length=200)
     local_transcription_model: str = Field(default='', max_length=128)
     local_speaker_labels: bool = False
@@ -77,7 +81,7 @@ class Settings(BaseModel):
             raise ValueError('Unsupported duration')
         return value
 
-    @field_validator('summary_key', 'deepgram_key', 'local_cleanup_key')
+    @field_validator('summary_key', 'deepgram_key', 'assemblyai_key', 'local_cleanup_key')
     @classmethod
     def secret_valid(cls, value):
         if value and (not value.isascii() or any(c.isspace() for c in value)):
@@ -123,7 +127,7 @@ class Settings(BaseModel):
             raise ValueError('Unsupported cleanup provider')
         return value
 
-    @field_validator('deepgram_key')
+    @field_validator('deepgram_key','assemblyai_key')
     @classmethod
     def transcription_secret_valid(cls, value):
         if value and len(value) < 16:
@@ -132,6 +136,8 @@ class Settings(BaseModel):
 
     @model_validator(mode='after')
     def local_engine_consistent(self):
+        if self.transcription_engine == 'assemblyai' and self.language_hints and any(code not in STREAMING_LANGUAGES for code in self.language_hints):
+            raise ValueError('Choose languages supported by AssemblyAI streaming')
         if self.transcription_engine == 'ollama' and not self.local_transcription_model.strip():
             raise ValueError('Choose an Ollama transcription model')
         return self
@@ -204,11 +210,13 @@ class Settings(BaseModel):
             with contextlib.suppress(ValueError):
                 local = self.local_transcription()
         cleanup = self.cleanup()
-        return {**self.model_dump(exclude={'summary_key','deepgram_key','summary_keys',
+        return {**self.model_dump(exclude={'summary_key','deepgram_key','assemblyai_key','summary_keys',
                     'local_cleanup_key','local_cleanup_keys'}),
                 'language_hints':self.language_hints or (list(AUTO_LANGUAGES) if self.language=='auto' else [self.language]),
                 'supported_language_hints':HINT_LANGUAGE_NAMES,
-                'transcription_configured': bool(self.deepgram_key),
+                'transcription_configured': bool(self.assemblyai_key if self.transcription_engine == 'assemblyai' else self.deepgram_key),
+                'assemblyai_configured': bool(self.assemblyai_key),
+                'deepgram_configured': bool(self.deepgram_key),
                 'local_transcription_configured': local.configured if local else False,
                 'local_cleanup_configured': bool(cleanup and cleanup.configured),
                 'local_cleanup_provider': self.local_cleanup_provider,
@@ -257,13 +265,17 @@ class DesktopSettings:
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None
 
     def cloud(self):
-        # Explicit test injection is retained; production never reads a bundle key.
-        return DeepgramConfig(api_key=self.value.deepgram_key or self._cloud.api_key,
-            connector=self._cloud.connector, batch_transport=self._cloud.batch_transport,
-            budget_usd=self._cloud.budget_usd, max_requests=self._cloud.max_requests,
-            quality=TranscriptionQuality(vocabulary=self.value.vocabulary,
-                asr_microphone_source=self.value.asr_microphone_source,
-                final_transcription=self.value.final_transcription))
+        quality = TranscriptionQuality(vocabulary=self.value.vocabulary,
+            asr_microphone_source=self.value.asr_microphone_source,
+            final_transcription=self.value.final_transcription if self.value.transcription_engine == 'deepgram' else False)
+        deepgram = DeepgramConfig(api_key=self.value.deepgram_key or self._cloud.api_key,
+            connector=self._cloud.connector,batch_transport=self._cloud.batch_transport,
+            budget_usd=self._cloud.budget_usd,max_requests=self._cloud.max_requests,quality=quality)
+        assembly = AssemblyAIConfig(api_key=self.value.assemblyai_key,budget_usd=.25,max_requests=160,
+            quality=quality.model_copy(update={'final_transcription':False}))
+        selected = assembly if self.value.transcription_engine == 'assemblyai' else deepgram
+        selected.alternatives = {'deepgram':deepgram,'assemblyai':assembly}
+        return selected
 
     def prepare(self, patch):
         if not isinstance(patch, dict) or len(json.dumps(patch,ensure_ascii=False).encode()) > 12288:

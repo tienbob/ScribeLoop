@@ -1,5 +1,8 @@
 # ScribeLoop — implementation plan for review
 
+> Next feature delivery plan (2026-11-10): [Meeting workspace delivery](MEETING_WORKSPACE_DELIVERY_PLAN.md), covering search, cited chat, templates, tasks, personal notes and follow-up integrations with per-feature finish gates and flows.
+
+
 Updated: 3 November 2026. Latest decisions: remove persistent tasks and Brief summaries; prioritize offline Ollama; email shares Summary (default), Transcript or Audio; Calendar workflow approved after research. This revision changes the plan, not external accounts, messages or billing.
 
 The baseline is the current working tree and installed 0.1.14 app, including

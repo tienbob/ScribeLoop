@@ -26,7 +26,7 @@ def test_migrate_creates_schema(db):
         "words", "summaries", "embeddings_chunks", "events", "transcript_revisions",
     }
     assert expected <= tables
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 15
+    assert db.execute("PRAGMA user_version").fetchone()[0] == 16
 
 
 def test_pragmas_on(db):
@@ -61,7 +61,7 @@ def test_event_index_upgrades_v13_and_serves_history_queries(db):
     db.execute('PRAGMA user_version=13')
     db.commit()
     migrate(db)
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 15
+    assert db.execute('PRAGMA user_version').fetchone()[0] == 16
     for direction in ('ASC', 'DESC'):
         plan = db.execute('EXPLAIN QUERY PLAN SELECT payload_json FROM events '
                           f'WHERE session_id=? AND type=? ORDER BY id {direction} LIMIT 1',
