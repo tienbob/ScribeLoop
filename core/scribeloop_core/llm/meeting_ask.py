@@ -72,8 +72,9 @@ def _evidence_hash(row) -> str:
 class MeetingEvidence:
     """Build the only evidence packet that an Ask generation may receive."""
 
-    def __init__(self, store):
+    def __init__(self, store, *, embedding_config=None, embedder=None):
         self.store=store
+        self.embedding_config,self.embedder=embedding_config,embedder
 
     async def retrieve(self, question: str, scope: AskScope):
         if not isinstance(question,str) or not 1<=len(question.strip())<=MAX_QUESTION_CHARS:
@@ -81,15 +82,19 @@ class MeetingEvidence:
         if not isinstance(scope,AskScope):
             raise TypeError('Invalid Ask scope')
         meeting_ids=None if scope.kind == 'all' else list(scope.meeting_ids)
-        result=await MeetingSearch(self.store).query_async(_retrieval_query(question),limit=MAX_PASSAGES,
-                                                            meeting_ids=meeting_ids,match_all=False)
-        passages=[]; used=0; truncated=result['next_offset'] is not None
-        for hit in result['results']:
+        result=await MeetingSearch(self.store,embedding_config=self.embedding_config,
+                                    embedder=self.embedder,include_titles=False).query_async(_retrieval_query(question)[:200],limit=MAX_PASSAGES,
+                                                            meeting_ids=meeting_ids,match_all=False,semantic_query=question)
+        candidates=result['results']
+        retrieval_mode='hybrid' if result.get('retrieval_mode') == 'hybrid' else 'lexical'
+        passages=[]; used=0; truncated=result['next_offset'] is not None or len(candidates)>MAX_PASSAGES
+        for hit in candidates[:MAX_PASSAGES]:
             # Titles help discovery but cannot support a factual meeting answer.
             if hit['source_type'] == 'title':
                 continue
-            row=self.store.conn.execute('SELECT content FROM search_documents WHERE id=? AND session_id=? AND revision=?',
-                                        (hit['id'],hit['session_id'],hit['revision'])).fetchone()
+            row=(hit if 'content' in hit else self.store.conn.execute(
+                'SELECT content FROM search_documents WHERE id=? AND session_id=? AND revision=?',
+                (hit['id'],hit['session_id'],hit['revision'])).fetchone())
             if not row:
                 continue
             remaining=MAX_EVIDENCE_BYTES-used
@@ -112,7 +117,8 @@ class MeetingEvidence:
                 break
         return {'question':question.strip(),'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
                 'passages':passages,'passage_count':len(passages),'evidence_bytes':used,
-                'truncated':truncated,'sufficient':bool(passages),'index':result['index']}
+                'truncated':truncated,'sufficient':bool(passages),'retrieval_mode':retrieval_mode,
+                'index':result['index']}
 
 
 def answer_messages(packet,prior=None):
@@ -158,8 +164,9 @@ def validate_answer(value, packet):
 class MeetingAsk:
     """Single-request cited answering plus revision-aware encrypted history."""
 
-    def __init__(self,store,provider):
+    def __init__(self,store,provider,*,embedding_config=None,embedder=None):
         self.store,self.provider=store,provider
+        self.embedding_config,self.embedder=embedding_config,embedder
 
     async def answer(self, question, scope, *, previous_answer_id=None):
         prior=None; retrieval_question=question
@@ -188,7 +195,8 @@ class MeetingAsk:
                     raise ValueError('Prior Ask answer is outdated')
             prior={'question':row['question'],'answer':json.loads(row['answer_json'])}
             retrieval_question=(row['question']+' '+question)[-MAX_QUESTION_CHARS:]
-        packet=await MeetingEvidence(self.store).retrieve(retrieval_question,scope)
+        packet=await MeetingEvidence(self.store,embedding_config=self.embedding_config,
+                                     embedder=self.embedder).retrieve(retrieval_question,scope)
         packet['question']=question.strip()
         if not packet['sufficient']:
             return {'answer':{'claims':[],'insufficient_evidence':True,

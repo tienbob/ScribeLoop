@@ -750,13 +750,19 @@ class SessionStore:
         self._cloud_usage_cache.pop(session_id,None)
         from .search import MeetingSearch
         MeetingSearch(self).purge_session(session_id)
-        has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
-        if has_vectors:
+        vector_tables=[]
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embedding_index_generations'").fetchone():
+            vector_tables=[row[0] for row in self.conn.execute('SELECT table_name FROM embedding_index_generations')]
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone():
+            vector_tables.append('embeddings_chunks_vec')
+        if vector_tables:
             from .vectors import load_vec_extension
             load_vec_extension(self.conn)
         with self.conn:
-            if has_vectors:
-                self.conn.execute('DELETE FROM embeddings_chunks_vec WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
+            for table in vector_tables:
+                if table != 'embeddings_chunks_vec' and not re.fullmatch(r'embeddings_chunks_vec_[0-9a-f]{16}',table):
+                    raise ValueError('Invalid vector table registry')
+                self.conn.execute(f'DELETE FROM {table} WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))

@@ -122,6 +122,24 @@ async def serve(request, *, app_factory=make_app, helpers=None):
 
 def main():
     try:
+        if sys.argv[1:] == ['--embedding-smoke']:
+            # Synthetic, offline packaging check; never opens settings or storage.
+            import struct
+
+            from ..storage.embeddings import EmbeddingConfig, LocalEmbeddingProvider
+            provider=LocalEmbeddingProvider(EmbeddingConfig('Local','',
+                'granite-embedding-97m-multilingual-r2',384))
+            values=asyncio.run(provider.embed(['How does the meeting-notes application work?',
+                'Ứng dụng hoạt động như một trợ lý ghi chú cuộc họp.',
+                'Ngày mai trời sẽ mưa và đường phố bị ngập.']))
+            vectors=[struct.unpack('384f',value) for value in values]
+            relevant=sum(a*b for a,b in zip(vectors[0],vectors[1],strict=True))
+            unrelated=sum(a*b for a,b in zip(vectors[0],vectors[2],strict=True))
+            print(json.dumps({'ok':relevant>unrelated,'dimensions':384,
+                              'relevant_similarity':relevant,'unrelated_similarity':unrelated}))
+            if relevant<=unrelated:
+                raise SystemExit(1)
+            return
         if sys.argv[1:] == ['--inspect-audio']:
             from ..storage.audio_quality import main as inspect_audio
             inspect_audio(json.loads(read_control(timeout=10)))

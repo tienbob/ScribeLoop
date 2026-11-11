@@ -1,7 +1,8 @@
 # F2 Ask meetings — implementation closeout
 
-Status: implementation complete on `feature/f2-ask-meetings`; release acceptance
-evaluation remains open. Updated 2026-11-10.
+Status: Ask implementation complete; multilingual hybrid retrieval added on
+`feature/f2-hybrid-search`. Release acceptance evaluation remains open.
+Updated 2026-11-11. See `HYBRID_SEARCH_VALIDATION.md` for current validation.
 
 ## Delivered flow
 
@@ -36,7 +37,7 @@ repopulate a cleared field; title hits consistently open the transcript view.
 
 ```mermaid
 flowchart LR
-    Q[Question + visible scope] --> R[Local revision-aware lexical retrieval]
+    Q[Question + visible scope] --> R[Configured keyword or hybrid retrieval]
     R -->|0 hits| N[Not found in retrieved evidence]
     R -->|≤20 passages / ≤48 KiB| P[One configured-provider request]
     P --> V[Strict schema + scope/citation validation]
@@ -53,6 +54,10 @@ before-delete purge trigger. Schema v18 adds request duration and input/output b
 measurements. Both are additive. Rolling back the application leaves the new tables
 unused; rolling forward preserves them. No existing meeting, credential, audio,
 transcript or summary row is rewritten.
+
+Schema v19/v20 adds vector-generation identities and per-meeting semantic index
+state. These additive indexes are derived from current transcript/summary sources.
+Settings chooses local or remote embeddings independently from the notes provider.
 
 ## Verification recorded
 

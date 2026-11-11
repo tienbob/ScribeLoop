@@ -744,6 +744,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             desktop.receipt(dispatch_id,'dispatching')
                             if action == 'ask_question':
                                 from ..llm.meeting_ask import AskScope, MeetingAsk
+                                desktop.settings.value.require_hybrid_for_ask()
+                                ask_embedding_config=desktop.settings.value.embedding()
                                 allowed={'action','question','scope','current_id','selected_ids','previous_answer_id'}
                                 selected=command.get('selected_ids')
                                 current=command.get('current_id')
@@ -764,11 +766,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     raise ValueError('Invalid prior Ask answer')
                                 ask_provider=summary_provider
                                 async def run_ask(request_id=dispatch_id,question=question,scope=scope,
-                                                  ask_provider=ask_provider,previous_answer_id=previous_answer_id):
+                                                  ask_provider=ask_provider,previous_answer_id=previous_answer_id,
+                                                  ask_embedding_config=ask_embedding_config):
                                     try:
                                         await publish({'type':'ask_started','request_id':request_id,
                                             'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}})
-                                        result=await MeetingAsk(store,ask_provider).answer(
+                                        result=await MeetingAsk(store,ask_provider,
+                                            embedding_config=ask_embedding_config).answer(
                                             question,scope,previous_answer_id=previous_answer_id)
                                         await publish({'type':'ask_answer','request_id':request_id,**result})
                                     except asyncio.CancelledError:
