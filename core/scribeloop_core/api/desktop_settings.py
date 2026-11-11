@@ -242,6 +242,10 @@ class Settings(BaseModel):
             model=self.embedding_model.strip(),dimensions=self.embedding_dimensions,
             api_key=self.effective_embedding_key())
 
+    def require_hybrid_for_ask(self):
+        if self.search_mode != 'hybrid':
+            raise ValueError('Enable Hybrid search in Settings → Models → Meeting search to use Ask')
+
     def effective_embedding_key(self):
         if self.embedding_provider == 'Local':
             return ''

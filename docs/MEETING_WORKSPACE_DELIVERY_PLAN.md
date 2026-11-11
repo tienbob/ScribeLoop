@@ -208,6 +208,13 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+Hybrid prerequisite (2026-11-11): Ask requires the user to enable Hybrid in
+Settings → Models → Meeting search. Enforce this for questions, evidence and
+history in the desktop API as well as the native client. Keyword-only users see
+an explanation and a direct settings link. Settings explains semantic retrieval,
+the embedding destination and the separate notes-provider destination. No automatic
+enablement or full-transcript fallback is permitted.
+
 Chosen-meeting UX refinement (2026-11-11): replace the short inline checklist with
 a searchable, larger draft picker. Selecting Chosen meetings opens the picker;
 Apply updates scope/history once, while Cancel preserves the applied selection.

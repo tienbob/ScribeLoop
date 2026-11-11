@@ -636,7 +636,9 @@ struct PreferencesSaveProgress {
         searchRequest=send(command)
         if searchRequest == nil { searchLoading=false }
     }
+    var askHybridEnabled:Bool { text(settings["search_mode"]) == "hybrid" }
     func ask(_ question:String,scope:String,currentID:String?,selectedIDs:[String],previousAnswerID:String? = nil) {
+        guard askHybridEnabled else { askError="Enable Hybrid search in Settings → Models → Meeting search to use Ask."; return }
         let value=question.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !value.isEmpty, summaryProvider["configured"] as? Bool == true else {
             askError = "Enter a question and configure the notes provider first."; return
@@ -650,6 +652,7 @@ struct PreferencesSaveProgress {
         if askRequest == nil { askLoading=false; askError=message ?? "Ask could not start." }
     }
     func loadAskHistory(scope:String,currentID:String?,selectedIDs:[String]) {
+        guard askHybridEnabled else { askHistory=[]; return }
         var command:Object=["action":"ask_history","scope":scope,"limit":50]
         if scope == "current", let currentID { command["current_id"]=currentID }
         if scope == "selected" { command["selected_ids"]=selectedIDs }

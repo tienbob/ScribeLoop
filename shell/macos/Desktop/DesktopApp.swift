@@ -207,9 +207,19 @@ struct Notebook: View {
                 Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
                 Button { showAsk = true } label: { Label("Ask",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
-                    .disabled(!core.accepted || !core.connected || core.busy || core.summaryProvider["configured"] as? Bool != true)
+                    .disabled(!core.accepted || !core.connected || core.busy || !core.askHybridEnabled || core.summaryProvider["configured"] as? Bool != true)
                     .keyboardShortcut("k",modifiers:.command)
-                    .help(core.summaryProvider["configured"] as? Bool == true ? "Ask questions about saved meetings" : "Set up a notes provider in Preferences to use Ask")
+                    .help(!core.askHybridEnabled ? "Enable Hybrid search in Settings → Models → Meeting search to use Ask" : core.summaryProvider["configured"] as? Bool == true ? "Ask questions about saved meetings" : "Set up a notes provider in Preferences to use Ask")
+                if !core.askHybridEnabled {
+                    VStack(alignment:.leading,spacing:5) {
+                        Text("Ask needs Hybrid search").font(.caption.weight(.medium))
+                        Text("Find meaning across languages, then get AI answers with sources.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Set up Hybrid search…") { preferencesRequest=SettingsDestination(id:"Models") }
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(ScribeTheme.accent)
+                            .disabled(!core.connected || core.busy || !core.accepted)
+                    }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,6)
+                }
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
@@ -796,10 +806,6 @@ struct MeetingAskView: View {
                             Label("Evidence was limited to 20 passages / 48 KB. This is not an exhaustive search.",systemImage:"info.circle")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        if text((core.askResult["evidence"] as? Object)?["retrieval_mode"]) == "current_meeting_fallback" {
-                            Label("No keyword match · reviewed a bounded excerpt of the current transcript",systemImage:"text.magnifyingglass")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
                         if let packet=core.askResult["evidence"] as? Object, let index=packet["index"] as? Object,
                            let semantic=index["semantic"] as? Object {
                             if semantic["enabled"] as? Bool == true {
@@ -884,6 +890,9 @@ struct MeetingAskView: View {
         .onChange(of:scope) { value in
             previousAnswerID=nil; core.askResult=[:]; refreshHistory()
             if value == "selected" { showMeetings=true }
+        }
+        .onChange(of:core.askHybridEnabled) { enabled in
+            if !enabled { if core.askLoading { core.cancelAsk() }; dismiss() }
         }
         .sheet(isPresented:$showMeetings) {
             ChosenMeetingsPicker(core:core,applied:selected) { choices in

@@ -7,6 +7,18 @@ Hybrid supports Gemini (default provider), bundled local multilingual embeddings
 and Custom OpenAI-compatible endpoints. Notes generation uses its separate provider.
 Search and Ask share the selected retrieval configuration.
 
+Ask availability now follows explicit Hybrid enablement. Keyword-only mode disables
+Ask and shows an explanation plus a Models setup link. Native client checks and
+server-side question/evidence/history handlers enforce the same prerequisite.
+The unmatched current-meeting transcript fallback was removed. Hybrid settings
+explain semantic retrieval and both embedding and answer destinations before Save.
+Regression coverage confirms Keyword mode rejects Ask evidence/history and enabling
+Hybrid permits retrieval. The full 860-test suite and rebuilt native app passed.
+Installed-app verification confirmed the prerequisite text, cloud disclosure,
+Gemini embedding model/dimensions and separate Gemini answer model. The user's
+existing saved mode was already Hybrid; Ask became available after workspace
+connection. That choice was preserved, with no provider request submitted.
+
 Gemini defaults to `gemini-embedding-001` at 768 dimensions. Its native
 `batchEmbedContents` request sets `outputDimensionality` and uses
 `RETRIEVAL_DOCUMENT` for stored chunks / `RETRIEVAL_QUERY` for questions. Responses

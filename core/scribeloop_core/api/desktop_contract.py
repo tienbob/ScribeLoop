@@ -173,6 +173,7 @@ class DesktopContract:
                     (recording_task and not recording_task.done())):
                 raise ValueError('Ask is available after setup and while recording is idle')
             from ..llm.meeting_ask import AskScope, MeetingEvidence
+            self.settings.value.require_hybrid_for_ask()
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
             result=await MeetingEvidence(app.state.store,
@@ -192,6 +193,7 @@ class DesktopContract:
             if not app.state.store.agreement()['accepted']:
                 raise ValueError('Ask is available after setup')
             from ..llm.meeting_ask import AskScope, MeetingAsk
+            self.settings.value.require_hybrid_for_ask()
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
             result=await MeetingAsk(app.state.store,summary_provider,

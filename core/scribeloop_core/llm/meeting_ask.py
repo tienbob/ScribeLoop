@@ -87,16 +87,6 @@ class MeetingEvidence:
                                                             meeting_ids=meeting_ids,match_all=False,semantic_query=question)
         candidates=result['results']
         retrieval_mode='hybrid' if result.get('retrieval_mode') == 'hybrid' else 'lexical'
-        if (not candidates and scope.kind == 'current' and
-                result.get('retrieval_mode') != 'hybrid'):
-            # A user may ask in another language than the meeting. For one
-            # explicitly selected meeting, bounded current-revision context is
-            # safer and more useful than pretending lexical search was exhaustive.
-            candidates=[dict(row) for row in self.store.conn.execute(
-                "SELECT * FROM search_documents WHERE session_id=? AND source_type IN ('summary','transcript') "
-                "ORDER BY CASE source_type WHEN 'summary' THEN 0 ELSE 1 END,start_ms,rowid LIMIT ?",
-                (scope.meeting_ids[0],MAX_PASSAGES+1))]
-            retrieval_mode='current_meeting_fallback'
         passages=[]; used=0; truncated=result['next_offset'] is not None or len(candidates)>MAX_PASSAGES
         for hit in candidates[:MAX_PASSAGES]:
             # Titles help discovery but cannot support a factual meeting answer.

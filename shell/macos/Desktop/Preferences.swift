@@ -188,7 +188,11 @@ struct Preferences: View {
                         Text("Keyword only · Local").tag("keyword")
                         Text("Hybrid semantic + keyword").tag("hybrid")
                     }
+                    Text("Hybrid unlocks Ask: semantic retrieval finds relevant passages across languages, then your notes model answers with citations. Keyword-only search finds matching words and keeps Ask off.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if searchMode == "hybrid" {
+                        Text("Ask sends your question and retrieved passages to \(provider) · \(model) for a cited answer. Cloud embedding providers also receive transcript chunks during indexing and query text during retrieval.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Picker("Embedding provider",selection:$embeddingProvider) {
                             Text("Gemini · Cloud").tag("Gemini")
                             Text("ScribeLoop multilingual · Local").tag("Local")

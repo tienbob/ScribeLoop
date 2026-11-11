@@ -61,13 +61,12 @@ async def test_ask_evidence_bounds_bytes_passages_and_reports_insufficient():
 
 
 @pytest.mark.asyncio
-async def test_current_meeting_uses_bounded_context_when_question_language_has_no_lexical_hit():
+async def test_ask_never_falls_back_to_unmatched_transcript_context():
     store=SessionStore(migrate(connect(':memory:')))
     sid=meeting(store,'Kiến trúc ứng dụng','Hệ thống sử dụng plugin để gửi thư và đặt lịch')
     current=AskScope.resolve(store,'current',current_id=sid)
     packet=await MeetingEvidence(store).retrieve('How does the application work?',current)
-    assert packet['sufficient'] and packet['retrieval_mode']=='current_meeting_fallback'
-    assert packet['passages'][0]['meeting_id']==sid
+    assert not packet['sufficient'] and packet['passages']==[]
     selected=AskScope.resolve(store,'selected',selected_ids=[sid])
     closed=await MeetingEvidence(store).retrieve('unrelated cross language question',selected)
     assert not closed['sufficient'] and closed['retrieval_mode']=='lexical'
@@ -100,6 +99,12 @@ async def test_desktop_ask_evidence_requires_agreement_idle_state_and_explicit_s
     with pytest.raises(ValueError,match='recording is idle'):
         await desktop.read(app,command,desktop.settings.value.summary(),None,None)
     app.state.recording=None
+    with pytest.raises(ValueError,match='Enable Hybrid'):
+        await desktop.read(app,command,desktop.settings.value.summary(),None,None)
+    with pytest.raises(ValueError,match='Enable Hybrid'):
+        await desktop.read(app,{'action':'ask_history','scope':'current','current_id':sid},
+                           desktop.settings.value.summary(),None,None)
+    desktop.settings.save({'search_mode':'hybrid','embedding_provider':'Local'})
     result=await desktop.read(app,command,desktop.settings.value.summary(),None,None)
     assert result['type']=='ask_evidence' and result['sufficient']
     assert result['scope']=={'kind':'current','meeting_ids':[sid]}
