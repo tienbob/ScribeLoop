@@ -208,6 +208,19 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+Chosen-meeting UX refinement (2026-11-11): replace the short inline checklist with
+a searchable, larger draft picker. Selecting Chosen meetings opens the picker;
+Apply updates scope/history once, while Cancel preserves the applied selection.
+Show selection count, selected-only review, additive filtered selection, a 100-item
+limit and explicit older-history loading. Disable scope edits during a running Ask.
+Implemented and verified in the rebuilt macOS app: accent-insensitive `kiem tra`
+matched Vietnamese titles; filtered selection retained an earlier choice; Cancel
+kept the prior one-meeting scope; Apply changed it to two meetings; an empty
+selection disabled Apply. The user's original scope and question were restored.
+Native compilation and deep signature verification passed. Older-history paging
+and the 100-item cap are implemented but were not exercised against the user's
+eight-conversation workspace. No provider request was submitted by this UX check.
+
 **User outcome:** ask “What did we agree about pricing?” and inspect the evidence.
 
 **Scope:** a meeting-scoped conversation plus explicitly selected meetings or all

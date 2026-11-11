@@ -754,8 +754,11 @@ struct MeetingAskView: View {
                     Text("Chosen meetings").tag("selected")
                     Text("All meetings").tag("all")
                 }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Meeting scope").frame(maxWidth:430)
+                    .disabled(core.askLoading)
                 if scope == "selected" {
-                    Button(showMeetings ? "Hide list" : "Choose…") { showMeetings.toggle() }.fixedSize()
+                    Button { showMeetings=true } label: {
+                        Label("\(selected.count) selected",systemImage:"slider.horizontal.3")
+                    }.fixedSize().disabled(core.askLoading).help("Change chosen meetings")
                 }
                 Spacer()
                 Text("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"]))")
@@ -766,35 +769,6 @@ struct MeetingAskView: View {
                 Text("Searching: \(scopeLabel)").lineLimit(1)
                 Spacer()
             }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,22).padding(.bottom,10)
-            if showMeetings && scope == "selected" {
-                VStack(spacing:8) {
-                    HStack {
-                        Text("Choose meetings").font(.headline)
-                        Spacer()
-                        Button("Select visible") { selected=Set(core.sessions.map(\.id)); refreshHistory() }.buttonStyle(.borderless)
-                        Button("Clear") { selected=[]; refreshHistory() }.buttonStyle(.borderless).disabled(selected.isEmpty)
-                    }
-                    ScrollView {
-                        LazyVStack(spacing:4) {
-                        ForEach(core.sessions) { row in
-                            Button {
-                                if selected.contains(row.id) { selected.remove(row.id) } else { selected.insert(row.id) }
-                                refreshHistory()
-                            } label: {
-                                HStack {
-                                    Image(systemName:selected.contains(row.id) ? "checkmark.square.fill" : "square")
-                                        .foregroundStyle(selected.contains(row.id) ? ScribeTheme.accent : .secondary)
-                                    Text(row.text("title")).lineLimit(2); Spacer()
-                                    Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),style:.date)
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }.padding(7).contentShape(Rectangle())
-                            }.buttonStyle(.plain).accessibilityLabel("\(selected.contains(row.id) ? "Remove" : "Add") \(row.text("title"))")
-                        }
-                        }
-                    }.frame(maxHeight:150)
-                }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
-                    .padding(.horizontal,22).padding(.bottom,12)
-            }
             Divider()
             ScrollView {
                 VStack(alignment:.leading,spacing:16) {
@@ -907,7 +881,144 @@ struct MeetingAskView: View {
             if let id=core.selectedID { selected=[id] }
             refreshHistory()
         }
-        .onChange(of:scope) { _ in previousAnswerID=nil; core.askResult=[:]; refreshHistory() }
+        .onChange(of:scope) { value in
+            previousAnswerID=nil; core.askResult=[:]; refreshHistory()
+            if value == "selected" { showMeetings=true }
+        }
+        .sheet(isPresented:$showMeetings) {
+            ChosenMeetingsPicker(core:core,applied:selected) { choices in
+                guard choices != selected else { return }
+                selected=choices; previousAnswerID=nil; core.askResult=[:]; core.askError=nil; refreshHistory()
+            }
+        }
+    }
+}
+
+struct ChosenMeetingsPicker: View {
+    @ObservedObject var core:DesktopClient
+    let applied:Set<String>
+    let use:(Set<String>)->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft=Set<String>()
+    @State private var query=""
+    @State private var selectedOnly=false
+    @State private var loadingOlder=false
+    @State private var olderRequest:String?
+    @FocusState private var searchFocused:Bool
+
+    private var matches:[Record] {
+        core.sessions.filter { row in
+            (!selectedOnly || draft.contains(row.id)) &&
+            (query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ||
+             row.text("title").localizedStandardContains(query.trimmingCharacters(in:.whitespacesAndNewlines)))
+        }
+    }
+    private var canAddMatches:Bool { matches.contains { !draft.contains($0.id) } && draft.count < 100 }
+    private func toggle(_ row:Record) {
+        if draft.contains(row.id) { draft.remove(row.id) }
+        else if draft.count < 100 { draft.insert(row.id) }
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:0) {
+            HStack(alignment:.top) {
+                VStack(alignment:.leading,spacing:5) {
+                    Text("Choose conversations").font(.system(size:24,weight:.semibold,design:.serif))
+                    Text("Include the discussions you want your answer to draw from.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(24)
+            HStack(spacing:10) {
+                Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find a conversation by name",text:$query).textFieldStyle(.plain)
+                    .focused($searchFocused).accessibilityLabel("Find conversations")
+                if !query.isEmpty {
+                    Button { query="" } label: { Image(systemName:"xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Clear conversation search")
+                }
+            }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                .overlay { RoundedRectangle(cornerRadius:10).strokeBorder(ScribeTheme.border) }
+                .padding(.horizontal,24)
+            HStack {
+                Button { selectedOnly.toggle() } label: {
+                    Label(selectedOnly ? "Showing selected (\(draft.count))" : "Review selected (\(draft.count))",
+                          systemImage:selectedOnly ? "checkmark.circle.fill" : "checkmark.circle")
+                }.buttonStyle(.borderless).foregroundStyle(selectedOnly ? ScribeTheme.accent : .secondary)
+                Spacer()
+                if !selectedOnly {
+                    Button(query.isEmpty ? "Select listed" : "Select matches") {
+                        for row in matches where draft.count < 100 { draft.insert(row.id) }
+                    }.buttonStyle(.borderless).disabled(!canAddMatches)
+                }
+                Button("Clear selection") { draft=[] }.buttonStyle(.borderless).disabled(draft.isEmpty)
+            }.font(.caption).padding(.horizontal,24).padding(.vertical,14)
+            Divider()
+            ScrollView {
+                LazyVStack(spacing:6) {
+                    if matches.isEmpty {
+                        VStack(spacing:8) {
+                            Image(systemName:selectedOnly ? "checkmark.circle" : "magnifyingglass").font(.title2)
+                            Text(selectedOnly ? "No selected conversations match" : "No conversations match")
+                                .font(.headline)
+                            Text(selectedOnly ? "Show all conversations or try another name." : "Try another name, or load older conversations below.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }.frame(maxWidth:.infinity).padding(.vertical,50)
+                    }
+                    ForEach(matches) { row in
+                        Button { toggle(row) } label: {
+                            HStack(spacing:12) {
+                                Image(systemName:draft.contains(row.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size:20)).foregroundStyle(draft.contains(row.id) ? ScribeTheme.accent : .secondary)
+                                VStack(alignment:.leading,spacing:5) {
+                                    Text(row.text("title")).font(.body.weight(.medium)).lineLimit(2)
+                                        .foregroundStyle(.primary).multilineTextAlignment(.leading)
+                                    HStack(spacing:6) {
+                                        Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),format:.dateTime.month(.abbreviated).day().year().hour().minute())
+                                        Text("· \(row.text("status").capitalized)")
+                                    }.font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength:0)
+                            }.padding(12).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                                .background(draft.contains(row.id) ? ScribeTheme.subtle : ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                                .overlay { RoundedRectangle(cornerRadius:10).strokeBorder(draft.contains(row.id) ? ScribeTheme.accent.opacity(0.6) : ScribeTheme.border.opacity(0.5)) }
+                        }.buttonStyle(.plain)
+                            .disabled(!draft.contains(row.id) && draft.count >= 100)
+                            .accessibilityLabel("\(draft.contains(row.id) ? "Selected" : "Not selected"), \(row.text("title"))")
+                            .accessibilityHint("Toggle inclusion in the answer's meeting scope")
+                    }
+                }.padding(16)
+            }.frame(maxWidth:.infinity,maxHeight:.infinity)
+            if let cursor=core.nextCursor {
+                HStack {
+                    Text("Search covers \(core.sessions.count) loaded conversations.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(loadingOlder ? "Loading…" : "Load older conversations") {
+                        olderRequest=core.send(["action":"history_page","cursor":cursor])
+                        loadingOlder=olderRequest != nil
+                    }.disabled(loadingOlder)
+                }.padding(.horizontal,24).padding(.bottom,12)
+            }
+            Divider()
+            HStack {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("\(draft.count) conversation\(draft.count == 1 ? "" : "s") selected").font(.callout.weight(.medium))
+                    Text(draft.count == 100 ? "Selection limit reached" : "Choose up to 100. Changes apply when you confirm.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Use selected meetings") { use(draft); dismiss() }
+                    .buttonStyle(.borderedProminent).tint(ScribeTheme.action).keyboardShortcut(.defaultAction)
+                    .disabled(draft.isEmpty)
+            }.padding(24)
+        }.frame(width:640,height:600).background(ScribeTheme.canvas).tint(ScribeTheme.accent)
+            .onAppear { draft=applied; searchFocused=true }
+            .onChange(of:core.sessions.count) { _ in loadingOlder=false }
+            .onChange(of:core.nextCursor == nil) { _ in loadingOlder=false }
+            .onChange(of:core.message) { _ in loadingOlder=false }
+            .onChange(of:core.requests[olderRequest ?? ""]) { status in
+                if ["accepted","rejected","unknown"].contains(status ?? "") { loadingOlder=false; olderRequest=nil }
+            }
     }
 }
 
