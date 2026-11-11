@@ -96,13 +96,6 @@ struct Preferences: View {
            !text(core.settings["embedding_key_preview"]).isEmpty { return text(core.settings["embedding_key_preview"]) }
         return embeddingKeyPreviews[embeddingProvider] ?? (embeddingProvider == "Gemini" ? text(core.settings["gemini_embedding_shared_key_preview"]) : "")
     }
-    private var embeddingUsesNotesKey:Bool {
-        guard embeddingProvider == "Gemini" else { return false }
-        if embeddingProvider == text(core.settings["embedding_provider"]) {
-            return text(core.settings["embedding_key_source"]) == "notes"
-        }
-        return embeddingKeyPreviews[embeddingProvider] == nil && !embeddingKeyPreview.isEmpty
-    }
     private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate),searchMode,embeddingProvider,embeddingEndpoint,embeddingModel,String(embeddingDimensions)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || !embeddingKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
@@ -233,13 +226,7 @@ struct Preferences: View {
                                         Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
                                     }
                                 }
-                                if !embeddingKeyPreview.isEmpty {
-                                    HStack {
-                                        Text(embeddingKeyPreview).font(.callout.monospaced())
-                                        Text(embeddingUsesNotesKey ? "Using saved Gemini notes key" : "Stored securely in Keychain")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }.accessibilityElement(children:.combine)
-                                } else if embeddingKey.isEmpty {
+                                if embeddingKeyPreview.isEmpty && embeddingKey.isEmpty {
                                     Text(embeddingProvider == "Ollama" || embeddingProvider == "LM Studio" ? "No key saved · usually optional for a local server" : "No API key saved for this provider")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
