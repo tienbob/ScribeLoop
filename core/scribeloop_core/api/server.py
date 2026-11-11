@@ -778,9 +778,14 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     except asyncio.CancelledError:
                                         await publish({'type':'ask_cancelled','request_id':request_id})
                                         raise
-                                    except Exception:  # noqa: BLE001 - provider responses and keys stay private
+                                    except Exception as error:  # noqa: BLE001 - sanitize provider bodies and keys
+                                        from ..llm.meeting_ask import ask_failure
+                                        failure=ask_failure(error)
+                                        with contextlib.suppress(*DATABASE_ERRORS), store.conn:
+                                            store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
+                                                (None,store._now(),'error','ask_failed',json.dumps({'code':failure['code']})))
                                         await publish({'type':'ask_error','request_id':request_id,
-                                            'message':'Ask could not finish. Check the notes provider, quota and network, then retry explicitly.'})
+                                            'diagnostic':failure['code'],'message':failure['message']})
                                 ask_task=asyncio.create_task(run_ask())
                                 app.state.ask_tasks.add(ask_task)
                                 ask_task.add_done_callback(app.state.ask_tasks.discard)
