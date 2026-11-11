@@ -173,7 +173,11 @@ async def test_live_speakers_are_saved_before_stop_restore_notes_and_no_second_p
     runner=DeepgramRecordingRunner(store,audio,lambda *a,**k:source,publish,
         config=DeepgramConfig(api_key='hidden-test-key',connector=connector))
     sid=runner.start(None,{'cloud_consent':True,'language':'en'},'People',consent_confirmed=True)['id']
-    await wait_for(lambda:len(store.segments(sid))>=4)
+    # One source can emit several results before the other is scheduled.
+    # Wait for both sources, then assert their speaker namespaces are distinct.
+    await wait_for(lambda:all(
+        len({row['local_speaker_id'] for row in store.segments(sid) if row['stream']==stream})==2
+        for stream in ('mic','loopback')))
     assert store.get(sid)['status']=='recording'
     labels={r['speaker_label'] for r in store.segments(sid)}
     assert len(labels)==4 and None not in labels, 'Each source has its own speaker namespace'
