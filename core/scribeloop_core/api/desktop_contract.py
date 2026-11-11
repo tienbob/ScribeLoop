@@ -150,7 +150,8 @@ class DesktopContract:
                     (recording_task and not recording_task.done())):
                 raise ValueError('Search is available after setup and while recording is idle')
             from ..storage.search import MeetingSearch
-            result=await MeetingSearch(app.state.store).query_async(command.get('query'),
+            result=await MeetingSearch(app.state.store,
+                embedding_config=self.settings.value.embedding()).query_async(command.get('query'),
                 limit=command.get('limit',50),offset=command.get('offset',0),
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))
@@ -174,7 +175,8 @@ class DesktopContract:
             from ..llm.meeting_ask import AskScope, MeetingEvidence
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
-            result=await MeetingEvidence(app.state.store).retrieve(command.get('question'),scope)
+            result=await MeetingEvidence(app.state.store,
+                embedding_config=self.settings.value.embedding()).retrieve(command.get('question'),scope)
             return {'type':'ask_evidence',**result}
         if action == 'ask_history':
             allowed={'action','scope','current_id','selected_ids','limit'}
@@ -192,7 +194,8 @@ class DesktopContract:
             from ..llm.meeting_ask import AskScope, MeetingAsk
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
-            result=await MeetingAsk(app.state.store,summary_provider).history(
+            result=await MeetingAsk(app.state.store,summary_provider,
+                embedding_config=self.settings.value.embedding()).history(
                 scope,limit=command.get('limit',50))
             return {'type':'ask_history','scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
                     'answers':result}

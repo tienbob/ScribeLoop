@@ -768,7 +768,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     try:
                                         await publish({'type':'ask_started','request_id':request_id,
                                             'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}})
-                                        result=await MeetingAsk(store,ask_provider).answer(
+                                        result=await MeetingAsk(store,ask_provider,
+                                            embedding_config=desktop.settings.value.embedding()).answer(
                                             question,scope,previous_answer_id=previous_answer_id)
                                         await publish({'type':'ask_answer','request_id':request_id,**result})
                                     except asyncio.CancelledError:

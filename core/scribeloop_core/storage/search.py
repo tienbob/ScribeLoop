@@ -14,6 +14,8 @@ import time
 import unicodedata
 
 from .db import DATABASE_ERRORS
+from .embeddings import CompatibleEmbeddingProvider, LocalEmbeddingProvider
+from .vectors import SqliteVecIndex
 
 INDEX_VERSION = 3
 
@@ -42,10 +44,19 @@ def _summary_text(value) -> str:
 class MeetingSearch:
     """Synchronize selected revisions and run bounded local queries."""
 
-    def __init__(self, store):
+    def __init__(self, store, *, embedding_config=None, embedder=None, include_titles=True):
         self.store = store
         self.conn = store.conn
         self.fts = self._ensure_fts()
+        self.embedding_config=embedding_config
+        self.embedder=embedder
+        self.include_titles=include_titles
+        if embedding_config is not None and embedder is None:
+            try:
+                self.embedder=(LocalEmbeddingProvider(embedding_config) if embedding_config.provider == 'Local'
+                               else CompatibleEmbeddingProvider(embedding_config))
+            except (FileNotFoundError,ImportError):
+                self.embedder=None
 
     def _ensure_fts(self) -> bool:
         try:
@@ -175,12 +186,146 @@ class MeetingSearch:
                            match_all=match_all)
 
     async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
-                          meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True):
+                          meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True,
+                          semantic_query=None):
         self._validate_query(query,limit,offset)
+        if semantic_query is not None and (not isinstance(semantic_query,str) or not 1<=len(semantic_query)<=500):
+            raise ValueError('Invalid semantic question')
         status=await self.sync_async()
-        return self._query(query,status,limit=limit,offset=offset,meeting_id=meeting_id,
+        hybrid=self.embedding_config is not None
+        lexical=self._query(query,status,limit=100 if hybrid else limit,offset=0 if hybrid else offset,meeting_id=meeting_id,
                            meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
                            match_all=match_all)
+        return await self._hybrid(semantic_query or query,lexical,limit=limit,offset=offset,meeting_id=meeting_id,
+                                  meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to)
+
+    def _semantic_chunks(self,session_id):
+        rows=list(self.conn.execute("SELECT * FROM search_documents WHERE session_id=? AND source_type IN ('transcript','summary') "
+                                    "ORDER BY CASE source_type WHEN 'summary' THEN 0 ELSE 1 END,start_ms,rowid",(session_id,)))
+        chunks=[]; current=[]; size=0
+        for row in rows:
+            text=row['content'].strip()
+            if current and (row['source_type'] != current[-1]['source_type'] or size+len(text)>1200):
+                chunks.append(current); current=[]; size=0
+            if len(text)>1200:
+                if current:
+                    chunks.append(current); current=[]; size=0
+                for start in range(0,len(text),1000):
+                    part=dict(row); part['content']=text[start:start+1200]
+                    chunks.append([part])
+                continue
+            current.append(row); size+=len(text)+1
+        if current: chunks.append(current)
+        return [{'start_ms':next((r['start_ms'] for r in group if r['start_ms'] is not None),0),
+                 'end_ms':next((r['end_ms'] for r in reversed(group) if r['end_ms'] is not None),0),
+                 'segment_ids':[r['id'] for r in group],
+                 'text':'\n'.join(r['content'] for r in group)} for group in chunks]
+
+    async def _sync_semantic(self,scope=None):
+        config=self.embedding_config
+        if config is None:
+            return {'enabled':False,'status':'keyword_only'}
+        if self.embedder is None:
+            return {'enabled':False,'status':'local_model_unavailable','generation':config.generation}
+        index=SqliteVecIndex(self.conn,dim=config.dimensions,generation=config.generation)
+        changed=[]
+        for row in self.conn.execute('SELECT session_id,fingerprint FROM search_index_state ORDER BY session_id'):
+            if scope is not None and row['session_id'] not in scope:
+                continue
+            known=self.conn.execute('SELECT fingerprint FROM embedding_index_state WHERE session_id=? AND generation=?',
+                                    (row['session_id'],config.generation)).fetchone()
+            if not known or known['fingerprint'] != row['fingerprint']:
+                changed.append((row['session_id'],row['fingerprint']))
+        for session_id,fingerprint in changed:
+            chunks=self._semantic_chunks(session_id)
+            vectors=[]
+            for start in range(0,len(chunks),16):
+                vectors.extend(await self.embedder.embed([chunk['text'] for chunk in chunks[start:start+16]]))
+                await asyncio.sleep(0)
+            if self._fingerprint(session_id) != fingerprint:
+                raise ValueError('Meeting changed while semantic search was indexing; search again')
+            if len(vectors)!=len(chunks):
+                raise ValueError('Embedding provider returned an incomplete batch')
+            if any(not isinstance(vector,bytes) or len(vector)!=config.dimensions*4 for vector in vectors):
+                raise ValueError('Embedding provider returned a different vector shape')
+            with self.conn:
+                self.conn.execute(f'DELETE FROM {index._table} WHERE id IN '
+                    '(SELECT rowid FROM embeddings_chunks WHERE session_id=? AND generation=?)',
+                    (session_id,config.generation))
+                self.conn.execute('DELETE FROM embeddings_chunks WHERE session_id=? AND generation=?',
+                                  (session_id,config.generation))
+                for chunk,vector in zip(chunks,vectors,strict=True):
+                    index._add(session_id,chunk['start_ms'],chunk['end_ms'],chunk['segment_ids'],chunk['text'],vector)
+                self.conn.execute('INSERT INTO embedding_index_state(session_id,generation,fingerprint,indexed_at,chunk_count) '
+                    'VALUES (?,?,?,?,?) ON CONFLICT(session_id,generation) DO UPDATE SET '
+                    'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,chunk_count=excluded.chunk_count',
+                    (session_id,config.generation,fingerprint,int(time.time()*1000),len(chunks)))
+            await asyncio.sleep(0)
+        return {'enabled':True,'status':'ready','generation':config.generation,
+                'provider':config.provider,'model':config.model,'dimensions':config.dimensions,
+                'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM embedding_index_state WHERE generation=?',
+                                                     (config.generation,)).fetchone()[0]}
+
+    async def _hybrid(self,query,lexical,*,limit,offset,meeting_id,meeting_ids,person_id,date_from,date_to):
+        if self.embedding_config is None:
+            lexical['index']['semantic']={'enabled':False,'status':'keyword_only'}
+            lexical['retrieval_mode']='keyword'
+            return lexical
+        scope=[meeting_id] if meeting_id else meeting_ids
+        try:
+            semantic=await self._sync_semantic(scope)
+        except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; disclose keyword-only results
+            semantic={'enabled':False,'status':'embedding_error','message':'Semantic indexing failed. Check the embedding provider and vector dimensions; submit again to retry.'}
+        lexical['index']['semantic']=semantic
+        if not semantic['enabled']:
+            lexical['results']=lexical['results'][offset:offset+limit]
+            lexical['retrieval_mode']='keyword'
+            return lexical
+        try:
+            query_vector=(await self.embedder.embed([query.strip()]))[0]
+        except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; no automatic retry
+            semantic.update(enabled=False,status='embedding_error',message='Semantic query failed. Check the embedding provider and submit again to retry.')
+            lexical['results']=lexical['results'][offset:offset+limit]
+            lexical['retrieval_mode']='keyword'
+            return lexical
+        for row in self.conn.execute('SELECT session_id,fingerprint FROM embedding_index_state WHERE generation=?',
+                                     (self.embedding_config.generation,)):
+            if (scope is None or row['session_id'] in scope) and self._fingerprint(row['session_id'])!=row['fingerprint']:
+                raise ValueError('Meeting changed during semantic search; submit again')
+        index=SqliteVecIndex(self.conn,dim=self.embedding_config.dimensions,
+                             generation=self.embedding_config.generation)
+        chunks=index.search(query_vector,k=min(100,max(20,limit*4)),session_ids=scope)
+        semantic_ids=[]
+        for chunk in chunks:
+            semantic_ids.extend(chunk['segment_ids'])
+        semantic_ids=list(dict.fromkeys(semantic_ids))
+        if semantic_ids:
+            placeholders=','.join('?' for _ in semantic_ids)
+            constraints=[]; args=list(semantic_ids)
+            if person_id:
+                constraints.append('(speaker_id=? OR EXISTS (SELECT 1 FROM person_links pl WHERE pl.session_id=search_documents.session_id AND pl.revision=search_documents.revision AND pl.person_id=?))'); args.extend((person_id,person_id))
+            if date_from is not None: constraints.append('started_at>=?'); args.append(date_from)
+            if date_to is not None: constraints.append('started_at<?'); args.append(date_to)
+            rows=self.conn.execute(f'SELECT * FROM search_documents WHERE id IN ({placeholders})'+
+                ((' AND '+' AND '.join(constraints)) if constraints else ''),args).fetchall()
+            by_id={row['id']:row for row in rows}
+        else: by_id={}
+        lexical_rank={row['id']:rank for rank,row in enumerate(lexical['results'],1)}
+        semantic_rank={identity:rank for rank,identity in enumerate(semantic_ids,1) if identity in by_id}
+        identities=set(lexical_rank)|set(semantic_rank)
+        scores={identity:(1/(60+lexical_rank[identity]) if identity in lexical_rank else 0)+
+                         (1/(60+semantic_rank[identity]) if identity in semantic_rank else 0) for identity in identities}
+        lexical_rows={row['id']:row for row in lexical['results']}
+        results=[]
+        for identity in sorted(identities,key=lambda value:(-scores[value],value))[offset:offset+limit]:
+            if identity in lexical_rows: item=dict(lexical_rows[identity])
+            else:
+                item=dict(by_id[identity]); content=item.pop('content')
+                item['snippet']=content[:360]+('…' if len(content)>360 else '')
+            item['hybrid_score']=scores[identity]; results.append(item)
+        lexical['results']=results; lexical['retrieval_mode']='hybrid'
+        lexical['next_offset']=offset+limit if len(identities)>offset+limit else None
+        return lexical
 
     @staticmethod
     def _validate_query(query,limit,offset):
@@ -192,6 +337,8 @@ class MeetingSearch:
     def _query(self, query, status, *, limit, offset, meeting_id, meeting_ids,
                person_id, date_from, date_to, match_all):
         where=[]; args=[]
+        if not self.include_titles:
+            where.append("d.source_type != 'title'")
         if meeting_id and meeting_ids is not None:
             raise ValueError('Choose one meeting scope')
         if meeting_id:

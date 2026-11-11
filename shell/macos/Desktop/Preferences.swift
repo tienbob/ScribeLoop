@@ -13,7 +13,7 @@ struct Preferences: View {
     @State private var removeAssemblyKey = false
     @State private var transcriptionKey = ""
     @State private var removeTranscriptionKey = false
-    private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey, localModel, cleanupEndpoint, cleanupModel, cleanupKey }
+    private enum Field: Hashable { case endpoint, model, apiKey, instructions, transcriptionKey, localModel, cleanupEndpoint, cleanupModel, cleanupKey, embeddingEndpoint, embeddingModel, embeddingKey, embeddingDimensions }
     @FocusState private var focusedField: Field?
     @State private var endpoint = "https://api.openai.com/v1"
     @State private var model = "gpt-5.4-mini"
@@ -39,6 +39,12 @@ struct Preferences: View {
     @State private var cleanupEndpoint = ""
     @State private var cleanupKey = ""
     @State private var cleanupValidate = true
+    @State private var searchMode = "keyword"
+    @State private var embeddingProvider = "Local"
+    @State private var embeddingEndpoint = ""
+    @State private var embeddingModel = "granite-embedding-97m-multilingual-r2"
+    @State private var embeddingDimensions = 384
+    @State private var embeddingKey = ""
     private var vocabularyTerms: [String] {
         vocabulary.components(separatedBy:.newlines).map { $0.trimmingCharacters(in:.whitespaces) }.filter { !$0.isEmpty }
     }
@@ -77,8 +83,18 @@ struct Preferences: View {
             return left == right ? $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending : left < right
         }
     }
-    private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate)].joined(separator:"\u{001f}") }
-    private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || removeTranscriptionKey }
+    private var embeddingPresets: [String:String] { core.settings["embedding_presets"] as? [String:String] ?? [:] }
+    private var embeddingKeyPreviews: [String:String] { core.settings["embedding_key_previews"] as? [String:String] ?? [:] }
+    private var embeddingModels: [String:String] { core.settings["embedding_models"] as? [String:String] ?? [:] }
+    private var embeddingKeyPreview:String {
+        if embeddingProvider == "Custom" {
+            let destinations=core.settings["embedding_key_destinations"] as? [String:String] ?? [:]
+            guard destinations[embeddingProvider] == embeddingEndpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) else { return "" }
+        }
+        return embeddingKeyPreviews[embeddingProvider] ?? ""
+    }
+    private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate),searchMode,embeddingProvider,embeddingEndpoint,embeddingModel,String(embeddingDimensions)].joined(separator:"\u{001f}") }
+    private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || !embeddingKey.isEmpty || removeTranscriptionKey }
     private var changed: Bool { providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
     private var keyPreview: String {
         guard let preview = savedKeyPreviews[provider] else { return "" }
@@ -164,6 +180,54 @@ struct Preferences: View {
                 Section("Transcript cleanup") {
                     Toggle("Skip cleanup validation",isOn:Binding(get:{ !cleanupValidate },set:{ cleanupValidate = !$0 }))
                     Text("When on, changed numbers, negations and rewrites are accepted without content validation. The response still needs readable JSON with segment IDs so edits can be saved to the correct transcript. When off, unsafe edits are rejected per segment and the original wording is kept. Experimental: turn this off again for normal use.").font(.caption).foregroundStyle(.secondary)
+                }
+                }
+                if page == "Models" {
+                Section("Meeting search") {
+                    Picker("Search method",selection:$searchMode) {
+                        Text("Keyword only · Local").tag("keyword")
+                        Text("Hybrid semantic + keyword").tag("hybrid")
+                    }
+                    if searchMode == "hybrid" {
+                        Picker("Embedding provider",selection:$embeddingProvider) {
+                            Text("ScribeLoop multilingual · Local").tag("Local")
+                            Text("OpenAI · Cloud").tag("OpenAI")
+                            Text("Ollama · Local").tag("Ollama")
+                            Text("LM Studio · Local").tag("LM Studio")
+                            Text("Custom · OpenAI compatible").tag("Custom")
+                        }.onChange(of:embeddingProvider) { selected in
+                            embeddingEndpoint = embeddingPresets[selected] ?? ""
+                            embeddingModel = embeddingModels[selected] ?? (selected == "Local" ? "granite-embedding-97m-multilingual-r2" : selected == "OpenAI" ? "text-embedding-3-small" : "")
+                            embeddingDimensions = selected == "Local" ? 384 : selected == "OpenAI" ? 1536 : 768
+                            embeddingKey = ""
+                        }
+                        if embeddingProvider != "Local" {
+                            if embeddingProvider == "Custom" {
+                            TextField("Embedding API base URL",text:$embeddingEndpoint)
+                                .textFieldStyle(.roundedBorder).autocorrectionDisabled(true)
+                                .focused($focusedField,equals:.embeddingEndpoint)
+                                .onChange(of:embeddingEndpoint) { _ in embeddingKey = "" }
+                            }
+                            SecureField("Embedding API key",text:$embeddingKey,
+                                prompt:Text(embeddingKeyPreview.isEmpty ? "API key, if required" : embeddingKeyPreview))
+                                .textFieldStyle(.roundedBorder).textContentType(nil).autocorrectionDisabled(true)
+                                .focused($focusedField,equals:.embeddingKey)
+                        }
+                        TextField("Embedding model ID",text:$embeddingModel)
+                            .textFieldStyle(.roundedBorder).autocorrectionDisabled(true)
+                            .focused($focusedField,equals:.embeddingModel).disabled(embeddingProvider == "Local")
+                        TextField("Vector dimensions",value:$embeddingDimensions,format:.number.grouping(.never))
+                            .textFieldStyle(.roundedBorder).focused($focusedField,equals:.embeddingDimensions)
+                            .disabled(embeddingProvider == "Local")
+                        Text("Use the output size supported by your embedding model. Changing the provider, model or size rebuilds semantic search on your next submitted search. Existing conversations stay saved.").font(.caption).foregroundStyle(.secondary)
+                        if embeddingProvider == "OpenAI" || embeddingProvider == "Custom" {
+                            Text("Cloud embedding sends saved transcript chunks while indexing and your query text while searching. There is no automatic provider fallback or paid retry.").font(.caption).foregroundStyle(ScribeTheme.warning)
+                        } else if embeddingProvider == "Local" {
+                            Text("Multilingual search is bundled with the app and runs on this Mac. Supports English and Vietnamese. No API key is needed.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Fast exact matching stays entirely on this Mac. It can miss paraphrases or questions written in another language.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 }
                 if page == "Models" {
@@ -519,6 +583,11 @@ struct Preferences: View {
             cleanupEndpoint = text(core.settings["local_cleanup_endpoint"])
             cleanupKey = ""
             cleanupValidate = core.settings["local_cleanup_validate"] as? Bool ?? true
+            searchMode = text(core.settings["search_mode"]); if searchMode.isEmpty { searchMode = "keyword" }
+            embeddingProvider = text(core.settings["embedding_provider"]); if embeddingProvider.isEmpty { embeddingProvider = "Local" }
+            embeddingEndpoint = text(core.settings["embedding_endpoint"])
+            embeddingModel = text(core.settings["embedding_model"]); if embeddingModel.isEmpty { embeddingModel = "granite-embedding-97m-multilingual-r2" }
+            embeddingDimensions = (core.settings["embedding_dimensions"] as? NSNumber)?.intValue ?? 384
             microphoneGain = (core.settings["microphone_gain_db"] as? NSNumber)?.doubleValue ?? 0
             microphoneFilter = text(core.settings["microphone_noise_filter"])
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
@@ -528,14 +597,14 @@ struct Preferences: View {
             saveProgress.initialValues = valuesSignature
             saveProgress.initialDetection = core.detection; detectionDraft = saveProgress.initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
-            summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
+            summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = ""; removeTranscriptionKey = false; saveError = nil; pendingSave = nil; pendingSaveCommand = nil; applying = false; saveCommands = []
             loginStatus = SMAppService.mainApp.status == .requiresApproval ? "Approve ScribeLoop in Login Items settings." : ""
         }.onChange(of:core.requests[pendingSave ?? ""]) { status in
             guard pendingSave != nil else { return }
             if status == "accepted" {
                 let action = text(pendingSaveCommand?["action"])
                 saveProgress.accept(action:action,values:valuesSignature,detection:detectionDraft)
-                if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; removeTranscriptionKey = false }
+                if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = ""; removeTranscriptionKey = false }
                 pendingSave = nil; pendingSaveCommand = nil; saveNext()
             }
             else if status == "rejected" || status == "unknown" {
@@ -545,7 +614,7 @@ struct Preferences: View {
         }.interactiveDismissDisabled(applying)
         .onChange(of:core.accepted) { accepted in if !accepted { cancel() } }
         .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)) { _ in core.refreshMeetingAudioPermission() }
-        .onDisappear { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = "" }
+        .onDisappear { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = "" }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
@@ -558,7 +627,7 @@ struct Preferences: View {
     }
     private func cancel() {
         guard !applying else { return }
-        focusedField = nil; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; dismiss()
+        focusedField = nil; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = ""; dismiss()
     }
     private func finish() {
         focusedField = nil
@@ -571,6 +640,7 @@ struct Preferences: View {
             saveError = "Keep vocabulary to a shorter list of important names and terms."; return
         }
         guard instructions.count <= 2000 else { saveError = "Keep summary instructions within 2,000 characters."; return }
+        guard searchMode != "hybrid" || (!embeddingModel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && (32...4096).contains(embeddingDimensions)) else { saveError = "Enter an embedding model and output size from 32 to 4,096."; return }
         guard core.connected, !core.busy else { saveError = "Reconnect and wait for processing to finish before saving."; return }
         saveError = nil; saveCommands = []
         if providerChanged {
@@ -589,6 +659,12 @@ struct Preferences: View {
             value["local_cleanup_provider"] = cleanupProvider
             value["local_cleanup_endpoint"] = cleanupEndpoint.trimmingCharacters(in:.whitespacesAndNewlines)
             value["local_cleanup_validate"] = cleanupValidate
+            value["search_mode"] = searchMode
+            value["embedding_provider"] = embeddingProvider
+            value["embedding_endpoint"] = embeddingEndpoint.trimmingCharacters(in:.whitespacesAndNewlines)
+            value["embedding_model"] = embeddingModel.trimmingCharacters(in:.whitespacesAndNewlines)
+            value["embedding_dimensions"] = embeddingDimensions
+            if !embeddingKey.isEmpty { value["embedding_key"] = embeddingKey }
             if !cleanupKey.isEmpty { value["local_cleanup_key"] = cleanupKey }
             if removeAssemblyKey { value["assemblyai_key"] = "" }
             else if !assemblyKey.isEmpty { value["assemblyai_key"] = assemblyKey }
@@ -623,7 +699,7 @@ struct Preferences: View {
                 return
             }
         }
-        applying = false; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; dismiss()
+        applying = false; summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = ""; dismiss()
     }
 }
 

@@ -60,6 +60,19 @@ async def test_ask_evidence_bounds_bytes_passages_and_reports_insufficient():
     assert not empty['sufficient'] and empty['passages']==[]
 
 
+@pytest.mark.asyncio
+async def test_current_meeting_uses_bounded_context_when_question_language_has_no_lexical_hit():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Kiến trúc ứng dụng','Hệ thống sử dụng plugin để gửi thư và đặt lịch')
+    current=AskScope.resolve(store,'current',current_id=sid)
+    packet=await MeetingEvidence(store).retrieve('How does the application work?',current)
+    assert packet['sufficient'] and packet['retrieval_mode']=='current_meeting_fallback'
+    assert packet['passages'][0]['meeting_id']==sid
+    selected=AskScope.resolve(store,'selected',selected_ids=[sid])
+    closed=await MeetingEvidence(store).retrieve('unrelated cross language question',selected)
+    assert not closed['sufficient'] and closed['retrieval_mode']=='lexical'
+
+
 def test_ask_scope_rejects_empty_missing_and_implicit_widening():
     store=SessionStore(migrate(connect(':memory:')))
     sid=meeting(store,'One','alpha')

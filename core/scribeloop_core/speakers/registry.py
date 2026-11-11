@@ -97,14 +97,10 @@ class SpeakerRegistry:
         sessions={r['session_id'] for r in links}
         sessions.update(r[0] for r in self.conn.execute('SELECT source_session_id FROM speaker_embeddings WHERE speaker_id=?',(person,)) if r[0])
         sessions.update(r[0] for r in self.conn.execute('SELECT session_id FROM session_speakers WHERE speaker_id=?',(person,)))
-        has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
-        if has_vectors:
-            from ..storage.vectors import load_vec_extension
-            load_vec_extension(self.conn)
+        from ..storage.vectors import purge_session_vectors
         with self.conn:
             for sid in sessions:
-                if has_vectors:
-                    self.conn.execute('DELETE FROM embeddings_chunks_vec WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(sid,))
+                purge_session_vectors(self.conn,sid)
                 for table in ('embeddings_chunks','grounded_summaries','summary_jobs','summaries'):
                     self.conn.execute(f'DELETE FROM {table} WHERE session_id=?',(sid,))
                 if self.store.get(sid).get('capture',{}).get('auto_title'):

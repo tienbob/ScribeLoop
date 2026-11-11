@@ -584,6 +584,8 @@ struct MeetingSearchView: View {
     @State private var personID=""
     @State private var dateRange=0
     @State private var debounce:Task<Void,Never>?
+    private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
+    private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Custom"].contains(text(core.settings["embedding_provider"])) }
 
     private func runSearch() {
         let now=Int(Date().timeIntervalSince1970*1000)
@@ -593,6 +595,7 @@ struct MeetingSearchView: View {
     }
     private func scheduleSearch() {
         debounce?.cancel()
+        guard !hybrid else { return }
         debounce=Task { @MainActor in
             try? await Task.sleep(nanoseconds:250_000_000)
             guard !Task.isCancelled else { return }
@@ -604,7 +607,7 @@ struct MeetingSearchView: View {
             HStack {
                 VStack(alignment:.leading,spacing:4) {
                     Text("Search conversations").font(.system(size:24,weight:.semibold,design:.serif))
-                    Text("Titles, current transcripts and current notes · searched privately on this Mac")
+                    Text(remoteEmbeddings ? "Hybrid search · query text and indexed passages use your embedding provider" : "Titles, current transcripts and current notes · searched privately on this Mac")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -617,6 +620,10 @@ struct MeetingSearchView: View {
                         .textFieldStyle(.plain).font(.title3)
                         .onSubmit { runSearch() }
                         .onChange(of:query) { _ in scheduleSearch() }
+                    if hybrid {
+                        Button("Search") { runSearch() }.buttonStyle(.borderedProminent)
+                            .disabled(core.searchLoading || query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    }
                     if core.searchLoading { ProgressView().controlSize(.small) }
                     if !query.isEmpty {
                         Button { query=""; core.search("") } label: { Image(systemName:"xmark.circle.fill") }
@@ -636,9 +643,9 @@ struct MeetingSearchView: View {
                         Text("Anyone").tag("")
                         ForEach(core.people) { row in Text(row.text("canonical_name")).tag(row.id) }
                     }.frame(maxWidth:220)
-                }.onChange(of:meetingID) { _ in runSearch() }
-                    .onChange(of:dateRange) { _ in runSearch() }
-                    .onChange(of:personID) { _ in runSearch() }
+                }.onChange(of:meetingID) { _ in if !hybrid { runSearch() } }
+                    .onChange(of:dateRange) { _ in if !hybrid { runSearch() } }
+                    .onChange(of:personID) { _ in if !hybrid { runSearch() } }
             }.padding(18)
             Divider()
             Group {
@@ -677,8 +684,12 @@ struct MeetingSearchView: View {
                     Label(pending == 0 ? "Index current" : "Indexing · \(pending) meetings remaining",
                           systemImage:pending == 0 ? "checkmark.circle" : "clock")
                     Spacer()
-                    Text(text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
+                    let semantic=core.searchIndex["semantic"] as? Object ?? [:]
+                    Text(semantic["enabled"] as? Bool == true ? "Hybrid · \(text(semantic["provider"]))" : hybrid ? "Keyword results · semantic search unavailable" : text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,20).padding(.vertical,10)
+                if let semantic=core.searchIndex["semantic"] as? Object, !text(semantic["message"]).isEmpty {
+                    Text(text(semantic["message"])).font(.caption).foregroundStyle(ScribeTheme.warning).padding(.horizontal,20).padding(.bottom,10)
+                }
             }
         }.background(ScribeTheme.canvas)
         .onAppear { core.send(["action":"people_page"]) }
@@ -810,6 +821,20 @@ struct MeetingAskView: View {
                         if (core.askResult["evidence"] as? Object)?["truncated"] as? Bool == true {
                             Label("Evidence was limited to 20 passages / 48 KB. This is not an exhaustive search.",systemImage:"info.circle")
                                 .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if text((core.askResult["evidence"] as? Object)?["retrieval_mode"]) == "current_meeting_fallback" {
+                            Label("No keyword match · reviewed a bounded excerpt of the current transcript",systemImage:"text.magnifyingglass")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let packet=core.askResult["evidence"] as? Object, let index=packet["index"] as? Object,
+                           let semantic=index["semantic"] as? Object {
+                            if semantic["enabled"] as? Bool == true {
+                                Label("Hybrid search · \(text(semantic["provider"]))",systemImage:"sparkle.magnifyingglass")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if !text(semantic["message"]).isEmpty {
+                                Label(text(semantic["message"]),systemImage:"exclamationmark.triangle")
+                                    .font(.caption).foregroundStyle(ScribeTheme.warning)
+                            }
                         }
                         if let usage=core.askResult["usage"] as? Object {
                             Text("1 provider request · \(((usage["duration_ms"] as? NSNumber)?.intValue ?? 0)) ms · \(((usage["input_bytes"] as? NSNumber)?.intValue ?? 0)/1024) KB sent")

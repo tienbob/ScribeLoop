@@ -41,8 +41,13 @@ def main(*, app=APP, fixture=False):
     python = PYTHON
     if not python.exists():
         raise SystemExit('Create build/macos/venv13 using requirements-desktop.txt first.')
+    embedding_model=ROOT/'models/granite-embedding-97m-multilingual-r2'
+    run(python,ROOT/'scripts/fetch_embedding_model.py','--verify-only')
     run(python, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
         '--name', frozen_name, '--distpath', BUILD / 'frozen',
+        '--add-data', f'{embedding_model}:scribeloop_models/granite-embedding-97m-multilingual-r2',
+        '--add-data', f'{ROOT/"packaging/macos/licenses"}:licenses',
+        '--collect-all', 'onnxruntime', '--collect-all', 'tokenizers',
         '--workpath', BUILD / ('preview-freeze' if fixture else 'pyinstaller'), '--specpath', BUILD,
         '--collect-all', 'sqlite_vec', '--collect-all', 'sqlcipher3',
         '--hidden-import', 'keyring.backends.macOS',
