@@ -208,6 +208,11 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+Hybrid key UX (2026-11-11): show the masked saved key and Saved badge outside
+the password input, distinguish a shared notes key from a dedicated embedding key,
+and show unsaved replacement / missing-key states. A saved credential does not
+claim provider access has been tested.
+
 Hybrid prerequisite (2026-11-11): Ask requires the user to enable Hybrid in
 Settings → Models → Meeting search. Enforce this for questions, evidence and
 history in the desktop API as well as the native client. Keyword-only users see

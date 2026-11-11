@@ -286,6 +286,8 @@ class Settings(BaseModel):
                 'local_cleanup_key_preview': self._key_preview(self.local_cleanup_keys.get(self.local_cleanup_provider,'')),
                 'local_cleanup_key_previews': {name:self._key_preview(key) for name,key in self.local_cleanup_keys.items()},
                 'embedding_key_preview': self._key_preview(self.effective_embedding_key()),
+                'embedding_key_source': ('embedding' if self.embedding_key and self.embedding_provider!='Local' else
+                    'notes' if self.effective_embedding_key() else 'none'),
                 'embedding_key_previews': {name:self._key_preview(key) for name,key in self.embedding_keys.items()
                     if self.embedding_key_destinations.get(name)==(
                         self.embedding_endpoint.rstrip('/') if name=='Custom' else EMBEDDING_PRESETS.get(name,''))},

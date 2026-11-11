@@ -91,7 +91,17 @@ struct Preferences: View {
             let destinations=core.settings["embedding_key_destinations"] as? [String:String] ?? [:]
             guard destinations[embeddingProvider] == embeddingEndpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) else { return "" }
         }
+        if embeddingProvider == text(core.settings["embedding_provider"]),
+           embeddingEndpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) == text(core.settings["embedding_endpoint"]).trimmingCharacters(in:CharacterSet(charactersIn:"/")),
+           !text(core.settings["embedding_key_preview"]).isEmpty { return text(core.settings["embedding_key_preview"]) }
         return embeddingKeyPreviews[embeddingProvider] ?? (embeddingProvider == "Gemini" ? text(core.settings["gemini_embedding_shared_key_preview"]) : "")
+    }
+    private var embeddingUsesNotesKey:Bool {
+        guard embeddingProvider == "Gemini" else { return false }
+        if embeddingProvider == text(core.settings["embedding_provider"]) {
+            return text(core.settings["embedding_key_source"]) == "notes"
+        }
+        return embeddingKeyPreviews[embeddingProvider] == nil && !embeddingKeyPreview.isEmpty
     }
     private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate),searchMode,embeddingProvider,embeddingEndpoint,embeddingModel,String(embeddingDimensions)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || !embeddingKey.isEmpty || removeTranscriptionKey }
@@ -213,10 +223,35 @@ struct Preferences: View {
                                 .focused($focusedField,equals:.embeddingEndpoint)
                                 .onChange(of:embeddingEndpoint) { _ in embeddingKey = "" }
                             }
-                            SecureField("Embedding API key",text:$embeddingKey,
-                                prompt:Text(embeddingKeyPreview.isEmpty ? "API key, if required" : embeddingKeyPreview))
-                                .textFieldStyle(.roundedBorder).textContentType(nil).autocorrectionDisabled(true)
-                                .focused($focusedField,equals:.embeddingKey)
+                            VStack(alignment:.leading,spacing:8) {
+                                HStack {
+                                    Text("Embedding API key").font(.callout).foregroundStyle(.secondary)
+                                    Spacer()
+                                    if !embeddingKey.isEmpty {
+                                        Label("Not saved yet",systemImage:"pencil.circle").font(.caption).foregroundStyle(ScribeTheme.warning)
+                                    } else if !embeddingKeyPreview.isEmpty {
+                                        Label("Saved",systemImage:"checkmark.circle.fill").font(.caption).foregroundStyle(ScribeTheme.accent)
+                                    }
+                                }
+                                if !embeddingKeyPreview.isEmpty {
+                                    HStack {
+                                        Text(embeddingKeyPreview).font(.callout.monospaced())
+                                        Text(embeddingUsesNotesKey ? "Using saved Gemini notes key" : "Stored securely in Keychain")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }.accessibilityElement(children:.combine)
+                                } else if embeddingKey.isEmpty {
+                                    Text(embeddingProvider == "Ollama" || embeddingProvider == "LM Studio" ? "No key saved · usually optional for a local server" : "No API key saved for this provider")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                SecureField("Embedding API key",text:$embeddingKey,
+                                    prompt:Text(embeddingKeyPreview.isEmpty ? "Enter API key" : "Enter a new key to replace the saved key"))
+                                    .labelsHidden().textFieldStyle(.roundedBorder).controlSize(.large)
+                                    .textContentType(nil).autocorrectionDisabled(true)
+                                    .focused($focusedField,equals:.embeddingKey)
+                                    .accessibilityLabel("Embedding API key")
+                                Text(!embeddingKey.isEmpty ? "Choose Save changes to store this key, or Cancel to keep your current key." : !embeddingKeyPreview.isEmpty ? "Leave empty to keep the saved key. Saved does not mean provider access or credits have been verified." : "Enter a key and choose Save changes to store it. Local servers may not require a key.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.padding(.vertical,4)
                         }
                         TextField("Embedding model ID",text:$embeddingModel)
                             .textFieldStyle(.roundedBorder).autocorrectionDisabled(true)
@@ -227,9 +262,6 @@ struct Preferences: View {
                         Text("Use the output size supported by your embedding model. Changing the provider, model or size rebuilds semantic search on your next submitted search. Existing conversations stay saved.").font(.caption).foregroundStyle(.secondary)
                         if embeddingProvider == "OpenAI" || embeddingProvider == "Gemini" || embeddingProvider == "Custom" {
                             Text("Cloud embedding sends saved transcript chunks while indexing and your query text while searching. There is no automatic provider fallback or paid retry.").font(.caption).foregroundStyle(ScribeTheme.warning)
-                            if embeddingProvider == "Gemini" && !embeddingKeyPreview.isEmpty {
-                                Text("A saved Gemini key is available. Leave the key field empty to keep using it.").font(.caption).foregroundStyle(.secondary)
-                            }
                         } else if embeddingProvider == "Local" {
                             Text("Multilingual search is bundled with the app and runs on this Mac. Supports English and Vietnamese. No API key is needed.").font(.caption).foregroundStyle(.secondary)
                         }
