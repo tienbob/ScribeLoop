@@ -208,6 +208,18 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+Live-failure fix (2026-11-11): the supplied selected-meeting architecture question
+reproduced `ask_missing_limit_notice` with the real Gemini provider. Valid cited
+answers were discarded when retrieval was bounded and the model omitted a caveat.
+The app now supplies its own coverage notice after citation/schema validation.
+Sanitized HTTP/validation diagnostics and code-only events replace the generic
+failure banner. Scope/citation checks and bounded evidence remain enforced, with
+no automatic paid retries. Regression tests cover the notice and invalid citations;
+the complete suite passes (862 tests). The rebuilt app answered the exact question
+with the real Gemini provider in approximately 3.9 seconds: architecture supports
+AI Agent development and plugin integration, with clickable sources. Hybrid RAG
+sent 14 KB of evidence, bounded at 20 passages; no full transcript was uploaded.
+
 Hybrid key UX (2026-11-11): show the masked saved key and Saved badge outside
 the password input, distinguish a shared notes key from a dedicated embedding key,
 and show unsaved replacement / missing-key states. A saved credential does not

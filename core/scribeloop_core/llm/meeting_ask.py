@@ -8,6 +8,9 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 
+import httpx
+from pydantic import ValidationError
+
 from ..storage.search import MeetingSearch
 from .schemas import MeetingAnswer
 
@@ -18,6 +21,37 @@ MAX_SELECTED_MEETINGS = 100
 QUESTION_STOPWORDS = {'a','an','and','are','about','did','do','does','for','from','how','i','in','is','it',
     'of','on','our','the','to','was','we','were','what','when','where','which','who','why','with','you',
     'ai','cái','có','đã','được','gì','khi','là','mà','nào','những','ở','ta','thế','và','về'}
+
+
+def ask_failure(error):
+    """Safe diagnostics: never return exception bodies, URLs, keys or transcript."""
+    if isinstance(error,httpx.HTTPStatusError):
+        status=error.response.status_code
+        code=f'ask_answer_http_{status}'
+        detail={400:'The answer provider rejected the request format or model options.',
+                401:'The answer provider rejected the API key.',
+                403:'The API key cannot access this answer model.',
+                404:'The configured answer model or endpoint was not found.',
+                429:'The answer provider rate limit or quota was reached.',
+                503:'The answer provider is temporarily unavailable.'}.get(status,'The answer provider returned an HTTP error.')
+    elif isinstance(error,httpx.TimeoutException):
+        code='ask_answer_timeout'; detail='The answer provider timed out.'
+    elif isinstance(error,httpx.RequestError):
+        code='ask_answer_connection'; detail='Could not connect to the answer provider.'
+    elif isinstance(error,ValidationError):
+        code='ask_answer_schema'; detail='The answer did not match the required response format.'
+    elif isinstance(error,json.JSONDecodeError):
+        code='ask_answer_json'; detail='The answer provider returned unreadable JSON.'
+    else:
+        known={
+            'Summary request too large':('ask_input_limit','The retrieved evidence exceeded the answer provider request budget.'),
+            'Ask response cites evidence outside its scope':('ask_invalid_citation','The answer used a citation outside the retrieved evidence.'),
+            'Ask response omitted the disclosed retrieval limit':('ask_missing_limit_notice','The answer omitted the required evidence-limit notice.'),
+            'Ask response contains no supported claims':('ask_empty_claims','The answer contained no supported claims.'),
+            'Notes response reached its output limit':('ask_output_limit','The answer provider reached its output limit.'),
+        }
+        code,detail=known.get(str(error),('ask_internal_error','Ask encountered an internal processing error.'))
+    return {'code':code,'message':detail+' No automatic retry was made. Diagnostic: '+code+'.'}
 
 
 @dataclass(frozen=True)
@@ -157,7 +191,10 @@ def validate_answer(value, packet):
     if not answer.insufficient_evidence and not answer.claims:
         raise ValueError('Ask response contains no supported claims')
     if packet['truncated'] and not answer.insufficient_evidence and not answer.caveat:
-        raise ValueError('Ask response omitted the disclosed retrieval limit')
+        # Coverage is known by the app; a provider omission must not discard
+        # otherwise valid, scoped claims. This notice adds no meeting facts.
+        answer=answer.model_copy(update={'caveat':
+            'This answer uses a limited set of retrieved passages; other meeting context may be missing.'})
     return answer.model_dump()
 
 
