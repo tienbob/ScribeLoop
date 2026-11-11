@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.db import SCHEMA_VERSION, connect, migrate
 from scribeloop_core.storage.sessions import ROSTER_QUERY, SessionStore
 
 
@@ -26,7 +26,7 @@ def test_migrate_creates_schema(db):
         "words", "summaries", "embeddings_chunks", "events", "transcript_revisions",
     }
     assert expected <= tables
-    assert db.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_pragmas_on(db):
@@ -61,7 +61,17 @@ def test_event_index_upgrades_v13_and_serves_history_queries(db):
     db.execute('PRAGMA user_version=13')
     db.commit()
     migrate(db)
-    assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+    assert db.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
+
+
+def test_ask_usage_columns_upgrade_from_v17_idempotently(db):
+    for column in ('duration_ms','input_bytes','output_bytes'):
+        db.execute(f'ALTER TABLE meeting_answers DROP COLUMN {column}')
+    db.execute('PRAGMA user_version=17'); db.commit()
+    migrate(db); migrate(db)
+    columns={row['name'] for row in db.execute('PRAGMA table_info(meeting_answers)')}
+    assert {'duration_ms','input_bytes','output_bytes'} <= columns
+    assert db.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
     for direction in ('ASC', 'DESC'):
         plan = db.execute('EXPLAIN QUERY PLAN SELECT payload_json FROM events '
                           f'WHERE session_id=? AND type=? ORDER BY id {direction} LIMIT 1',

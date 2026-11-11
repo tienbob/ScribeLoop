@@ -11,6 +11,7 @@ import pytest
 import soundfile as sf
 from fastapi.testclient import TestClient
 from scribeloop_core.api.server import create_app
+from scribeloop_core.storage.db import SCHEMA_VERSION
 from scribeloop_core.storage.encrypted import (
     EncryptedStorageError,
     connect_encrypted,
@@ -133,7 +134,7 @@ def test_wrong_key_fails_closed_and_releases_resources(tmp_path):
     with pytest.raises(EncryptedStorageError):
         connect_encrypted(path, secrets.token_bytes(32))
     with encrypted_database(path, keys) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 16
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
 
 
 def test_exclusive_database_lock_and_exception_release(tmp_path):

@@ -6,7 +6,7 @@ import threading
 import pytest
 from scribeloop_core.capture.multiplexed import MultiplexedPCMSource
 from scribeloop_core.pipeline.recording import RecordingRunner
-from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.db import SCHEMA_VERSION, connect, migrate
 from scribeloop_core.storage.sessions import SessionStore
 from test_multiplexed_capture import END, PREFIX, helper, packet
 
@@ -101,7 +101,7 @@ def legacy():
 def test_migration_dedupes_first_row():
     assert sqlite3.sqlite_version_info >= (3,24,0)
     conn = legacy(); migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 16
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
     rows = conn.execute("SELECT payload_json FROM events WHERE type='recording_end'").fetchall()
     assert len(rows) == 1 and json.loads(rows[0][0])['end_reason'] == 'manual_stop'
     with pytest.raises(sqlite3.IntegrityError):

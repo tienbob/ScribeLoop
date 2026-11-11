@@ -67,11 +67,16 @@ def test_search_title_summary_accent_filters_and_delete():
     search=MeetingSearch(store)
     # A stale grounded summary is intentionally excluded.
     assert not search.query('Renewal decision')['results']
-    assert search.query('ke hoach')['results'][0]['session_id']==old
+    title_results=search.query('ke hoach')['results']
+    assert title_results[0]['session_id']==old
+    assert [row['source_type'] for row in title_results]==['title']
     assert not search.query('ngan sach',date_from=1_700_000_000_000)['results']
     assert search.query('Alice',meeting_id=new)['results']
+    store.rename_conversation(old,'Kế hoạch năm')
+    assert not search.query('quý')['results']
+    assert [row['source_type'] for row in search.query('ke hoach nam')['results']]==['title']
     store.begin_delete(old); store.finish_delete(old)
-    assert not search.query('ke hoach')['results']
+    assert not search.query('ke hoach nam')['results']
     if search.fts:
         assert not conn.execute("SELECT rowid FROM search_documents_fts WHERE search_documents_fts MATCH 'ke'").fetchall()
 
