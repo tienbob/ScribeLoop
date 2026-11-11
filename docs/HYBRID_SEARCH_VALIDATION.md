@@ -3,9 +3,22 @@
 Development validation, 2026-11-11. Branch: `feature/f2-hybrid-search`.
 
 Settings → Models → Meeting search offers Keyword only (default) and Hybrid.
-Hybrid supports bundled local multilingual embeddings, OpenAI, Ollama, LM Studio,
+Hybrid supports Gemini (default provider), bundled local multilingual embeddings, OpenAI, Ollama, LM Studio,
 and Custom OpenAI-compatible endpoints. Notes generation uses its separate provider.
 Search and Ask share the selected retrieval configuration.
+
+Gemini defaults to `gemini-embedding-001` at 768 dimensions. Its native
+`batchEmbedContents` request sets `outputDimensionality` and uses
+`RETRIEVAL_DOCUMENT` for stored chunks / `RETRIEVAL_QUERY` for questions. Responses
+must match the expected shape and are L2-normalized. Existing explicit provider
+choices are preserved. Keyword-only remains the initial mode. API reference:
+https://ai.google.dev/api/embeddings
+
+The standard Gemini destination can reuse the active standard Gemini notes key.
+When Hybrid is enabled, that key is retained independently for embeddings so a
+later notes-provider change cannot clear working search. It is never shared with
+a custom destination. Mocked Gemini tests cover task types, dimensions, key reuse,
+destination isolation and independent retention; no live Gemini request was made.
 
 The bundled local model is IBM Granite 97M multilingual R2, official quantized ONNX,
 384 dimensions. Source and license:
@@ -36,7 +49,7 @@ The installed app makes no model download request.
 
 ## Recorded checks
 
-The final full suite passed all 856 tests. A real bundled-model
+The final full suite passed all 860 tests after adding Gemini defaults. A real bundled-model
 regression checks that an English question retrieves the intended Vietnamese passage.
 Other checks cover provider response ordering, shape drift, scope isolation, fixed
 local dimensions, destination-bound keys and deletion across multiple generations.
@@ -46,17 +59,19 @@ The packaging runtime was tested directly with the official model. ONNX Runtime
 macOS 13 target. Newer wheels tested required macOS 13.3 or 14 and were excluded.
 
 The final app passed signature/deployment/dependency verification: 40 native
-binaries, 300,051,745 bundle bytes (about 286 MiB), no external native dependency,
+binaries, 300,070,289 bundle bytes (about 286 MiB), no external native dependency,
 no bundled recording or operator credential, macOS 13 minimum, ad-hoc development
 signature. Its isolated `--embedding-smoke` command passed from the frozen app:
 384 dimensions, relevant English/Vietnamese similarity 0.7853 versus unrelated
 similarity 0.6979. This path opens neither user settings nor the workspace.
 
-Installed-app UI check: the rebuilt app opened, but encrypted-workspace startup
-timed out before Settings became accessible. It remains at Retry core; local
-Keychain approval is needed to finish the saved-workspace settings check. Native
-controls compiled, but the new provider picker has not yet received a completed
-hands-on check in the user's workspace.
+Installed-app UI check: after the user's Keychain approval, the workspace opened
+with all eight conversations. Models → Meeting search and the Hybrid controls
+were verified; Cancel discarded the draft. After the Gemini-default rebuild,
+desktop control could no longer resolve the replaced app bundle ("Invalid app")
+despite valid Info.plist, signature and offline smoke results. Finder displayed
+the rebuilt application. The final Gemini picker remains to be checked manually;
+this control-tool limitation is separate from the resolved workspace access.
 
 Small synthetic development measurement (arm64, macOS 27.2.1, Python 3.12,
 ONNX Runtime 1.31 development environment): 30 meetings, 240 segments, 30 chunks;

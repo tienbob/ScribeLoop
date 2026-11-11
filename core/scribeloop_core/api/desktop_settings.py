@@ -25,6 +25,7 @@ SUMMARY_PRESETS = {
 OLLAMA_ENDPOINT = 'http://localhost:11434/v1'
 EMBEDDING_PRESETS = {
     'OpenAI': 'https://api.openai.com/v1',
+    'Gemini': 'https://generativelanguage.googleapis.com/v1beta',
     'Ollama': 'http://localhost:11434/v1',
     'LM Studio': 'http://localhost:1234/v1',
 }
@@ -63,10 +64,10 @@ class Settings(BaseModel):
     local_cleanup_keys: dict[str, str] = Field(default_factory=dict, repr=False)
     local_cleanup_models: dict[str, str] = Field(default_factory=dict, repr=False)
     search_mode: Literal['keyword', 'hybrid'] = 'keyword'
-    embedding_provider: Literal['Local', 'OpenAI', 'Ollama', 'LM Studio', 'Custom'] = 'Local'
-    embedding_endpoint: str = Field(default='', max_length=500)
-    embedding_model: str = Field(default='granite-embedding-97m-multilingual-r2', min_length=1, max_length=160)
-    embedding_dimensions: int = Field(default=384, ge=32, le=4096)
+    embedding_provider: Literal['Local', 'OpenAI', 'Gemini', 'Ollama', 'LM Studio', 'Custom'] = 'Gemini'
+    embedding_endpoint: str = Field(default=EMBEDDING_PRESETS['Gemini'], max_length=500)
+    embedding_model: str = Field(default='gemini-embedding-001', min_length=1, max_length=160)
+    embedding_dimensions: int = Field(default=768, ge=32, le=4096)
     embedding_key: str = Field(default='', max_length=2048, repr=False)
     embedding_keys: dict[str, str] = Field(default_factory=dict, repr=False)
     embedding_key_destinations: dict[str,str] = Field(default_factory=dict)
@@ -239,7 +240,19 @@ class Settings(BaseModel):
             self.embedding_endpoint.strip() or EMBEDDING_PRESETS.get(self.embedding_provider,''))
         return EmbeddingConfig(provider=self.embedding_provider,endpoint=endpoint,
             model=self.embedding_model.strip(),dimensions=self.embedding_dimensions,
-            api_key=self.embedding_key)
+            api_key=self.effective_embedding_key())
+
+    def effective_embedding_key(self):
+        if self.embedding_provider == 'Local':
+            return ''
+        if self.embedding_key:
+            return self.embedding_key
+        # Reuse only the standard Gemini account destination; custom endpoints
+        # and other providers cannot inherit a notes credential.
+        if (self.embedding_provider == 'Gemini' and self.embedding_endpoint.rstrip('/') == EMBEDDING_PRESETS['Gemini'] and
+                self.summary_provider == 'Gemini' and self.summary_endpoint.rstrip('/') == SUMMARY_PRESETS['Gemini']):
+            return self.summary_key
+        return ''
 
     @staticmethod
     def _key_preview(key):
@@ -268,10 +281,13 @@ class Settings(BaseModel):
                 'summary_models': dict(self.summary_models),
                 'local_cleanup_key_preview': self._key_preview(self.local_cleanup_keys.get(self.local_cleanup_provider,'')),
                 'local_cleanup_key_previews': {name:self._key_preview(key) for name,key in self.local_cleanup_keys.items()},
-                'embedding_key_preview': self._key_preview(self.embedding_key),
+                'embedding_key_preview': self._key_preview(self.effective_embedding_key()),
                 'embedding_key_previews': {name:self._key_preview(key) for name,key in self.embedding_keys.items()
                     if self.embedding_key_destinations.get(name)==(
                         self.embedding_endpoint.rstrip('/') if name=='Custom' else EMBEDDING_PRESETS.get(name,''))},
+                'gemini_embedding_shared_key_preview':self._key_preview(
+                    self.summary_key if self.summary_provider=='Gemini' and self.summary_endpoint.rstrip('/')==SUMMARY_PRESETS['Gemini']
+                    else ''),
                 'embedding_models': dict(self.embedding_models),
                 'embedding_presets': EMBEDDING_PRESETS,
                 'summary_configured': self.summary().configured,
@@ -387,7 +403,11 @@ class DesktopSettings:
         if ('embedding_model' not in patch and isinstance(embedding_provider,str)
                 and embedding_provider != self.value.embedding_provider):
             patch['embedding_model'] = self.value.embedding_models.get(embedding_provider,
-                'granite-embedding-97m-multilingual-r2' if embedding_provider == 'Local' else '')
+                'granite-embedding-97m-multilingual-r2' if embedding_provider == 'Local' else
+                'gemini-embedding-001' if embedding_provider == 'Gemini' else
+                'text-embedding-3-small' if embedding_provider == 'OpenAI' else '')
+        if embedding_provider != self.value.embedding_provider and 'embedding_dimensions' not in patch:
+            patch['embedding_dimensions'] = {'Local':384,'Gemini':768,'OpenAI':1536}.get(embedding_provider,768)
         embedding_destination = patch.get('embedding_endpoint', self.value.embedding_endpoint)
         if 'embedding_key' not in patch:
             if isinstance(embedding_provider,str) and embedding_provider != self.value.embedding_provider:
@@ -415,6 +435,15 @@ class DesktopSettings:
             # Remember the cleanup model under its provider too.
             candidate = candidate.model_copy(update={'local_cleanup_models':
                 {**candidate.local_cleanup_models, candidate.local_cleanup_provider: cleanup_model}})
+        if (candidate.search_mode=='hybrid' and candidate.embedding_provider=='Gemini' and
+                candidate.embedding_endpoint.rstrip('/')==EMBEDDING_PRESETS['Gemini'] and not candidate.embedding_key):
+            key=candidate.effective_embedding_key()
+            if not key and self.value.search_mode=='hybrid' and self.value.embedding_provider=='Gemini':
+                key=self.value.effective_embedding_key()
+            if key:
+                # Once enabled, retain the embedding credential independently
+                # so changing the notes provider cannot clear working search.
+                candidate=candidate.model_copy(update={'embedding_key':key})
         if candidate.embedding_key and candidate.embedding_keys.get(candidate.embedding_provider) != candidate.embedding_key:
             candidate = candidate.model_copy(update={'embedding_keys':
                 {**candidate.embedding_keys,candidate.embedding_provider:candidate.embedding_key}})

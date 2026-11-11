@@ -6,6 +6,7 @@ from scribeloop_core.api.desktop_settings import Settings
 from scribeloop_core.storage.embeddings import (
     CompatibleEmbeddingProvider,
     EmbeddingConfig,
+    GeminiEmbeddingProvider,
     LocalEmbeddingProvider,
     bundled_embedding_model_dir,
     pack_embedding,
@@ -22,7 +23,8 @@ def test_embedding_generation_ignores_secret_but_binds_shape_and_destination():
 
 
 def test_local_embedding_contract_forbids_network_or_key():
-    config=Settings(search_mode='hybrid').embedding()
+    config=Settings(search_mode='hybrid',embedding_provider='Local',
+        embedding_model='granite-embedding-97m-multilingual-r2',embedding_dimensions=384).embedding()
     assert config.provider == 'Local' and config.dimensions == 384
     with pytest.raises(ValueError):
         EmbeddingConfig('Local','https://example.com','model',384,'key')
@@ -49,7 +51,8 @@ def test_embedding_settings_restore_keys_without_leaking_to_changed_destination(
 
 def test_local_embedding_shape_cannot_be_edited():
     with pytest.raises(ValueError,match='384 dimensions'):
-        Settings(search_mode='hybrid',embedding_dimensions=768).embedding()
+        Settings(search_mode='hybrid',embedding_provider='Local',
+            embedding_model='granite-embedding-97m-multilingual-r2',embedding_dimensions=768).embedding()
 
 
 def test_custom_embedding_key_is_bound_to_its_saved_endpoint():
@@ -108,10 +111,56 @@ async def test_real_bundled_model_cross_language_retrieval_when_assets_present()
     store=SessionStore(migrate(connect(':memory:')))
     relevant=meeting(store,'Thiết kế',['Ứng dụng hoạt động như một trợ lý ghi chú cuộc họp, dùng plugin để gửi email và đặt lịch.'])
     meeting(store,'Thời tiết',['Ngày mai trời sẽ mưa và đường phố bị ngập.'])
-    config=Settings(search_mode='hybrid').embedding()
+    config=Settings(search_mode='hybrid',embedding_provider='Local',
+        embedding_model='granite-embedding-97m-multilingual-r2',embedding_dimensions=384).embedding()
     provider=LocalEmbeddingProvider(config)
     result=await MeetingSearch(store,embedding_config=config,embedder=provider).query_async(
         'How does the meeting-notes application work?',match_all=False)
     assert result['retrieval_mode']=='hybrid'
     assert result['results'][0]['session_id']==relevant
     assert result['index']['semantic']['dimensions']==384
+
+
+@pytest.mark.asyncio
+async def test_gemini_default_requests_correct_dimension_and_retrieval_task():
+    settings=Settings(search_mode='hybrid',summary_provider='Gemini',
+        summary_endpoint='https://generativelanguage.googleapis.com/v1beta/openai',summary_key='saved-gemini-key')
+    config=settings.embedding()
+    assert config.provider=='Gemini' and config.model=='gemini-embedding-001' and config.dimensions==768
+    assert config.api_key=='saved-gemini-key'
+    assert 'saved-gemini-key' not in str(settings.public())
+    seen=[]
+    async def request(body):
+        seen.append(body)
+        return {'embeddings':[{'values':[1.0]+[0.0]*767} for _ in body['requests']]}
+    provider=GeminiEmbeddingProvider(config,request=request)
+    assert len((await provider.embed(['Nội dung cuộc họp']))[0])==768*4
+    await provider.embed_query(['What did we agree?'])
+    assert seen[0]['requests'][0]['taskType']=='RETRIEVAL_DOCUMENT'
+    assert seen[1]['requests'][0]['taskType']=='RETRIEVAL_QUERY'
+    assert seen[1]['requests'][0]['outputDimensionality']==768
+
+
+def test_default_embedding_provider_does_not_enable_network_search():
+    settings=Settings()
+    assert settings.embedding_provider=='Gemini' and settings.search_mode=='keyword'
+    assert settings.embedding() is None
+
+
+def test_gemini_notes_key_cannot_be_inherited_by_a_custom_embedding_destination():
+    with pytest.raises(ValueError,match='endpoint or key'):
+        Settings(search_mode='hybrid',embedding_provider='Custom',
+            embedding_endpoint='https://other.example/v1',summary_provider='Gemini',
+            summary_key='saved-gemini-key').embedding()
+
+
+def test_enabled_gemini_search_keeps_key_when_notes_provider_changes():
+    from scribeloop_core.api.desktop_settings import DesktopSettings
+    class Vault:
+        def get_password(self,*_): return None
+    settings=DesktopSettings(Vault())
+    settings.value=settings.prepare({'summary_provider':'Gemini','summary_model':'gemini-test',
+        'summary_key':'saved-gemini-key','search_mode':'hybrid'})
+    assert settings.value.embedding_key=='saved-gemini-key'
+    changed=settings.prepare({'summary_provider':'OpenAI'})
+    assert changed.embedding().api_key=='saved-gemini-key'

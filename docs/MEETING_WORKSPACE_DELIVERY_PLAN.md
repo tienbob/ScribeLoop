@@ -158,6 +158,14 @@ return keyword results and require an explicit next submission to retry.
 Person-forgetting and conversation deletion purge every registered generation.
 Native packaging pins ONNX Runtime 1.18.1 to retain the macOS 13 deployment floor.
 
+Gemini amendment (2026-11-11): new settings default to Gemini for the Hybrid
+embedding provider (`gemini-embedding-001`, 768 dimensions). The native Gemini
+batch-embedding API requests the exact output size and uses separate document/query
+retrieval task types. Keyword-only stays the initial search mode; choosing this
+default alone does not upload a transcript. Existing explicit provider choices are
+preserved. The standard Gemini destination may reuse the saved Gemini notes key;
+other providers and custom URLs cannot inherit it.
+
 Recorded development-Mac scale result for a synthetic 1,000-meeting/100,000-segment
 SQLCipher workspace: 101,000 search documents, 4.419 s cold build, 71.05 ms warm
 p50, 79.63 ms warm p95 and 82.12 ms warm maximum over 100 queries. This passes the

@@ -585,7 +585,7 @@ struct MeetingSearchView: View {
     @State private var dateRange=0
     @State private var debounce:Task<Void,Never>?
     private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
-    private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Custom"].contains(text(core.settings["embedding_provider"])) }
+    private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
 
     private func runSearch() {
         let now=Int(Date().timeIntervalSince1970*1000)

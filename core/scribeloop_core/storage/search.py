@@ -14,7 +14,7 @@ import time
 import unicodedata
 
 from .db import DATABASE_ERRORS
-from .embeddings import CompatibleEmbeddingProvider, LocalEmbeddingProvider
+from .embeddings import CompatibleEmbeddingProvider, GeminiEmbeddingProvider, LocalEmbeddingProvider
 from .vectors import SqliteVecIndex
 
 INDEX_VERSION = 3
@@ -53,8 +53,9 @@ class MeetingSearch:
         self.include_titles=include_titles
         if embedding_config is not None and embedder is None:
             try:
-                self.embedder=(LocalEmbeddingProvider(embedding_config) if embedding_config.provider == 'Local'
-                               else CompatibleEmbeddingProvider(embedding_config))
+                self.embedder=(LocalEmbeddingProvider(embedding_config) if embedding_config.provider == 'Local' else
+                    GeminiEmbeddingProvider(embedding_config) if embedding_config.provider == 'Gemini' else
+                    CompatibleEmbeddingProvider(embedding_config))
             except (FileNotFoundError,ImportError):
                 self.embedder=None
 
@@ -282,7 +283,8 @@ class MeetingSearch:
             lexical['retrieval_mode']='keyword'
             return lexical
         try:
-            query_vector=(await self.embedder.embed([query.strip()]))[0]
+            embed_query=getattr(self.embedder,'embed_query',self.embedder.embed)
+            query_vector=(await embed_query([query.strip()]))[0]
         except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; no automatic retry
             semantic.update(enabled=False,status='embedding_error',message='Semantic query failed. Check the embedding provider and submit again to retry.')
             lexical['results']=lexical['results'][offset:offset+limit]

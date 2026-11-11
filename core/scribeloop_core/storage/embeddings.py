@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import json
 import math
+import re
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -26,7 +27,7 @@ class EmbeddingConfig:
     implementation: str = 'v1'
 
     def __post_init__(self):
-        if self.provider not in {'Local','OpenAI','Ollama','LM Studio','Custom'}:
+        if self.provider not in {'Local','OpenAI','Gemini','Ollama','LM Studio','Custom'}:
             raise ValueError('Unsupported embedding provider')
         if not 32 <= self.dimensions <= 4096 or not 1 <= len(self.model) <= 160:
             raise ValueError('Invalid embedding model shape')
@@ -53,6 +54,10 @@ class EmbeddingConfig:
             raise ValueError('Local embedding providers require a loopback endpoint')
         if any(ord(c)<32 for c in self.endpoint+self.model+self.api_key):
             raise ValueError('Invalid embedding configuration')
+        if self.provider == 'Gemini' and (self.endpoint.rstrip('/') != 'https://generativelanguage.googleapis.com/v1beta'
+                or not re.fullmatch(r'gemini-embedding-[A-Za-z0-9._-]+',self.model)
+                or not 128<=self.dimensions<=3072):
+            raise ValueError('Invalid Gemini embedding model, endpoint or vector size')
 
     @property
     def generation(self) -> str:
@@ -115,6 +120,46 @@ class CompatibleEmbeddingProvider:
         if [row.get('index') for row in ordered] != list(range(len(texts))):
             raise ValueError('Embedding provider returned invalid indexes')
         return [pack_embedding(row.get('embedding'),self.config.dimensions) for row in ordered]
+
+
+class GeminiEmbeddingProvider:
+    """Native Gemini batch embeddings with explicit retrieval task and dimensions."""
+
+    def __init__(self,config: EmbeddingConfig,*,request=None):
+        if config.provider != 'Gemini':
+            raise ValueError('Use a Gemini embedding configuration')
+        self.config=config
+        self._request=request
+
+    async def embed(self,texts):
+        return await self._embed(texts,'RETRIEVAL_DOCUMENT')
+
+    async def embed_query(self,texts):
+        return await self._embed(texts,'RETRIEVAL_QUERY')
+
+    async def _embed(self,texts,task):
+        if (not isinstance(texts,list) or not 1<=len(texts)<=64 or
+                any(not isinstance(text,str) or not text.strip() or len(text)>8000 for text in texts) or
+                len(json.dumps(texts,ensure_ascii=False).encode())>128_000):
+            raise ValueError('Invalid Gemini embedding batch')
+        model='models/'+self.config.model
+        body={'requests':[{'model':model,'content':{'parts':[{'text':text}]},
+                           'taskType':task,'outputDimensionality':self.config.dimensions} for text in texts]}
+        if self._request:
+            payload=await self._request(body)
+        else:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10),trust_env=False,
+                                         follow_redirects=False) as client:
+                response=await client.post(self.config.endpoint.rstrip('/')+'/'+model+':batchEmbedContents',
+                    headers={'x-goog-api-key':self.config.api_key},json=body)
+                response.raise_for_status()
+                if len(response.content)>16_000_000:
+                    raise ValueError('Embedding response too large')
+                payload=response.json()
+        rows=payload.get('embeddings') if isinstance(payload,dict) else None
+        if not isinstance(rows,list) or len(rows)!=len(texts) or any(not isinstance(row,dict) for row in rows):
+            raise ValueError('Gemini returned an incomplete embedding batch')
+        return [pack_embedding(row.get('values'),self.config.dimensions) for row in rows]
 
 
 def bundled_embedding_model_dir() -> Path:

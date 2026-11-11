@@ -40,10 +40,10 @@ struct Preferences: View {
     @State private var cleanupKey = ""
     @State private var cleanupValidate = true
     @State private var searchMode = "keyword"
-    @State private var embeddingProvider = "Local"
-    @State private var embeddingEndpoint = ""
-    @State private var embeddingModel = "granite-embedding-97m-multilingual-r2"
-    @State private var embeddingDimensions = 384
+    @State private var embeddingProvider = "Gemini"
+    @State private var embeddingEndpoint = "https://generativelanguage.googleapis.com/v1beta"
+    @State private var embeddingModel = "gemini-embedding-001"
+    @State private var embeddingDimensions = 768
     @State private var embeddingKey = ""
     private var vocabularyTerms: [String] {
         vocabulary.components(separatedBy:.newlines).map { $0.trimmingCharacters(in:.whitespaces) }.filter { !$0.isEmpty }
@@ -91,7 +91,7 @@ struct Preferences: View {
             let destinations=core.settings["embedding_key_destinations"] as? [String:String] ?? [:]
             guard destinations[embeddingProvider] == embeddingEndpoint.trimmingCharacters(in:CharacterSet(charactersIn:"/")) else { return "" }
         }
-        return embeddingKeyPreviews[embeddingProvider] ?? ""
+        return embeddingKeyPreviews[embeddingProvider] ?? (embeddingProvider == "Gemini" ? text(core.settings["gemini_embedding_shared_key_preview"]) : "")
     }
     private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate),searchMode,embeddingProvider,embeddingEndpoint,embeddingModel,String(embeddingDimensions)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || !embeddingKey.isEmpty || removeTranscriptionKey }
@@ -190,6 +190,7 @@ struct Preferences: View {
                     }
                     if searchMode == "hybrid" {
                         Picker("Embedding provider",selection:$embeddingProvider) {
+                            Text("Gemini · Cloud").tag("Gemini")
                             Text("ScribeLoop multilingual · Local").tag("Local")
                             Text("OpenAI · Cloud").tag("OpenAI")
                             Text("Ollama · Local").tag("Ollama")
@@ -197,7 +198,7 @@ struct Preferences: View {
                             Text("Custom · OpenAI compatible").tag("Custom")
                         }.onChange(of:embeddingProvider) { selected in
                             embeddingEndpoint = embeddingPresets[selected] ?? ""
-                            embeddingModel = embeddingModels[selected] ?? (selected == "Local" ? "granite-embedding-97m-multilingual-r2" : selected == "OpenAI" ? "text-embedding-3-small" : "")
+                            embeddingModel = embeddingModels[selected] ?? (selected == "Local" ? "granite-embedding-97m-multilingual-r2" : selected == "OpenAI" ? "text-embedding-3-small" : selected == "Gemini" ? "gemini-embedding-001" : "")
                             embeddingDimensions = selected == "Local" ? 384 : selected == "OpenAI" ? 1536 : 768
                             embeddingKey = ""
                         }
@@ -220,8 +221,11 @@ struct Preferences: View {
                             .textFieldStyle(.roundedBorder).focused($focusedField,equals:.embeddingDimensions)
                             .disabled(embeddingProvider == "Local")
                         Text("Use the output size supported by your embedding model. Changing the provider, model or size rebuilds semantic search on your next submitted search. Existing conversations stay saved.").font(.caption).foregroundStyle(.secondary)
-                        if embeddingProvider == "OpenAI" || embeddingProvider == "Custom" {
+                        if embeddingProvider == "OpenAI" || embeddingProvider == "Gemini" || embeddingProvider == "Custom" {
                             Text("Cloud embedding sends saved transcript chunks while indexing and your query text while searching. There is no automatic provider fallback or paid retry.").font(.caption).foregroundStyle(ScribeTheme.warning)
+                            if embeddingProvider == "Gemini" && !embeddingKeyPreview.isEmpty {
+                                Text("A saved Gemini key is available. Leave the key field empty to keep using it.").font(.caption).foregroundStyle(.secondary)
+                            }
                         } else if embeddingProvider == "Local" {
                             Text("Multilingual search is bundled with the app and runs on this Mac. Supports English and Vietnamese. No API key is needed.").font(.caption).foregroundStyle(.secondary)
                         }
@@ -584,10 +588,10 @@ struct Preferences: View {
             cleanupKey = ""
             cleanupValidate = core.settings["local_cleanup_validate"] as? Bool ?? true
             searchMode = text(core.settings["search_mode"]); if searchMode.isEmpty { searchMode = "keyword" }
-            embeddingProvider = text(core.settings["embedding_provider"]); if embeddingProvider.isEmpty { embeddingProvider = "Local" }
+            embeddingProvider = text(core.settings["embedding_provider"]); if embeddingProvider.isEmpty { embeddingProvider = "Gemini" }
             embeddingEndpoint = text(core.settings["embedding_endpoint"])
-            embeddingModel = text(core.settings["embedding_model"]); if embeddingModel.isEmpty { embeddingModel = "granite-embedding-97m-multilingual-r2" }
-            embeddingDimensions = (core.settings["embedding_dimensions"] as? NSNumber)?.intValue ?? 384
+            embeddingModel = text(core.settings["embedding_model"]); if embeddingModel.isEmpty { embeddingModel = "gemini-embedding-001" }
+            embeddingDimensions = (core.settings["embedding_dimensions"] as? NSNumber)?.intValue ?? 768
             microphoneGain = (core.settings["microphone_gain_db"] as? NSNumber)?.doubleValue ?? 0
             microphoneFilter = text(core.settings["microphone_noise_filter"])
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
