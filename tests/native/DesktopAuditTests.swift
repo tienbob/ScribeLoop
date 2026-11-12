@@ -34,6 +34,25 @@ import Foundation
         let socket = transport.webSocketTask(with:URL(string:"ws://127.0.0.1:1/ws")!)
         defer { transport.invalidateAndCancel() }
         client.auditConnect(socket)  // Deliberately never resume the socket.
+        let searchClient=DesktopClient(database:"/tmp/unused-search-test.sqlcipher")
+        searchClient.auditConnect(socket)
+        searchClient.search("first query")
+        let firstSearch=searchClient.auditSearchRequest!
+        precondition(searchClient.searchLoading)
+        searchClient.search("newer query")
+        precondition(searchClient.auditSearchRequest==firstSearch,"Search requests must not overlap")
+        searchClient.search("")
+        precondition(searchClient.searchLoading,"Clearing must drain the in-flight request before another upload")
+        searchClient.auditReceive(["type":"receipt","request_id":firstSearch,"status":"accepted"])
+        searchClient.auditReceive(["type":"search_results","response_to":firstSearch,"results":[["id":"obsolete"]]])
+        precondition(!searchClient.searchLoading && searchClient.searchResults.isEmpty,"Cleared results must not reappear")
+        searchClient.search("newest query")
+        let latestSearch=searchClient.auditSearchRequest!
+        precondition(latestSearch != firstSearch)
+        searchClient.auditReceive(["type":"receipt","request_id":latestSearch,"status":"accepted"])
+        searchClient.auditReceive(["type":"search_results","response_to":latestSearch,"results":[["id":"latest"]]])
+        searchClient.auditReceive(["type":"search_results","response_to":firstSearch,"results":[["id":"obsolete"]]])
+        precondition(searchClient.searchResults.first?.id=="latest","Old responses cannot replace newer results")
         let mutation = client.send(["action":"pause_detection"])!
         for n in 0..<255 { client.requests["legacy-read-\(n)"] = "unknown" }
         precondition(client.requests.count == 256)
