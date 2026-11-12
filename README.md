@@ -10,7 +10,7 @@ was actually said.
 
 [Get started](#get-started) · [Features](#a-notebook-for-the-whole-conversation) ·
 [Search & Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
-[Developer guides](#for-developers)
+[What's new](CHANGELOG.md) · [Developer guides](#for-developers)
 
 > **Internal preview:** Apple Silicon Macs, macOS 13 or later. Automatic call
 > detection requires macOS 14.2+. The app includes its runtime; no Python,

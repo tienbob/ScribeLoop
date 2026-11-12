@@ -9,6 +9,9 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Changelog since the shared macOS beta](../CHANGELOG.md)
+- [Drive build comparison and artifact evidence](MACOS_DRIVE_COMPARISON_2026-11-12.md)
+
 - [Google sign-in/account implementation and deployment setup](GOOGLE_ACCOUNT_IMPLEMENTATION.md)
 
 - [Product roadmap for review — November 3](PRODUCT_ROADMAP_REVIEW_2026-11-03.md)
