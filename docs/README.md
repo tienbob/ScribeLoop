@@ -16,6 +16,7 @@ capture/release acceptance gates.
 - [Manual Stop, automatic notes, and default microphone handoff](MANUAL_STOP_AND_DEVICE_HANDOFF.md)
 
 - [Pause/Continue and transcript chat bubbles](RECORDING_PAUSE_AND_CHAT.md)
+- [Ask chat, meeting context and saved threads](ASK_CHAT_UX.md)
 
 - [Local Ollama transcription (batch-only after recording)](LOCAL_TRANSCRIPTION.md)
 - [Ollama functional fixes and validation](OLLAMA_FLOW_2026-11-03.md)

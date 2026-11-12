@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,199 @@ from scribeloop_core.llm.meeting_ask import (
 from scribeloop_core.llm.summary_provider import SummaryProvider
 from scribeloop_core.storage.db import connect, migrate
 from scribeloop_core.storage.sessions import SessionStore
+
+
+def chat_provider(calls):
+    async def request(messages):
+        calls.append(messages)
+        packet=json.loads(messages[1]['content'])
+        return {'claims':[{'text':'The pilot starts Thursday.','kind':'decision',
+                           'citation_ids':[packet['untrusted_evidence'][0]['citation_id']]}],
+                'insufficient_evidence':False,'caveat':None}
+    return SummaryProvider(settings={'SUMMARY_BASE_URL':'http://127.0.0.1:1234/v1',
+        'SUMMARY_MODEL':'test-model','SUMMARY_PROVIDER':'LM Studio'},request=request)
+
+
+@pytest.mark.asyncio
+async def test_complete_threads_survive_reopen_and_do_not_call_provider(tmp_path):
+    path=tmp_path/'chat.sqlite'
+    store=SessionStore(migrate(connect(path)))
+    sid=meeting(store,'Launch','The pilot starts Thursday with onboarding support')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    calls=[]; provider=chat_provider(calls); service=MeetingAsk(store,provider)
+    root=await service.answer('When does the pilot start?',scope)
+    second=await service.answer('Who supports the pilot?',scope,previous_answer_id=root['answer_id'])
+    third=await service.answer('What about onboarding?',scope,previous_answer_id=second['answer_id'])
+    other=await service.answer('Summarize the pilot',scope)
+    assert root['thread_id']==second['thread_id']==third['thread_id']
+    assert other['thread_id']!=root['thread_id']
+    store.conn.close()
+    store=SessionStore(migrate(connect(path))); service=MeetingAsk(store,provider)
+    threads=await service.threads(scope)
+    assert sorted(row['turn_count'] for row in threads)==[1,3]
+    turns=await service.thread(scope,root['thread_id'])
+    assert [row['id'] for row in turns]==[root['answer_id'],second['answer_id'],third['answer_id']]
+    assert turns[1]['parent_answer_id']==root['answer_id']
+    assert all(not row['stale'] and row['evidence'] for row in turns)
+    assert len(calls)==4
+
+
+@pytest.mark.asyncio
+async def test_thread_scope_isolation_and_changed_sources():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    outside=meeting(store,'Other','Pricing is undecided')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    service=MeetingAsk(store,chat_provider([]))
+    root=await service.answer('When does the pilot start?',scope)
+    other=AskScope.resolve(store,'current',current_id=outside)
+    assert await service.thread(other,root['thread_id'])==[]
+    assert await service.threads(other)==[]
+    store.rename_conversation(sid,'Changed launch')
+    rows=await service.thread(scope,root['thread_id'])
+    assert rows[0]['stale'] and rows[0]['evidence']==[]
+    with pytest.raises(ValueError,match='outdated'):
+        await service.answer('When is the pilot?',scope,previous_answer_id=root['answer_id'])
+
+
+@pytest.mark.asyncio
+async def test_all_meeting_thread_freezes_context_and_history_lists_other_scopes():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    service=MeetingAsk(store,chat_provider([]))
+    root=await service.answer('When does the pilot start?',AskScope.resolve(store,'all'))
+    added=meeting(store,'Later meeting','The pilot starts Friday')
+    expanded=AskScope.resolve(store,'all')
+    result=await service.answer('When is the pilot?',expanded,previous_answer_id=root['answer_id'])
+    assert result['evidence']['scope']['meeting_ids']==[sid]
+    assert added not in {row['meeting_id'] for row in result['evidence']['passages']}
+    assert len(await service.thread(expanded,root['thread_id']))==2
+    single=await service.answer('When is the pilot?',AskScope.resolve(store,'current',current_id=sid))
+    assert {r['id'] for r in await service.threads(expanded)}=={root['thread_id'],single['thread_id']}
+
+
+@pytest.mark.asyncio
+async def test_no_evidence_turn_is_saved_in_thread_without_model_call_and_deleted_with_meeting():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    calls=[]; service=MeetingAsk(store,chat_provider(calls))
+    root=await service.answer('unfindablezebra',scope)
+    assert root['saved'] and root['answer']['insufficient_evidence'] and calls==[]
+    next_turn=await service.answer('When does the pilot start?',scope,previous_answer_id=root['answer_id'])
+    assert next_turn['thread_id']==root['thread_id']
+    assert len(await service.thread(scope,root['thread_id']))==2
+    # Removing a scoped meeting purges even a source-less refusal and every linked turn.
+    store.begin_delete(sid); store.finish_delete(sid)
+    assert store.conn.execute('SELECT count(*) FROM meeting_answers').fetchone()[0]==0
+
+
+@pytest.mark.asyncio
+async def test_thread_limit_rejects_before_another_model_request():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    calls=[]; service=MeetingAsk(store,chat_provider(calls))
+    root=await service.answer('unfindablezebra',scope)
+    columns=[r[1] for r in store.conn.execute('PRAGMA table_info(meeting_answers)')]
+    original=dict(store.conn.execute('SELECT * FROM meeting_answers').fetchone())
+    from uuid import uuid4
+    for _ in range(99):
+        row={**original,'id':uuid4().hex}
+        store.conn.execute(f'INSERT INTO meeting_answers ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)})',
+                           [row[key] for key in columns])
+    store.conn.commit()
+    with pytest.raises(ValueError,match='100 answers'):
+        await service.answer('When is the pilot?',scope,previous_answer_id=root['answer_id'])
+    assert calls==[]
+    assert len(await service.thread(scope,root['thread_id']))==100
+
+
+@pytest.mark.asyncio
+async def test_thread_reads_recheck_authorization():
+    from scribeloop_core.storage.search_work import SearchWork
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    store.accept_agreement(store.AGREEMENT_VERSION)
+    service=MeetingAsk(store,None,work=SearchWork(authorize=store.search_authorization()))
+    store.revoke_agreement()
+    with pytest.raises(Exception,match='revoked|agreement|authorized'):
+        await service.threads(scope)
+
+
+@pytest.mark.asyncio
+async def test_v21_migration_preserves_legacy_answers_as_single_turn_threads():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    service=MeetingAsk(store,chat_provider([]))
+    root=await service.answer('When does the pilot start?',scope)
+    conn=store.conn
+    conn.execute('DROP TRIGGER purge_meeting_answers_before_session_delete')
+    conn.execute('DROP INDEX idx_meeting_answers_thread')
+    conn.execute('ALTER TABLE meeting_answers DROP COLUMN parent_answer_id')
+    conn.execute('ALTER TABLE meeting_answers DROP COLUMN thread_id')
+    conn.execute('PRAGMA user_version=21'); conn.commit()
+    migrate(conn); migrate(conn)
+    rows=await service.thread(scope,root['answer_id'])
+    assert len(rows)==1 and rows[0]['thread_id']==root['answer_id']
+    assert rows[0]['parent_answer_id'] is None
+
+
+@pytest.mark.asyncio
+async def test_all_scope_over_100_meetings_keeps_explicit_frozen_membership():
+    store=SessionStore(migrate(connect(':memory:')))
+    ids=[meeting(store,f'Launch {i}','The pilot starts Thursday') for i in range(101)]
+    scope=AskScope.resolve(store,'all')
+    packet=await MeetingEvidence(store).retrieve('When does the pilot start?',scope)
+    assert packet['sufficient'] and len(packet['scope']['meeting_ids'])==101
+    assert {row['meeting_id'] for row in packet['passages']}<=set(ids)
+    with pytest.raises(ValueError,match='limited to 100'):
+        AskScope.resolve(store,'selected',selected_ids=ids)
+
+
+@pytest.mark.asyncio
+async def test_native_contract_lists_and_restores_threads_without_embedding_calls():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    calls=[]; provider=chat_provider(calls)
+    root=await MeetingAsk(store,provider).answer('When does the pilot start?',scope)
+    store.accept_agreement(store.AGREEMENT_VERSION)
+    desktop=DesktopContract(DesktopSettings(Vault()),Path('/fake/helper'))
+    desktop.settings.value.search_mode='hybrid'
+    desktop.settings.value.embedding_key='synthetic-test-key'
+    app=SimpleNamespace(state=SimpleNamespace(store=store))
+    command={'action':'ask_history','scope':'all','threads_only':True}
+    listing=await desktop.read(app,command,provider,None,None)
+    assert listing['threads'][0]['id']==root['thread_id']
+    result=await desktop.read(app,{'action':'ask_history','scope':'current','current_id':sid,
+        'thread_id':root['thread_id']},provider,None,None)
+    assert len(result['answers'])==1 and result['answers'][0]['id']==root['answer_id']
+    assert len(calls)==1
+    store.revoke_agreement()
+    with pytest.raises(ValueError,match='after setup'):
+        await desktop.read(app,command,provider,None,None)
+
+
+@pytest.mark.asyncio
+async def test_thread_deleted_during_generation_cannot_be_recreated_by_inflight_followup():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    root=await MeetingAsk(store,chat_provider([])).answer('When does the pilot start?',scope)
+    async def deleting_request(messages):
+        store.conn.execute('DELETE FROM meeting_answers WHERE thread_id=?',(root['thread_id'],))
+        store.conn.commit()
+        packet=json.loads(messages[1]['content'])
+        return {'claims':[{'text':'Thursday','kind':'decision','citation_ids':[packet['untrusted_evidence'][0]['citation_id']]}],
+                'insufficient_evidence':False,'caveat':None}
+    provider=SummaryProvider(settings={'SUMMARY_BASE_URL':'http://127.0.0.1:1234/v1',
+        'SUMMARY_MODEL':'test-model','SUMMARY_PROVIDER':'LM Studio'},request=deleting_request)
+    with pytest.raises(ValueError,match='chat changed'):
+        await MeetingAsk(store,provider).answer('When is the pilot?',scope,previous_answer_id=root['answer_id'])
+    assert store.conn.execute('SELECT count(*) FROM meeting_answers').fetchone()[0]==0
 
 
 class Vault:

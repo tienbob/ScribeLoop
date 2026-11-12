@@ -86,8 +86,10 @@ Try questions such as:
 - “Which tasks did we leave open?”
 - “How does the proposed architecture work?”
 
-Choose **Current meeting**, **Chosen meetings**, or **All meetings** to control the
-scope. Open a citation to inspect the source. Ask sends a bounded evidence packet,
+Use **Ask this meeting** inside a conversation, or **Ask across meetings** in the
+sidebar. The context bar shows which meetings are included; **Change** lets you
+choose specific meetings. Changing context starts a new chat, and History keeps
+your saved threads. Open a citation to inspect the source. Ask sends a bounded evidence packet,
 rather than falling back to uploading entire transcripts.
 
 Embedding options include **Gemini** (default), **OpenAI**, **bundled local
