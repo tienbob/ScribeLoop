@@ -149,19 +149,14 @@ class SqliteVecIndex:
                 ' AND '.join(constraints)+' ORDER BY distance,m.session_id,m.chunk_start_ms,m.rowid LIMIT ?',args).fetchall()
             return self._hits(rows)
         fetch_k=min(k,2000)
-        scope=''
-        args: list[object]=[vector,fetch_k,self.generation]
-        if session_ids is not None:
-            scope=' AND m.session_id IN ('+','.join('?' for _ in session_ids)+')'
-            args.extend(session_ids)
-        args.append(k)
+        args=[vector,fetch_k,self.generation,k]
         rows = self._conn.execute(
             "SELECT m.id, m.session_id, m.chunk_start_ms, m.chunk_end_ms,"
             " m.segment_ids, m.chunk_text, v.distance,m.source_spans"
             " FROM ("
             f"   SELECT id, distance FROM {self._table}"
             "  WHERE vec MATCH ? AND k = ? ORDER BY distance"
-            " ) v JOIN embeddings_chunks m ON m.rowid = v.id WHERE m.generation=?"+scope+
+            " ) v JOIN embeddings_chunks m ON m.rowid = v.id WHERE m.generation=?"
             " ORDER BY v.distance LIMIT ?",
             args,
         ).fetchall()

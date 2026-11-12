@@ -11,7 +11,7 @@ from uuid import uuid4
 import httpx
 from pydantic import ValidationError
 
-from ..storage.search import MeetingSearch
+from ..storage.search import MeetingSearch, retrieval_query
 from ..storage.search_work import SearchWork
 from .schemas import MeetingAnswer
 
@@ -19,9 +19,6 @@ MAX_PASSAGES = 20
 MAX_EVIDENCE_BYTES = 48 * 1024
 MAX_QUESTION_CHARS = 500
 MAX_SELECTED_MEETINGS = 100
-QUESTION_STOPWORDS = {'a','an','and','are','about','did','do','does','for','from','how','i','in','is','it',
-    'of','on','our','the','to','was','we','were','what','when','where','which','who','why','with','you',
-    'ai','cái','có','đã','được','gì','khi','là','mà','nào','những','ở','ta','thế','và','về'}
 
 
 def ask_failure(error):
@@ -47,7 +44,6 @@ def ask_failure(error):
         known={
             'Summary request too large':('ask_input_limit','The retrieved evidence exceeded the answer provider request budget.'),
             'Ask response cites evidence outside its scope':('ask_invalid_citation','The answer used a citation outside the retrieved evidence.'),
-            'Ask response omitted the disclosed retrieval limit':('ask_missing_limit_notice','The answer omitted the required evidence-limit notice.'),
             'Ask response contains no supported claims':('ask_empty_claims','The answer contained no supported claims.'),
             'Notes response reached its output limit':('ask_output_limit','The answer provider reached its output limit.'),
         }
@@ -90,12 +86,6 @@ def _truncate_utf8(value: str, limit: int) -> tuple[str,bool]:
     return raw[:limit].decode('utf-8','ignore'),True
 
 
-def _retrieval_query(question: str) -> str:
-    terms=[term for term in re.findall(r"[\wÀ-ỹ]+",question.casefold(),flags=re.UNICODE)
-           if len(term)>1 and term not in QUESTION_STOPWORDS]
-    return ' '.join(dict.fromkeys(terms)) or question.strip()
-
-
 def _evidence_hash(row) -> str:
     """Fingerprint every provider-visible source field, including person/title edits."""
     fields=('meeting_title','revision','source_type','source_id','start_ms','end_ms',
@@ -130,7 +120,7 @@ class MeetingEvidence:
             raise TypeError('Invalid Ask scope')
         meeting_ids=None if scope.kind == 'all' else list(scope.meeting_ids)
         result=await MeetingSearch(self.store,embedding_config=self.embedding_config,
-                                    embedder=self.embedder,include_titles=False,work=self.work).query_async(_retrieval_query(question)[:200],limit=MAX_PASSAGES,
+                                    embedder=self.embedder,include_titles=False,work=self.work).query_async(retrieval_query(question)[:200],limit=MAX_PASSAGES,
                                                             meeting_ids=meeting_ids,match_all=False,semantic_query=question)
         candidates=result['results']
         retrieval_mode='hybrid' if result.get('retrieval_mode') == 'hybrid' else 'lexical'
@@ -245,11 +235,7 @@ class MeetingAsk:
             for source in sources:
                 document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=?',
                                                  (source['citation_id'],)).fetchone()
-                passage=({'meeting_title':document['title'],'revision':document['revision'],
-                    'source_type':document['source_type'],'source_id':document['source_id'],
-                    'start_ms':document['start_ms'],'end_ms':document['end_ms'],
-                    'speaker_id':document['speaker_id'],'speaker_name':document['speaker_name'],
-                    'text':document['content']} if document else None)
+                passage=_document_passage(document) if document else None
                 if (not passage or document['revision']!=source['revision'] or
                         _evidence_hash(passage)!=source['content_hash']):
                     raise ValueError('Prior Ask answer is outdated')
@@ -335,12 +321,7 @@ class MeetingAsk:
             for source in sources:
                 document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=? AND session_id=?',
                     (source['citation_id'],source['session_id'])).fetchone()
-                passage=({'citation_id':document['id'],'meeting_id':document['session_id'],
-                    'meeting_title':document['title'],'revision':document['revision'],
-                    'source_type':document['source_type'],'source_id':document['source_id'],
-                    'start_ms':document['start_ms'],'end_ms':document['end_ms'],
-                    'speaker_id':document['speaker_id'],'speaker_name':document['speaker_name'],
-                    'text':document['content']} if document else None)
+                passage=_document_passage(document) if document else None
                 if (not passage or document['revision']!=source['revision'] or
                         _evidence_hash(passage)!=source['content_hash']):
                     stale=True
