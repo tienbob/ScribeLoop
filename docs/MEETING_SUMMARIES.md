@@ -85,7 +85,26 @@ all prompt injection**: review the source text. Transcript and generated output
 are treated as inert data, with no tool execution or automatic follow-up actions.
 
 Saved drafts record the provider, model, revision and corrected-text fingerprint.
-Editing a speaker or replacing/resuming a transcript makes earlier notes outdated.
+Renaming a person or a speaker label keeps saved notes current. It changes display
+metadata rather than what was said; no AI regeneration runs automatically. Notes
+retain their generated wording, so a name written inside the prose is not silently
+rewritten. Transcript edits, speaker merges/reassignments, and replacing/resuming
+a transcript still make earlier notes outdated when their source content changes.
+
+Schema v23 stores a separate content/attribution fingerprint for saved-summary
+freshness. The strict generation fingerprint still includes labels, preserving
+the check against inputs changing during a provider request. Fresh legacy summaries
+acquire the content baseline atomically during a name/link edit. Already-outdated
+legacy summaries are not guessed fresh; generate notes once to establish a new
+baseline. Naming, linking and unlinking a display name do not change anonymous
+speaker attribution; merging speakers does.
+
+Verification (12 November 2026): all 914 tests pass. Added checks cover local labels,
+new/existing person links, current and legacy notes, reopen, v22 migration, speaker
+merge invalidation, already-stale legacy protection and transaction rollback. The
+strict in-flight input check remains covered. Changed Python files pass Ruff; the
+rebuilt macOS bundle passes verification. These checks use synthetic transcripts
+and do not regenerate private notes or call a live AI provider.
 A result arriving after the transcript changes is rejected. Reconnect restores the
 saved draft; session deletion removes it. Summary generation does not block the
 recording/Stop command loop and never triggers another ASR pass.

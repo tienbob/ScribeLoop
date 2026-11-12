@@ -140,7 +140,7 @@ async def test_grounded_hash_cache_ignores_audio_watermarks_and_detects_text_cha
 
 
 @pytest.mark.asyncio
-async def test_note_read_caches_invalidate_and_restore_for_speaker_and_person_edits(state):
+async def test_provisional_label_hash_changes_but_saved_notes_remain_current(state):
     from uuid import uuid4
     store,sid=state
     source=store.append(sid,{'text':'Synthetic statement','start_ms':0,'end_ms':1000,
@@ -155,21 +155,21 @@ async def test_note_read_caches_invalidate_and_restore_for_speaker_and_person_ed
     speaker=source['local_speaker_id']
     with store.conn:
         store.conn.execute('UPDATE session_speakers SET local_label=? WHERE id=?',('Changed name',speaker))
-    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+    assert engine.latest(sid) is None and not store.grounded_summary(sid)['stale']
 
 
     person=uuid4().hex
     with store.conn:
         store.conn.execute('INSERT INTO speakers(id,canonical_name) VALUES (?,?)',(person,'Different person'))
         store.conn.execute('INSERT INTO person_links(session_id,revision,speaker_id,person_id) VALUES (?,1,?,?)',(sid,speaker,person))
-    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+    assert engine.latest(sid) is None and not store.grounded_summary(sid)['stale']
     with store.conn:
         store.conn.execute('UPDATE speakers SET canonical_name=? WHERE id=?',('Speaker 1',person))
     assert engine.latest(sid) and not store.grounded_summary(sid)['stale']
     with store.conn:
         store.conn.execute('INSERT INTO revision_speaker_edits(session_id,revision,speaker_id,label) VALUES (?,1,?,?)',(sid,speaker,'Edited label'))
         store.conn.execute('DELETE FROM person_links WHERE session_id=?',(sid,))
-    assert engine.latest(sid) is None and store.grounded_summary(sid)['stale']
+    assert engine.latest(sid) is None and not store.grounded_summary(sid)['stale']
 
 
 @pytest.mark.asyncio
