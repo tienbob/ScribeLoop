@@ -208,6 +208,46 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+### Audit remediation — 2026-11-12
+
+Branch: `fix/search-ask-quality-and-privacy`. This is implementation work;
+the independent production-model release evaluation remains a separate gate.
+Implementation and verification evidence: `SEARCH_ASK_AUDIT_REMEDIATION.md`.
+Remediation implemented: 882 full-suite tests pass; 35 focused tests pass after
+the final request-accounting adjustment. Native compilation/build/signature and
+real Gemini/UI checks pass. The original architecture transcript moved from rank
+13 to rank 1; Search and saved Ask citations now visibly highlight 3:12. Synthetic
+local recall is 38/40 at five passages and 39/40 at twenty for both Search and Ask.
+Independent production-scale/multilingual grounding release gates below remain open.
+
+| Finding                     | Planned change                                                                                                    | Finished when                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Weak passage ranking        | Preserve chunk rank, score bounded source excerpts and remove common query-word noise                             | Versioned multilingual corpus improves final passage recall; exact matches outrank adjacent boilerplate |
+| Source navigation           | Resolve cited segment to its containing lazy turn before scrolling/highlighting                                   | Search and Ask open middle/end/grouped/page-boundary sources at the actual cited text                   |
+| Lost long-source evidence   | Carry matched excerpt offsets and full-source fingerprints through evidence/history                               | A tail match beyond 48 KiB reaches generation without uploading the full source                         |
+| Filter starvation           | Apply meeting/date/person eligibility before nearest-neighbor selection                                           | Excluded candidates cannot crowd out eligible results                                                   |
+| History and Unicode budgets | Separate excerpt/source hashes; budget actual UTF-8 provider bodies                                               | New clipped answers reopen and follow up; equivalent Vietnamese input respects wire-byte limits         |
+| Consent revocation          | Cancel registered jobs and check an authorization generation before every outbound request and result publication | Same-client and cross-client revocation start no subsequent embedding/answer request                    |
+| Performance accounting      | Measure whole request plus indexing/retrieval/answer stages and count embedding/answer requests separately        | UI/history show total latency and all provider work, including cold indexing                            |
+
+Regression checks use synthetic sources and fake providers first. Repeat the saved
+40-query corpus, full suite and native compilation, then verify the rebuilt app's
+navigation and configured-provider flow. Do not replace bounded RAG with a full
+transcript fallback, add automatic paid retries, or mark unrun acceptance checks done.
+
+```mermaid
+flowchart LR
+    Q[Question and explicit scope] --> A[Capture authorization generation]
+    A --> F[Apply all eligibility filters]
+    F --> I[Index current eligible sources with cancellation checks]
+    I --> R[Rank matching excerpts and retain source offsets]
+    R --> B[Fit evidence into serialized request budget]
+    B --> G[Recheck authorization then generate]
+    G --> V[Validate citations and current source fingerprints]
+    V --> S[Save answer, excerpts and complete usage]
+    S --> U[Open containing transcript turn then highlight cited segment]
+```
+
 Live-failure fix (2026-11-11): the supplied selected-meeting architecture question
 reproduced `ask_missing_limit_notice` with the real Gemini provider. Valid cited
 answers were discarded when retrieval was bounded and the model omitted a caveat.

@@ -1,105 +1,176 @@
 # ScribeLoop
 
-**Your meeting notebook for Mac.**
+### Your meetings, remembered.
 
-ScribeLoop records your microphone and meeting audio, transcribes the conversation as it happens, and turns the transcript into notes with links back to their sources. Keep recordings, transcripts, and notes together so you can revisit a discussion without starting from scratch.
+A native meeting notebook for Mac. Follow the conversation live, turn it into
+useful notes, and find the decisions that matter later—with links back to what
+was actually said.
 
-The app is currently available for **internal testing on Apple Silicon Macs running macOS 13 or later**. Python and the runtime are included—there is no terminal setup or additional app to install.
+**Record → Transcribe → Take notes → Search → Ask**
 
-An **Ubuntu 22.04+ preview** is available through the separate Linux packaging path. It uses a native GTK 3 shell with the same Notes / Transcript / Audio layout as the macOS shell.
-See [Ubuntu installation, build instructions and limitations](packaging/linux/README.md).
+[Get started](#get-started) · [Features](#a-notebook-for-the-whole-conversation) ·
+[Search & Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
+[Developer guides](#for-developers)
 
-## What you can do
+> **Internal preview:** Apple Silicon Macs, macOS 13 or later. Automatic call
+> detection requires macOS 14.2+. The app includes its runtime; no Python,
+> Homebrew or terminal server is needed to use it.
 
-- **Record your way.** Capture your microphone, a selected meeting app or browser plus your microphone, or system audio plus your microphone.
-- **Follow a live transcript.** See text during the conversation, with anonymous speaker labels that you can name manually.
-- **Use multiple languages.** Search and select expected conversation languages, including English and Vietnamese, to guide recognition.
-- **Get notes with sources.** Generate an overview, key points, decisions, action items, open questions, and uncertainties where the transcript supports them. Follow citations back to the transcript.
-- **See upcoming meetings.** Opt into macOS Calendar, choose calendars, open a meeting link, and explicitly link an event to a conversation. The existing recording popup still asks before capture starts. See [Calendar setup](docs/MACOS_CALENDAR.md).
-- **Revisit and share.** Browse saved conversations, play retained audio, export Markdown, or prepare an email draft with a summary, transcript or audio attachment. Summary is selected by default; you review and send from your mail app. See [email sharing](docs/EMAIL_SHARING.md).
-- **Control recognition settings.** Adjust microphone sensitivity and noise filtering, add vocabulary hints, and choose whether transcription uses original or processed microphone audio.
+## A notebook for the whole conversation
 
-## Requirements
-
-| Requirement | Details |
+| During the meeting | After the meeting |
 | --- | --- |
-| Mac | Apple Silicon: M1 or newer |
-| macOS | 13 Ventura or later; automatic call detection requires 14.2 or later |
-| Transcription | Your own Deepgram API key and an internet connection, or a local Ollama server (optional) |
-| Conversation notes | A supported cloud provider/model and your own API key, or an existing compatible local model server |
-| Permissions | Microphone access; Screen Recording access for meeting-app or system audio; optional Calendar access for upcoming events |
+| Detect likely calls and offer **Record / Not now** | Get an overview, decisions, action items and open questions |
+| Capture your microphone, a meeting app/browser, or system audio | Follow note citations back to the transcript |
+| Follow live transcription with anonymous speaker labels | Name speakers and edit conversation titles |
+| Choose automatic or fixed-language recognition | Replay audio with seeking and playback-speed controls |
+| Stop manually or let detected-call monitoring help | Search meetings, ask questions and share what matters |
 
-Intel Macs and macOS 11–12 are not supported by the current installer. Python, Homebrew, Xcode, and Ollama are not prerequisites for using cloud transcription and notes.
+Keep each conversation's **Notes, Transcript and Audio** together. Optional Calendar
+integration shows upcoming events and lets you link them to saved conversations.
+Export Markdown or prepare an email draft to review and send in your mail app.
 
-## Transcription engines
+## Get started
 
-- **Deepgram (cloud, default)** — live transcript while recording, word-level speaker labels, and an optional extra refinement pass. Audio is sent to Deepgram.
-- **Ollama (local)** — transcription runs on your Mac **after the conversation has ended**: there is no live transcript while recording. ScribeLoop opens Ollama automatically, downloads the model name you type once if it is available in the Ollama library, and never uploads audio. Anonymous speaker labels are available as an opt-in add-on when the local diarization model is installed. See [local transcription](docs/LOCAL_TRANSCRIPTION.md).
+### 1. Install
 
-## Install
+Download the internal DMG shared by your team, open it, and drag
+**ScribeLoop.app** into **Applications**. Launch it from there.
 
-1. Download the ScribeLoop DMG shared by your team.
-2. Open it and drag **ScribeLoop.app** into **Applications**.
-3. Eject the disk image, then open ScribeLoop from Applications.
+Current internal builds are ad-hoc signed and not notarized. Installation and
+app-specific permission troubleshooting are covered in the
+[installation guide](packaging/macos/INTERNAL_INSTALL.txt).
 
-The current internal build is ad-hoc signed and **not notarized**. If macOS blocks it, verify the download with your distributor and follow Apple's app-specific [Open Anyway instructions](https://support.apple.com/102445). Company-managed Macs may require IT approval. Do not disable Gatekeeper.
+### 2. Choose your models
 
-See the [full installation guide](packaging/macos/INTERNAL_INSTALL.txt) for setup, updates, and permission troubleshooting.
+Open **Preferences → Models**:
 
-## Your first recording
+- Choose **Deepgram** or **AssemblyAI** for cloud transcription and enter that
+  provider's API key. Deepgram is the default.
+- Choose a notes provider and model, then enter its key when required.
+  **OpenAI** is the default; Gemini and compatible local/cloud services are options.
+- Choose **Auto** or a fixed conversation language. Language support depends on
+  the transcription provider; use the fixed Vietnamese option when needed.
 
-1. Open **Preferences** using the gear icon.
-2. In **Models**, enter your **Deepgram API key**. Choose a notes provider and model, then enter its API key. Use **Save changes** when finished.
-3. In **Recording**, select the languages you expect to hear. English and Vietnamese can be selected together.
-4. Grant microphone access and, when needed, macOS Screen Recording access. Use **Check capture access without recording** to verify permissions silently.
-5. Review the processing agreement, choose **New recording**, select your audio source, and press **Record & take notes**.
-6. Press **Stop recording** when finished. Transcription can continue processing after capture stops; notes follow when the transcript is ready.
+Click **Done** to save. Cancel or dismiss Preferences to discard unsaved edits.
+The app uses your provider accounts; AI credits are not included.
 
-On supported macOS versions, ScribeLoop can suggest recording when it detects a possible call. A suggestion waits for your approval before recording. Call-end detection may show a **60-second countdown**; choose **Keep recording** if the conversation is still in progress. Use Stop manually if the call has ended but the browser remains active.
+### 3. Record a conversation
 
-On macOS 13–14.1, start and stop recordings manually.
+Accept the first-use processing agreement and grant Microphone access.
+Meeting-app or system audio also requires macOS Screen Recording permission.
 
-## Make it fit your conversations
+When a likely call is detected, choose **Record**. Choose **Not now** to dismiss it.
+You can also use **New recording** for a manual session, including microphone only.
 
-In Preferences, you can choose recording duration limits, adjust microphone gain and background-noise filtering, and customize the instructions used to generate notes. You can also choose the transcription engine: Deepgram cloud or local Ollama transcription that runs after the conversation ends.
+Watch the transcript arrive, then press **Stop** when finished. Detected calls can
+show an ending countdown; choose **Keep recording** if the conversation continues.
+Notes and a topic-based title follow when configured.
 
-Under **Recognition accuracy**, you can:
+**Opening ScribeLoop never starts a recording.** On macOS 13–14.1, use manual
+recording and Stop. Browser capture can include audio from other tabs in that browser.
 
-- Choose **processed** microphone audio or the **original** signal before ScribeLoop's gain and noise filter. Original-audio transcription requires a retained original track; playback keeps its existing audio settings.
-- Add names and vocabulary **one phrase per line**. Enter the words as spoken—for example, `what's up`. Do not append language labels such as `-English` or separate terms with semicolons.
-- Enable **Refine transcript after recording** for an additional Deepgram pass before notes. This adds processing time and provider charges. The live transcript revision is retained if refinement fails.
+## Find it or ask about it
 
-Language and vocabulary hints can help recognition, but they do not guarantee correct wording. Review important names, numbers, decisions, and action items against their sources.
+**Search** finds passages. **Ask** uses retrieved evidence to answer a question.
 
-## Your data and privacy
+| Mode | What it does |
+| --- | --- |
+| **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed. |
+| **Hybrid Search** | Combines keyword matches with semantic retrieval to find related ideas across wording and languages. Enable it in Preferences and configure an embedding provider. |
+| **Ask** | Answers questions about the current, chosen or all meetings using retrieved excerpts and source citations. Requires configured Hybrid Search and a notes provider. |
 
-Recordings and meeting data are stored encrypted on your Mac. API keys are kept in the macOS Keychain. Each Mac has its own workspace; installing the app does not copy another person's recordings or credentials. Markdown exports are readable plaintext files outside that encrypted workspace.
+Try questions such as:
 
-When you record or rerun transcription, audio is sent to Deepgram. When you generate cloud notes, transcript text and speaker labels are sent to your configured notes provider. Provider charges apply to your account. Encryption on your Mac does not make cloud processing offline.
+- “What did we decide about the launch?”
+- “Which tasks did we leave open?”
+- “How does the proposed architecture work?”
 
-The default audio-retention period is **30 days**. Archive audio to keep it beyond that period. Transcripts and notes remain available after audio expires. See [audio retention and playback](docs/RETAINED_AUDIO.md) for details.
+Choose **Current meeting**, **Chosen meetings**, or **All meetings** to control the
+scope. Open a citation to inspect the source. Ask sends a bounded evidence packet,
+rather than falling back to uploading entire transcripts.
 
-Opening the app does not start recording or play audio. Recording a selected browser can include sound from its other tabs—get permission from everyone whose audio you capture.
+Embedding options include **Gemini** (default), **OpenAI**, **bundled local
+Granite**, **Ollama**, **LM Studio** and **Custom** endpoints. Local embeddings
+keep embedding processing on your device; a cloud notes provider still receives
+the evidence used to generate an Ask answer.
 
-## Pricing
+Search and Ask are under active quality validation. Missing evidence can lead to
+an unanswered question, and citations do not guarantee that every generated claim
+is correct. Review important conclusions against their sources.
 
-The planned **Local** price is **US$3 as a one-time purchase**, with no recurring Local-plan fee, when all transcription and notes models run on your device. The planned **Cloud** price is **US$5 per month**. Cloud usage allowances and whether provider costs are included or paid through your own API keys are still being defined.
+## Choose how your AI runs
 
-The Google sign-in/account foundation is implemented, with live sign-in awaiting account-service deployment. Checkout and paid-feature enforcement remain planned. The current internal app supports Deepgram cloud transcription and the local Ollama path. See [account setup](docs/GOOGLE_ACCOUNT_IMPLEMENTATION.md) and [pricing and model access](docs/PRICING_AND_MODEL_ACCESS.md).
+| Task | Options | When it runs |
+| --- | --- | --- |
+| Live cloud transcription | Deepgram or AssemblyAI | While recording |
+| Optional local transcription | Ollama | After recording ends |
+| Notes and optional transcript cleanup | OpenAI, Gemini, Ollama, LM Studio or a compatible custom service | During supported notes flows and after recording |
+| Semantic embeddings | Cloud provider, local server or bundled Granite | When Hybrid Search indexes or retrieves saved content |
 
-## Internal testing status
+Optional local transcription needs a compatible Ollama setup and model; it does
+not provide the cloud engines' live transcript experience. See
+[local transcription](docs/LOCAL_TRANSCRIPTION.md).
 
-ScribeLoop is an internal preview. Transcription, speaker labels, and generated notes can contain errors. Call detection and automatic stopping depend on the meeting app and available macOS activity information; manual recording and Stop remain available.
+Customize notes instructions, vocabulary, microphone gain and noise filtering in
+Preferences. Retained audio can be transcribed again through a batch route.
+A cloud rerun uploads audio again and can incur another provider charge; stopping
+a live recording does not automatically trigger a full-audio second pass.
 
-The installer targets macOS 13+, but testing on additional Macs and macOS versions is still needed. Account sync and workspace transfer are not included. Ad-hoc app updates can require recording permissions to be refreshed.
+## Your data, your choices
 
-To report a problem, include your app version, Mac model, macOS version, call app/audio source, exact error, and steps to reproduce. Do not include API keys, passwords, or private recordings in a bug report.
+- **Encrypted on your Mac.** Meeting data and retained audio use encrypted local
+  storage. Provider credentials use macOS Keychain.
+- **Cloud processing is explicit.** Cloud transcription sends audio to your chosen
+  ASR provider. Cloud notes/cleanup send transcript text; cloud Hybrid Search sends
+  index excerpts and queries. Provider charges and policies apply.
+- **You choose when to record.** First-use agreement does not enable silent recording.
+  Detected calls still offer Record / Not now. Get agreement from people you record.
+- **Keep audio when you need it.** Unarchived audio expires after **30 days**.
+  Archive it to retain it longer. Transcripts and notes remain after audio expires.
+- **Share deliberately.** Markdown exports and email attachments leave the encrypted
+  workspace. Review them before sharing.
 
-## More information
+Each Mac has its own workspace. Account sync and workspace transfer are not included.
+See [audio retention](docs/RETAINED_AUDIO.md) and
+[storage details](docs/SECURE_STORAGE.md).
 
-- [Installation and troubleshooting](packaging/macos/INTERNAL_INSTALL.txt)
-- [Internal distribution guide](docs/INTERNAL_MAC_DISTRIBUTION.md)
-- [Documentation and developer guides](docs/README.md)
-- [Architecture](ARCHITECTURE.md)
+## Requirements and preview limits
 
-License: Proprietary.
+| | |
+| --- | --- |
+| **Mac** | Apple Silicon, M1 or newer |
+| **Operating system** | macOS 13+; automatic detection needs macOS 14.2+ |
+| **Cloud AI** | Internet connection and your own provider credentials |
+| **Local AI** | Compatible local server/models where selected; bundled Granite needs no model server |
+| **Permissions** | Microphone; Screen Recording for app/system audio; Calendar only if enabled |
+
+Intel Macs and macOS 11–12 are not supported by the current installer.
+An [Ubuntu 22.04+ GTK preview](packaging/linux/README.md) is available separately;
+it does not yet have accepted macOS feature/capture parity.
+
+This is an internal preview, not a notarized public release. Transcription,
+speaker labels, notes and answers can contain errors. Call detection uses activity
+heuristics rather than official meeting APIs. Broader physical audio, device-change,
+OS compatibility and distribution validation remain open.
+
+## For developers
+
+The macOS app uses a SwiftUI/AppKit shell, native capture helpers and a bundled
+Python core. SQLCipher stores meeting state and search indexes; retained audio
+uses authenticated encryption. The web UI is a development/demo client.
+
+- [Architecture and major flow diagrams](ARCHITECTURE.md)
+- [Build and validate the macOS app](packaging/macos/DESKTOP.md)
+- [Documentation index](docs/README.md)
+- [Meeting workspace delivery plan](docs/MEETING_WORKSPACE_DELIVERY_PLAN.md)
+- [Search/Ask audit fixes and measured results](docs/SEARCH_ASK_AUDIT_REMEDIATION.md)
+- [Ubuntu preview](packaging/linux/README.md)
+
+## Feedback
+
+Please report your app version, Mac model, macOS version, audio source, exact error
+and steps to reproduce. Keep API keys, passwords and private recordings out of bug
+reports.
+
+**License:** Proprietary.

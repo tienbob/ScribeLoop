@@ -99,6 +99,7 @@ struct PreferencesSaveProgress {
     @Published var sessions: [Record] = []
     @Published var searchResults: [Record] = []
     @Published var searchIndex: Object = [:]
+    @Published var searchUsage: Object = [:]
     @Published var searchLoading = false
     private var searchRequest: String?
     @Published var askResult: Object = [:]
@@ -466,6 +467,7 @@ struct PreferencesSaveProgress {
             guard text(v["response_to"]) == searchRequest else { return }
             searchResults = objects(v["results"])
             searchIndex = v["index"] as? Object ?? [:]
+            searchUsage = v["usage"] as? Object ?? [:]
             searchLoading = false
         case "ask_history":
             guard text(v["response_to"]) == askHistoryRequest else { return }
@@ -626,7 +628,7 @@ struct PreferencesSaveProgress {
     func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
                 dateFrom:Int? = nil, dateTo:Int? = nil) {
         let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchLoading=false; return }
+        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchUsage=[:]; searchIndex=[:]; searchLoading=false; return }
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }
@@ -664,8 +666,9 @@ struct PreferencesSaveProgress {
             "evidence":["passages":row.raw["evidence"] as? [Object] ?? [],
                         "truncated":row.raw["truncated"] as? Bool ?? false],
             "provider":row.text("provider"),"model":row.text("model"),
-            "usage":["duration_ms":row.int("duration_ms"),"input_bytes":row.int("input_bytes"),
-                     "output_bytes":row.int("output_bytes"),"requests":1,"max_output_tokens":2000]]
+            "usage":(row.raw["usage"] as? Object).flatMap { $0.isEmpty ? nil : $0 } ??
+                ["duration_ms":row.int("duration_ms"),"input_bytes":row.int("input_bytes"),
+                 "output_bytes":row.int("output_bytes"),"requests":1,"max_output_tokens":2000]]
         askError=nil
     }
     func cancelAsk() { guard askLoading else { return }; send(["action":"cancel_ask"]) }

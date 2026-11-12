@@ -140,15 +140,9 @@ class SummaryProvider:
                 'configured':self.configured,'endpoint':self.base_url if self.configured else '',
                 'max_input_bytes':100_000}
 
-    async def generate(self, messages, *, schema=None, max_output_tokens=4000):
+    def request_body(self, messages, *, schema=None, max_output_tokens=4000):
         if type(max_output_tokens) is not int or not 1<=max_output_tokens<=4000:
             raise ValueError('Invalid output token limit')
-        if len(json.dumps(messages,ensure_ascii=True).encode())>100000:
-            raise ValueError('Summary request too large')
-        if not self.configured:
-            raise ValueError('Configure summary endpoint, model and key locally')
-        if self._request:
-            return await self._request(messages)
         body = ({'model':self.model,'input':messages,'max_output_tokens':max_output_tokens,'store':False}
                 if self.openai else {'model':self.model,'messages':messages,'max_tokens':max_output_tokens,'temperature':0.2})
         if self.base_url == 'https://generativelanguage.googleapis.com/v1beta/openai':
@@ -172,7 +166,23 @@ class SummaryProvider:
             # keep_alive bounds residency for large models; small models are
             # unloaded explicitly when their task finishes.
             body = ollama_request_body(messages,schema,model=self.model,max_output_tokens=max_output_tokens)
-        headers = {'Authorization':'Bearer '+self._api_key} if self._api_key else {}
+        return body
+
+    def request_bytes(self,messages,*,schema=None,max_output_tokens=4000):
+        return json.dumps(self.request_body(messages,schema=schema,max_output_tokens=max_output_tokens),
+                          ensure_ascii=False,separators=(',',':')).encode('utf-8')
+
+    async def generate(self, messages, *, schema=None, max_output_tokens=4000, authorize=None):
+        if authorize is not None: authorize()
+        encoded=self.request_bytes(messages,schema=schema,max_output_tokens=max_output_tokens)
+        if len(encoded)>100000:
+            raise ValueError('Summary request too large')
+        if not self.configured:
+            raise ValueError('Configure summary endpoint, model and key locally')
+        if self._request:
+            return await self._request(messages)
+        headers = {'Content-Type':'application/json'}
+        if self._api_key: headers['Authorization']='Bearer '+self._api_key
         async with httpx.AsyncClient(timeout=httpx.Timeout(120 if self.provider=='Ollama' else 60,connect=10),
                                      trust_env=False,follow_redirects=False) as client:
             if self.provider == 'Ollama':
@@ -184,8 +194,9 @@ class SummaryProvider:
                     raise ValueError('Choose a downloaded local text model for Ollama notes')
             target = (self.base_url.removesuffix('/v1')+'/api/chat' if self.provider=='Ollama'
                 else self.base_url+('/responses' if self.openai else '/chat/completions'))
+            if authorize is not None: authorize()
             async with client.stream('POST',target,
-                    headers=headers,json=body) as response:
+                    headers=headers,content=encoded) as response:
                 response.raise_for_status()
                 data = bytearray()
                 async for block in response.aiter_bytes():
