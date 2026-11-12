@@ -742,6 +742,13 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if app.state.settings_saving and action not in {'stop','stop_recording','revoke_agreement'}:
                                 raise ValueError('Wait for the settings save to finish')
                             desktop.receipt(dispatch_id,'dispatching')
+                            if action == 'delete_ask_history':
+                                if any(not task.done() for task in app.state.ask_tasks):
+                                    raise ValueError('Wait for Ask to finish before deleting history')
+                                response=desktop.delete_ask_history(store,command)
+                                await publish({**response,'response_to':dispatch_id})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
                             if action == 'ask_question':
                                 from ..llm.meeting_ask import AskScope, MeetingAsk
                                 from ..storage.search_work import (
@@ -1348,7 +1355,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1370,6 +1377,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     if action=='set_detection' else
                                     'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'
                                     if action=='search_meetings' else
+                                    'Chat deletion could not be confirmed. Reopen History before retrying; meeting data is unchanged.'
+                                    if action=='delete_ask_history' else
                                     'Ask could not prepare evidence. Check the question and meeting scope; your saved conversations are unchanged.'
                                     if action in {'ask_evidence','ask_history','ask_question','cancel_ask'} else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})

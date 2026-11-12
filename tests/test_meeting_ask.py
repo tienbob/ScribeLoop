@@ -211,6 +211,54 @@ async def test_thread_deleted_during_generation_cannot_be_recreated_by_inflight_
     assert store.conn.execute('SELECT count(*) FROM meeting_answers').fetchone()[0]==0
 
 
+@pytest.mark.asyncio
+async def test_delete_single_ask_chat_purges_turns_and_sources_but_preserves_meetings():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    calls=[]; service=MeetingAsk(store,chat_provider(calls))
+    first=await service.answer('When does the pilot start?',scope)
+    await service.answer('When is the pilot?',scope,previous_answer_id=first['answer_id'])
+    keep=await service.answer('Who owns the pilot?',scope)
+    before=store.conn.execute('SELECT count(*) FROM segments').fetchone()[0]
+    result=DesktopContract.delete_ask_history(store,{'action':'delete_ask_history',
+        'thread_id':first['thread_id'],'confirmed':True})
+    assert result['deleted_answers']==2 and not result['all']
+    assert store.conn.execute('SELECT count(*) FROM meeting_answers').fetchone()[0]==1
+    assert store.conn.execute('SELECT DISTINCT answer_id FROM meeting_answer_sources').fetchone()[0]==keep['answer_id']
+    assert store.get(sid) and store.conn.execute('SELECT count(*) FROM segments').fetchone()[0]==before
+    assert DesktopContract.delete_ask_history(store,{'action':'delete_ask_history',
+        'thread_id':first['thread_id'],'confirmed':True})['deleted_answers']==0
+    assert len(calls)==3
+
+
+@pytest.mark.asyncio
+async def test_clear_all_ask_history_without_provider_or_hybrid_or_agreement():
+    store=SessionStore(migrate(connect(':memory:')))
+    sid=meeting(store,'Launch','The pilot starts Thursday')
+    scope=AskScope.resolve(store,'current',current_id=sid)
+    service=MeetingAsk(store,None)
+    await service.answer('unfindablezebra',scope)
+    await service.answer('unfindablegiraffe',scope)
+    result=DesktopContract.delete_ask_history(store,{'action':'delete_ask_history','all':True,'confirmed':True})
+    assert result['all'] and result['deleted_answers']==2
+    assert store.conn.execute('SELECT count(*) FROM meeting_answers').fetchone()[0]==0
+    assert store.conn.execute('SELECT count(*) FROM meeting_answer_sources').fetchone()[0]==0
+    assert store.get(sid)
+
+
+@pytest.mark.parametrize('payload',[
+    {'thread_id':'a'*32}, {'all':True}, {'all':True,'confirmed':False},
+    {'all':1,'confirmed':True}, {'confirmed':True}, {'thread_id':None,'confirmed':True},
+    {'thread_id':'invalid','confirmed':True}, {'all':True,'thread_id':'a'*32,'confirmed':True},
+    {'all':True,'confirmed':True,'extra':True},
+])
+def test_delete_history_rejects_ambiguous_or_unconfirmed_requests(payload):
+    store=SessionStore(migrate(connect(':memory:')))
+    with pytest.raises(ValueError):
+        DesktopContract.delete_ask_history(store,{'action':'delete_ask_history',**payload})
+
+
 class Vault:
     value=None
     def get_password(self,_service,_account):
