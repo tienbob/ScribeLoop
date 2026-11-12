@@ -8,6 +8,7 @@ from collections import OrderedDict
 from uuid import uuid4
 
 from ..llm.rolling import RollingNotes
+from ..storage.search_work import SearchWork
 
 PROTOCOL = 2
 ID = re.compile(r'^[0-9a-f]{32}$')
@@ -151,7 +152,8 @@ class DesktopContract:
                 raise ValueError('Search is available after setup and while recording is idle')
             from ..storage.search import MeetingSearch
             result=await MeetingSearch(app.state.store,
-                embedding_config=self.settings.value.embedding()).query_async(command.get('query'),
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).query_async(command.get('query'),
                 limit=command.get('limit',50),offset=command.get('offset',0),
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))
@@ -177,7 +179,8 @@ class DesktopContract:
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
             result=await MeetingEvidence(app.state.store,
-                embedding_config=self.settings.value.embedding()).retrieve(command.get('question'),scope)
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).retrieve(command.get('question'),scope)
             return {'type':'ask_evidence',**result}
         if action == 'ask_history':
             allowed={'action','scope','current_id','selected_ids','limit'}
@@ -197,7 +200,8 @@ class DesktopContract:
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
             result=await MeetingAsk(app.state.store,summary_provider,
-                embedding_config=self.settings.value.embedding()).history(
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).history(
                 scope,limit=command.get('limit',50))
             return {'type':'ask_history','scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
                     'answers':result}

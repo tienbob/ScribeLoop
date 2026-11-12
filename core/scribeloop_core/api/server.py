@@ -744,6 +744,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             desktop.receipt(dispatch_id,'dispatching')
                             if action == 'ask_question':
                                 from ..llm.meeting_ask import AskScope, MeetingAsk
+                                from ..storage.search_work import (
+                                    SearchAuthorizationError,
+                                    SearchWork,
+                                )
                                 desktop.settings.value.require_hybrid_for_ask()
                                 ask_embedding_config=desktop.settings.value.embedding()
                                 allowed={'action','question','scope','current_id','selected_ids','previous_answer_id'}
@@ -765,19 +769,23 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 if previous_answer_id is not None and not valid_id(previous_answer_id):
                                     raise ValueError('Invalid prior Ask answer')
                                 ask_provider=summary_provider
+                                ask_work=SearchWork(authorize=store.search_authorization())
                                 async def run_ask(request_id=dispatch_id,question=question,scope=scope,
                                                   ask_provider=ask_provider,previous_answer_id=previous_answer_id,
-                                                  ask_embedding_config=ask_embedding_config):
+                                                  ask_embedding_config=ask_embedding_config,ask_work=ask_work):
                                     try:
                                         await publish({'type':'ask_started','request_id':request_id,
                                             'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}})
                                         result=await MeetingAsk(store,ask_provider,
-                                            embedding_config=ask_embedding_config).answer(
+                                            embedding_config=ask_embedding_config,work=ask_work).answer(
                                             question,scope,previous_answer_id=previous_answer_id)
+                                        ask_work.check()
                                         await publish({'type':'ask_answer','request_id':request_id,**result})
                                     except asyncio.CancelledError:
                                         await publish({'type':'ask_cancelled','request_id':request_id})
                                         raise
+                                    except SearchAuthorizationError:
+                                        await publish({'type':'ask_cancelled','request_id':request_id})
                                     except Exception as error:  # noqa: BLE001 - sanitize provider bodies and keys
                                         from ..llm.meeting_ask import ask_failure
                                         failure=ask_failure(error)
@@ -1031,6 +1039,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if set(command) != {'action'}:
                                 raise ValueError('Invalid agreement')
                             state = store.revoke_agreement()
+                            for pending_ask in list(app.state.ask_tasks):
+                                pending_ask.cancel()
                             recorder = app.state.recording
                             if recorder:
                                 if recorder.active_id:

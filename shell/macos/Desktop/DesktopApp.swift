@@ -464,7 +464,7 @@ struct Notebook: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment:.leading,spacing:14) {
-                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn) }
+                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn).id(turn.id) }
                         ForEach(core.partials.keys.sorted(),id:\.self) { stream in
                             if let value = core.partials[stream], !value.isEmpty { Text("Recognizing speaker… · \(value)").italic().foregroundStyle(.secondary)
                                 .frame(maxWidth:.infinity,alignment:["application","system"].contains(core.transcriptCaptureScope) && stream == "mic" ? .trailing : .leading) }
@@ -475,11 +475,8 @@ struct Notebook: View {
                         .background(TranscriptScrollTracking(following:core.transcriptFollow.following,
                             onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
                 }
-                .onChange(of:core.pageSerial) { _ in
-                    if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) }
-                    else if core.pageScrollToLatest { proxy.scrollTo("transcript-bottom",anchor:.bottom) }
-                    else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) }
-                }
+                .onChange(of:core.pageSerial) { _ in scrollTranscript(proxy) }
+                .onAppear { scrollTranscript(proxy) }
             }
             .overlay(alignment:.bottomTrailing) {
                 if !core.transcriptFollow.following {
@@ -497,6 +494,18 @@ struct Notebook: View {
             }
             .animation(.easeOut(duration:0.15),value:core.transcriptFollow)
         }
+    }
+    private func scrollTranscript(_ proxy:ScrollViewProxy) {
+        if let citation=core.citationID,
+           let turn=core.transcriptTurns.first(where:{$0.rows.contains(where:{$0.id==citation})}) {
+            // Lazy rows expose the outer turn before their nested segment anchors.
+            proxy.scrollTo(turn.id,anchor:.center)
+            DispatchQueue.main.async {
+                guard core.citationID==citation else { return }
+                proxy.scrollTo(citation,anchor:.center)
+            }
+        } else if core.pageScrollToLatest { proxy.scrollTo("transcript-bottom",anchor:.bottom) }
+        else if let first=core.transcriptTurns.first { proxy.scrollTo(first.id,anchor:.top) }
     }
     private var notes: some View {
         ScrollView {
@@ -598,6 +607,7 @@ struct MeetingSearchView: View {
     private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
 
     private func runSearch() {
+        guard !core.searchLoading else { return }
         let now=Int(Date().timeIntervalSince1970*1000)
         let from=dateRange == 0 ? nil : now-dateRange*86_400_000
         core.search(query,meetingID:meetingID.isEmpty ? nil : meetingID,
@@ -700,6 +710,7 @@ struct MeetingSearchView: View {
                 if let semantic=core.searchIndex["semantic"] as? Object, !text(semantic["message"]).isEmpty {
                     Text(text(semantic["message"])).font(.caption).foregroundStyle(ScribeTheme.warning).padding(.horizontal,20).padding(.bottom,10)
                 }
+                if !core.searchUsage.isEmpty { RetrievalUsage(usage:core.searchUsage).padding(.horizontal,20).padding(.bottom,10) }
             }
         }.background(ScribeTheme.canvas)
         .onAppear { core.send(["action":"people_page"]) }
@@ -802,6 +813,9 @@ struct MeetingAskView: View {
                                 }.font(.caption)
                             }.notebookCard()
                         }
+                        if answer["insufficient_evidence"] as? Bool != true && !text(answer["caveat"]).isEmpty {
+                            Label(text(answer["caveat"]),systemImage:"info.circle").font(.caption).foregroundStyle(.secondary)
+                        }
                         if (core.askResult["evidence"] as? Object)?["truncated"] as? Bool == true {
                             Label("Evidence was limited to 20 passages / 48 KB. This is not an exhaustive search.",systemImage:"info.circle")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -816,10 +830,7 @@ struct MeetingAskView: View {
                                     .font(.caption).foregroundStyle(ScribeTheme.warning)
                             }
                         }
-                        if let usage=core.askResult["usage"] as? Object {
-                            Text("1 provider request · \(((usage["duration_ms"] as? NSNumber)?.intValue ?? 0)) ms · \(((usage["input_bytes"] as? NSNumber)?.intValue ?? 0)/1024) KB sent")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        if let usage=core.askResult["usage"] as? Object { RetrievalUsage(usage:usage) }
                         DisclosureGroup("Evidence · \(evidence.count) passages") {
                             ForEach(evidence) { source in
                                 Button { open(source) } label: {
@@ -899,6 +910,24 @@ struct MeetingAskView: View {
                 guard choices != selected else { return }
                 selected=choices; previousAnswerID=nil; core.askResult=[:]; core.askError=nil; refreshHistory()
             }
+        }
+    }
+}
+
+struct RetrievalUsage:View {
+    let usage:Object
+    private func value(_ key:String)->Int { (usage[key] as? NSNumber)?.intValue ?? 0 }
+    var body:some View {
+        if usage["total_duration_ms"] != nil {
+            DisclosureGroup("\(value("total_requests")) model calls · \(value("total_duration_ms")) ms total") {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("Retrieval \(value("retrieval_ms")) ms, including indexing \(value("indexing_ms")) ms · Answer \(value("answer_ms")) ms")
+                    Text("\(value("embedding_requests")) embedding calls · \(value("answer_requests")) answer calls · \((value("embedding_input_bytes")+value("answer_input_bytes"))/1024) KB input processed")
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Answer generation: \(value("duration_ms")) ms · Earlier retrieval metrics unavailable")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

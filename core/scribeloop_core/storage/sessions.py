@@ -53,6 +53,7 @@ class SessionStore:
         self.conn = conn
         self.memory_cache = memory_cache if memory_cache is not None else MemoryCache()
         self._cloud_usage_cache = {}
+        self._consent_epoch = 0
 
     AGREEMENT_VERSION = '2026-10-26-v3'
 
@@ -76,7 +77,18 @@ class SessionStore:
         with self.conn:
             self.conn.execute('UPDATE app_agreement SET revoked_at=? WHERE version=?',
                               (self._now(),self.AGREEMENT_VERSION))
+        self._consent_epoch += 1
         return self.agreement()
+
+    def search_authorization(self):
+        """A revoked request cannot regain authority when the user agrees again."""
+        from .search_work import SearchAuthorizationError
+        epoch=self._consent_epoch
+        def check():
+            if epoch != self._consent_epoch or not self.agreement()['accepted']:
+                raise SearchAuthorizationError('Search authorization was revoked; submit a new request')
+        check()
+        return check
 
     def recover(self):
         with self.conn:

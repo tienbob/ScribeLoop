@@ -88,12 +88,12 @@ class SqliteVecIndex:
             self._add(session_id, chunk_start_ms, chunk_end_ms, segment_ids, chunk_text, vector)
 
     def _add(self, session_id: str, chunk_start_ms: int, chunk_end_ms: int,
-             segment_ids: list[str], chunk_text: str, vector: bytes) -> None:
+             segment_ids: list[str], chunk_text: str, vector: bytes, *, source_spans=None) -> None:
         cur = self._conn.execute(
             "INSERT INTO embeddings_chunks("
             " id, session_id, chunk_start_ms, chunk_end_ms,"
-            " segment_ids, chunk_text, model_name, vec, generation)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " segment_ids, chunk_text, model_name, vec, generation, source_spans)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 str(uuid4()),
                 session_id,
@@ -104,6 +104,7 @@ class SqliteVecIndex:
                 "sqlite-vec-v0.1.9",  # PINNED version (§10)
                 vector,
                 self.generation,
+                json.dumps(source_spans or []),
             ),
         )
         self._conn.execute(
@@ -111,7 +112,8 @@ class SqliteVecIndex:
             (cur.lastrowid, vector),
         )
 
-    def search(self, vector: bytes, k: int = 8, *, session_ids: list[str] | tuple[str,...] | None = None) -> list[dict]:
+    def search(self, vector: bytes, k: int = 8, *, session_ids: list[str] | tuple[str,...] | None = None,
+               person_id=None, date_from=None, date_to=None) -> list[dict]:
         """KNN search: returns top-k chunks joined with their metadata.
 
         Use vec0's explicit k constraint: Ubuntu 22.04's SQLite cannot pass
@@ -121,15 +123,30 @@ class SqliteVecIndex:
         if session_ids is not None and (not session_ids or len(session_ids)>100 or
                 any(not isinstance(value,str) for value in session_ids)):
             raise ValueError('Invalid vector meeting scope')
-        if session_ids is not None:
+        if session_ids is not None or person_id or date_from is not None or date_to is not None:
             # Exact distance over scoped metadata avoids global top-k starvation.
             # Vectors remain inside the encrypted database; no outside rows can
             # consume the selected meetings' candidate budget.
+            constraints=['m.generation=?']; args=[vector,self.generation]
+            if session_ids is not None:
+                constraints.append('m.session_id IN ('+','.join('?' for _ in session_ids)+')')
+                args.extend(session_ids)
+            if date_from is not None:
+                constraints.append('EXISTS (SELECT 1 FROM sessions s WHERE s.id=m.session_id AND s.started_at>=?)')
+                args.append(date_from)
+            if date_to is not None:
+                constraints.append('EXISTS (SELECT 1 FROM sessions s WHERE s.id=m.session_id AND s.started_at<?)')
+                args.append(date_to)
+            if person_id:
+                constraints.append('EXISTS (SELECT 1 FROM search_documents d WHERE d.id IN '
+                    '(SELECT value FROM json_each(m.segment_ids)) AND (d.speaker_id=? OR EXISTS '
+                    '(SELECT 1 FROM person_links pl WHERE pl.session_id=d.session_id AND pl.revision=d.revision AND pl.person_id=?)))')
+                args.extend((person_id,person_id))
+            args.append(k)
             rows=self._conn.execute(
                 'SELECT m.id,m.session_id,m.chunk_start_ms,m.chunk_end_ms,m.segment_ids,m.chunk_text,'
-                'vec_distance_L2(m.vec,?) AS distance FROM embeddings_chunks m '
-                'WHERE m.generation=? AND m.session_id IN ('+','.join('?' for _ in session_ids)+') '
-                'ORDER BY distance,m.id LIMIT ?', (vector,self.generation,*session_ids,k)).fetchall()
+                'vec_distance_L2(m.vec,?) AS distance,m.source_spans FROM embeddings_chunks m WHERE '+
+                ' AND '.join(constraints)+' ORDER BY distance,m.session_id,m.chunk_start_ms,m.rowid LIMIT ?',args).fetchall()
             return self._hits(rows)
         fetch_k=min(k,2000)
         scope=''
@@ -140,7 +157,7 @@ class SqliteVecIndex:
         args.append(k)
         rows = self._conn.execute(
             "SELECT m.id, m.session_id, m.chunk_start_ms, m.chunk_end_ms,"
-            " m.segment_ids, m.chunk_text, v.distance"
+            " m.segment_ids, m.chunk_text, v.distance,m.source_spans"
             " FROM ("
             f"   SELECT id, distance FROM {self._table}"
             "  WHERE vec MATCH ? AND k = ? ORDER BY distance"
@@ -162,6 +179,7 @@ class SqliteVecIndex:
                 "segment_ids": json.loads(r[4]),
                 "chunk_text": r[5],
                 "distance": r[6],
+                "source_spans": json.loads(r[7]),
             }
             for r in rows
         ]

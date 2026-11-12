@@ -15,9 +15,20 @@ import unicodedata
 
 from .db import DATABASE_ERRORS
 from .embeddings import CompatibleEmbeddingProvider, GeminiEmbeddingProvider, LocalEmbeddingProvider
+from .search_work import SearchAuthorizationError, SearchWork
 from .vectors import SqliteVecIndex
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
+QUERY_STOPWORDS = {'a','an','and','are','about','did','do','does','for','from','how','i','in','is','it',
+    'of','on','our','the','to','was','we','were','what','when','where','which','who','why','with','you',
+    'ai','cái','có','đã','được','gì','khi','là','mà','nào','những','ở','ta','thế','và','về',
+    'thì','để','này','đó','các','một','như','hay','không','cho'}
+
+
+def retrieval_query(value):
+    terms=[term for term in re.findall(r'[\wÀ-ỹ]+',value.casefold())
+           if len(term)>1 and term not in QUERY_STOPWORDS]
+    return ' '.join(dict.fromkeys(terms)) or value.strip()
 
 
 def _fold(value: str) -> str:
@@ -35,7 +46,7 @@ def _summary_text(value) -> str:
                 visit(item)
         elif isinstance(node, dict):
             for key, item in node.items():
-                if key not in {'id', 'citation_ids', 'citations', 'source_ids'} and not key.endswith('_id'):
+                if key not in {'id', 'citation_ids', 'citations', 'source_ids', 'segment_ids'} and not key.endswith('_id'):
                     visit(item)
     visit(value)
     return '\n'.join(dict.fromkeys(part.strip() for part in parts if part.strip()))
@@ -44,13 +55,15 @@ def _summary_text(value) -> str:
 class MeetingSearch:
     """Synchronize selected revisions and run bounded local queries."""
 
-    def __init__(self, store, *, embedding_config=None, embedder=None, include_titles=True):
+    def __init__(self, store, *, embedding_config=None, embedder=None, include_titles=True, work=None):
         self.store = store
         self.conn = store.conn
         self.fts = self._ensure_fts()
         self.embedding_config=embedding_config
         self.embedder=embedder
         self.include_titles=include_titles
+        self._owns_work=work is None
+        self.work=work or SearchWork()
         if embedding_config is not None and embedder is None:
             try:
                 self.embedder=(LocalEmbeddingProvider(embedding_config) if embedding_config.provider == 'Local' else
@@ -149,10 +162,12 @@ class MeetingSearch:
                 'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM search_index_state').fetchone()[0],
                 'engine':'fts5' if self.fts else 'basic'}
 
-    async def sync_async(self):
+    async def sync_async(self, scope=None):
         """Reconcile on the owning DB thread while yielding between meetings."""
         changed=[]
-        for index,row in enumerate(self.conn.execute('SELECT id FROM sessions ORDER BY started_at DESC,id DESC')):
+        where=(' WHERE id IN ('+','.join('?' for _ in scope)+')') if scope is not None else ''
+        for index,row in enumerate(self.conn.execute('SELECT id FROM sessions'+where+' ORDER BY started_at DESC,id DESC',scope or ())):
+            self.work.check()
             fingerprint=self._fingerprint(row['id'])
             known=self.conn.execute('SELECT fingerprint FROM search_index_state WHERE session_id=?',(row['id'],)).fetchone()
             if not known or known['fingerprint'] != fingerprint:
@@ -160,8 +175,10 @@ class MeetingSearch:
             if index % 25 == 24:
                 await asyncio.sleep(0)
         for session_id,fingerprint in changed:
+            self.work.check()
             self._sync_session(session_id,fingerprint)
             await asyncio.sleep(0)
+        self.work.check()
         return {'complete':True,'pending':0,
                 'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM search_index_state').fetchone()[0],
                 'engine':'fts5' if self.fts else 'basic'}
@@ -189,38 +206,44 @@ class MeetingSearch:
     async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
                           meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True,
                           semantic_query=None):
+        if self._owns_work: self.work=SearchWork()
         self._validate_query(query,limit,offset)
         if semantic_query is not None and (not isinstance(semantic_query,str) or not 1<=len(semantic_query)<=500):
             raise ValueError('Invalid semantic question')
-        status=await self.sync_async()
+        self.work.check()
+        scope=[meeting_id] if meeting_id else meeting_ids
+        if scope is not None and (not scope or len(scope)>100 or any(not isinstance(s,str) for s in scope)):
+            raise ValueError('Invalid meeting scope')
+        started=time.monotonic()
+        status=await self.sync_async(scope)
+        self.work.indexing_ms += round((time.monotonic()-started)*1000)
         hybrid=self.embedding_config is not None
-        lexical=self._query(query,status,limit=100 if hybrid else limit,offset=0 if hybrid else offset,meeting_id=meeting_id,
+        lexical=self._query(retrieval_query(query) if hybrid else query,status,limit=100 if hybrid else limit,offset=0 if hybrid else offset,meeting_id=meeting_id,
                            meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
-                           match_all=match_all)
-        return await self._hybrid(semantic_query or query,lexical,limit=limit,offset=offset,meeting_id=meeting_id,
+                           match_all=False if hybrid else match_all)
+        result=await self._hybrid(semantic_query or query,lexical,limit=limit,offset=offset,meeting_id=meeting_id,
                                   meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to)
+        self.work.check()
+        self.work.retrieval_ms=round((time.monotonic()-started)*1000)
+        result['usage']=self.work.public()
+        return result
 
     def _semantic_chunks(self,session_id):
         rows=list(self.conn.execute("SELECT * FROM search_documents WHERE session_id=? AND source_type IN ('transcript','summary') "
                                     "ORDER BY CASE source_type WHEN 'summary' THEN 0 ELSE 1 END,start_ms,rowid",(session_id,)))
-        chunks=[]; current=[]; size=0
+        chunks=[]
         for row in rows:
-            text=row['content'].strip()
-            if current and (row['source_type'] != current[-1]['source_type'] or size+len(text)>1200):
-                chunks.append(current); current=[]; size=0
-            if len(text)>1200:
-                if current:
-                    chunks.append(current); current=[]; size=0
-                for start in range(0,len(text),1000):
-                    part=dict(row); part['content']=text[start:start+1200]
-                    chunks.append([part])
-                continue
-            current.append(row); size+=len(text)+1
-        if current: chunks.append(current)
-        return [{'start_ms':next((r['start_ms'] for r in group if r['start_ms'] is not None),0),
-                 'end_ms':next((r['end_ms'] for r in reversed(group) if r['end_ms'] is not None),0),
-                 'segment_ids':[r['id'] for r in group],
-                 'text':'\n'.join(r['content'] for r in group)} for group in chunks]
+            text=row['content']
+            # Rank each source independently. Adjacent boilerplate must not inherit
+            # another segment's similarity or consume its evidence rank.
+            for start in range(0,len(text),1000):
+                end=min(len(text),start+1200)
+                if not text[start:end].strip(): continue
+                chunks.append({'start_ms':row['start_ms'] or 0,'end_ms':row['end_ms'] or 0,
+                    'segment_ids':[row['id']], 'text':text[start:end],
+                    'source_spans':[{'document_id':row['id'],'start':start,'end':end}]})
+                if end==len(text): break
+        return chunks
 
     async def _sync_semantic(self,scope=None):
         config=self.embedding_config
@@ -238,11 +261,15 @@ class MeetingSearch:
             if not known or known['fingerprint'] != row['fingerprint']:
                 changed.append((row['session_id'],row['fingerprint']))
         for session_id,fingerprint in changed:
+            self.work.check()
             chunks=self._semantic_chunks(session_id)
             vectors=[]
             for start in range(0,len(chunks),16):
-                vectors.extend(await self.embedder.embed([chunk['text'] for chunk in chunks[start:start+16]]))
+                if self.work.embedding_requests>=128:
+                    raise ValueError('Indexing budget reached; submit again to continue saved indexing')
+                vectors.extend(await self.work.embed(self.embedder,[chunk['text'] for chunk in chunks[start:start+16]]))
                 await asyncio.sleep(0)
+            self.work.check()
             if self._fingerprint(session_id) != fingerprint:
                 raise ValueError('Meeting changed while semantic search was indexing; search again')
             if len(vectors)!=len(chunks):
@@ -256,7 +283,8 @@ class MeetingSearch:
                 self.conn.execute('DELETE FROM embeddings_chunks WHERE session_id=? AND generation=?',
                                   (session_id,config.generation))
                 for chunk,vector in zip(chunks,vectors,strict=True):
-                    index._add(session_id,chunk['start_ms'],chunk['end_ms'],chunk['segment_ids'],chunk['text'],vector)
+                    index._add(session_id,chunk['start_ms'],chunk['end_ms'],chunk['segment_ids'],chunk['text'],vector,
+                               source_spans=chunk['source_spans'])
                 self.conn.execute('INSERT INTO embedding_index_state(session_id,generation,fingerprint,indexed_at,chunk_count) '
                     'VALUES (?,?,?,?,?) ON CONFLICT(session_id,generation) DO UPDATE SET '
                     'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,chunk_count=excluded.chunk_count',
@@ -274,17 +302,23 @@ class MeetingSearch:
             return lexical
         scope=[meeting_id] if meeting_id else meeting_ids
         try:
+            started=time.monotonic()
             semantic=await self._sync_semantic(scope)
+        except SearchAuthorizationError:
+            raise
         except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; disclose keyword-only results
             semantic={'enabled':False,'status':'embedding_error','message':'Semantic indexing failed. Check the embedding provider and vector dimensions; submit again to retry.'}
+        finally:
+            self.work.indexing_ms += round((time.monotonic()-started)*1000)
         lexical['index']['semantic']=semantic
         if not semantic['enabled']:
             lexical['results']=lexical['results'][offset:offset+limit]
             lexical['retrieval_mode']='keyword'
             return lexical
         try:
-            embed_query=getattr(self.embedder,'embed_query',self.embedder.embed)
-            query_vector=(await embed_query([query.strip()]))[0]
+            query_vector=(await self.work.embed(self.embedder,[query.strip()],query=True))[0]
+        except SearchAuthorizationError:
+            raise
         except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; no automatic retry
             semantic.update(enabled=False,status='embedding_error',message='Semantic query failed. Check the embedding provider and submit again to retry.')
             lexical['results']=lexical['results'][offset:offset+limit]
@@ -296,11 +330,14 @@ class MeetingSearch:
                 raise ValueError('Meeting changed during semantic search; submit again')
         index=SqliteVecIndex(self.conn,dim=self.embedding_config.dimensions,
                              generation=self.embedding_config.generation)
-        chunks=index.search(query_vector,k=min(100,max(20,limit*4)),session_ids=scope)
-        semantic_ids=[]
-        for chunk in chunks:
-            semantic_ids.extend(chunk['segment_ids'])
-        semantic_ids=list(dict.fromkeys(semantic_ids))
+        chunks=index.search(query_vector,k=min(100,max(20,limit*4)),session_ids=scope,
+                            person_id=person_id,date_from=date_from,date_to=date_to)
+        best={}
+        for rank,chunk in enumerate(chunks,1):
+            for span in chunk['source_spans']:
+                if span['document_id'] not in best:
+                    best[span['document_id']]={**span,'rank':rank,'distance':chunk['distance']}
+        semantic_ids=list(best)
         if semantic_ids:
             placeholders=','.join('?' for _ in semantic_ids)
             constraints=[]; args=list(semantic_ids)
@@ -313,17 +350,21 @@ class MeetingSearch:
             by_id={row['id']:row for row in rows}
         else: by_id={}
         lexical_rank={row['id']:rank for rank,row in enumerate(lexical['results'],1)}
-        semantic_rank={identity:rank for rank,identity in enumerate(semantic_ids,1) if identity in by_id}
+        semantic_rank={identity:best[identity]['rank'] for identity in semantic_ids if identity in by_id}
         identities=set(lexical_rank)|set(semantic_rank)
-        scores={identity:(1/(60+lexical_rank[identity]) if identity in lexical_rank else 0)+
-                         (1/(60+semantic_rank[identity]) if identity in semantic_rank else 0) for identity in identities}
+        scores={identity:(.2/(60+lexical_rank[identity]) if identity in lexical_rank else 0)+
+                         (.8/(20+semantic_rank[identity]) if identity in semantic_rank else 0) for identity in identities}
         lexical_rows={row['id']:row for row in lexical['results']}
         results=[]
         for identity in sorted(identities,key=lambda value:(-scores[value],value))[offset:offset+limit]:
             if identity in lexical_rows: item=dict(lexical_rows[identity])
             else:
-                item=dict(by_id[identity]); content=item.pop('content')
-                item['snippet']=content[:360]+('…' if len(content)>360 else '')
+                item=dict(by_id[identity]); item.pop('content')
+            if identity in best:
+                span=best[identity]; content=by_id[identity]['content']
+                item['excerpt_start']=span['start']; item['excerpt_end']=span['end']
+                excerpt=content[span['start']:span['end']]
+                item['snippet']=excerpt[:360]+('…' if len(excerpt)>360 else '')
             item['hybrid_score']=scores[identity]; results.append(item)
         lexical['results']=results; lexical['retrieval_mode']='hybrid'
         lexical['next_offset']=offset+limit if len(identities)>offset+limit else None
