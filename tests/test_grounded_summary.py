@@ -11,6 +11,7 @@ from scribeloop_core.llm.grounded import (
     validate_summary,
 )
 from scribeloop_core.llm.summary_provider import SummaryProvider, summary_settings
+from scribeloop_core.speakers.registry import SpeakerRegistry
 from scribeloop_core.storage.db import connect, migrate
 from scribeloop_core.storage.sessions import SessionStore
 
@@ -111,18 +112,96 @@ def test_ollama_json_schema_limits_citations_to_original_ids(payload):
         assert field['minItems']==1
 
 
-def test_corrections_invalidate_and_stale_requests_cannot_replace(saved):
+def test_rename_keeps_notes_current_but_strict_requests_and_text_edits_invalidate(saved):
     store,sid,row,_ = saved
     _rows,fingerprint,_ = store.summary_input(sid,1)
     store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
     store.correct_speaker(sid,1,row['local_speaker_id'],label='Alex')
-    assert store.grounded_summary(sid)['stale']
+    assert not store.grounded_summary(sid)['stale']
     with pytest.raises(ValueError,match='changed'):
         store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    store.conn.execute('UPDATE segments SET text=? WHERE id=?',('Changed spoken content',row['id']))
+    store.conn.commit()
+    assert store.grounded_summary(sid)['stale']
     md = export_markdown(store.get(sid),store.segments(sid),store.revisions(sid),store.grounded_summary(sid))
     assert 'outdated' in md and '## Summary draft' not in md
     store.finish_delete(sid)
     assert not store.conn.execute('SELECT * FROM grounded_summaries').fetchall()
+
+
+@pytest.mark.parametrize('legacy',[False,True])
+@pytest.mark.parametrize('mode',['label','name','link'])
+def test_display_name_changes_preserve_saved_summary_and_reopen(saved,legacy,mode):
+    store,sid,row,path=saved
+    _,fingerprint,_=store.summary_input(sid,1)
+    original=store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    if legacy:
+        store.conn.execute('UPDATE grounded_summaries SET content_hash=NULL WHERE id=?',(original['id'],))
+        store.conn.commit()
+    if mode=='label':
+        store.correct_speaker(sid,1,row['local_speaker_id'],label='Minh')
+    elif mode=='name':
+        SpeakerRegistry(store).name_speaker(sid,1,row['local_speaker_id'],name='Minh')
+    else:
+        registry=SpeakerRegistry(store)
+        registry.link(sid,1,row['local_speaker_id'],registry.create('Minh'))
+    current=store.grounded_summary(sid)
+    assert not current['stale'] and current['content_hash']
+    assert current['summary']==original['summary'] and current['input_hash']==fingerprint
+    assert store.segments(sid)[0]['speaker_label']=='Minh'
+    reopened=migrate(connect(path))
+    try:
+        assert not SessionStore(reopened).grounded_summary(sid)['stale']
+    finally:
+        reopened.close()
+
+
+def test_speaker_merge_still_invalidates_summary(saved):
+    store,sid,row,_=saved
+    other=store.append(sid,{'text':'Another participant agrees.','start_ms':1000,'end_ms':2000,
+        'is_final':True,'speaker_key':f'deepgram:{"a"*32}:loopback:1'},stream=row['stream'])
+    _,fingerprint,_=store.summary_input(sid,1)
+    store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    store.correct_speaker(sid,1,other['local_speaker_id'],merge_target=row['local_speaker_id'])
+    assert store.grounded_summary(sid)['stale']
+
+
+def test_legacy_summary_already_stale_is_not_revived_by_rename(saved):
+    store,sid,row,_=saved
+    _,fingerprint,_=store.summary_input(sid,1)
+    store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    store.conn.execute('UPDATE grounded_summaries SET content_hash=NULL')
+    store.conn.execute('UPDATE segments SET text=? WHERE id=?',('Changed conversation',row['id']))
+    store.conn.commit()
+    SpeakerRegistry(store).name_speaker(sid,1,row['local_speaker_id'],name='Minh')
+    current=store.grounded_summary(sid)
+    assert current['stale'] and current['content_hash'] is None
+
+
+def test_v22_summary_migration_preserves_freshness_across_rename(saved):
+    store,sid,row,_=saved
+    _,fingerprint,_=store.summary_input(sid,1)
+    store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    store.conn.execute('ALTER TABLE grounded_summaries DROP COLUMN content_hash')
+    store.conn.execute('PRAGMA user_version=22'); store.conn.commit()
+    migrate(store.conn); migrate(store.conn)
+    assert not store.grounded_summary(sid)['stale']
+    SpeakerRegistry(store).name_speaker(sid,1,row['local_speaker_id'],name='Minh')
+    assert not store.grounded_summary(sid)['stale']
+
+
+def test_failed_legacy_name_edit_rolls_back_summary_baseline(saved,monkeypatch):
+    store,sid,row,_=saved
+    _,fingerprint,_=store.summary_input(sid,1)
+    store.save_grounded_summary(sid,1,fingerprint,summary(row),provider='test',model='chosen')
+    store.conn.execute('UPDATE grounded_summaries SET content_hash=NULL'); store.conn.commit()
+    def fail(_sid): raise RuntimeError('synthetic failure')
+    monkeypatch.setattr(store,'_write_transcript_notes',fail)
+    with pytest.raises(RuntimeError,match='synthetic'):
+        SpeakerRegistry(store).name_speaker(sid,1,row['local_speaker_id'],name='Minh')
+    assert not store.conn.execute('SELECT * FROM person_links').fetchall()
+    assert store.grounded_summary(sid)['content_hash'] is None
+    assert not store.grounded_summary(sid)['stale']
 
 
 def test_summary_provider_settings_are_literal_and_secret_free(tmp_path,monkeypatch):
