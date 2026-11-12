@@ -183,7 +183,7 @@ class DesktopContract:
                 work=SearchWork(authorize=app.state.store.search_authorization())).retrieve(command.get('question'),scope)
             return {'type':'ask_evidence',**result}
         if action == 'ask_history':
-            allowed={'action','scope','current_id','selected_ids','limit'}
+            allowed={'action','scope','current_id','selected_ids','limit','thread_id','threads_only'}
             if set(command)-allowed:
                 raise ValueError('Invalid Ask history request')
             selected=command.get('selected_ids')
@@ -199,12 +199,21 @@ class DesktopContract:
             self.settings.value.require_hybrid_for_ask()
             scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
                                    selected_ids=selected)
-            result=await MeetingAsk(app.state.store,summary_provider,
+            service=MeetingAsk(app.state.store,summary_provider,
                 embedding_config=self.settings.value.embedding(),
-                work=SearchWork(authorize=app.state.store.search_authorization())).history(
-                scope,limit=command.get('limit',50))
+                work=SearchWork(authorize=app.state.store.search_authorization()))
+            if type(command.get('threads_only',False)) is not bool:
+                raise ValueError('Invalid Ask thread list')
+            if command.get('thread_id') is not None:
+                if command.get('threads_only'):
+                    raise ValueError('Invalid Ask thread request')
+                result=await service.thread(scope,command['thread_id'])
+            elif command.get('threads_only'):
+                return {'type':'ask_history','threads':await service.threads(scope,limit=command.get('limit',50))}
+            else:
+                result=await service.history(scope,limit=command.get('limit',50))
             return {'type':'ask_history','scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
-                    'answers':result}
+                    'answers':result,'thread_id':command.get('thread_id')}
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
         if action in {'audio_info','audio_window'}:

@@ -205,14 +205,16 @@ class MeetingSearch:
 
     async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
                           meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True,
-                          semantic_query=None):
+                          semantic_query=None,scope_limit=100):
         if self._owns_work: self.work=SearchWork()
         self._validate_query(query,limit,offset)
         if semantic_query is not None and (not isinstance(semantic_query,str) or not 1<=len(semantic_query)<=500):
             raise ValueError('Invalid semantic question')
         self.work.check()
         scope=[meeting_id] if meeting_id else meeting_ids
-        if scope is not None and (not scope or len(scope)>100 or any(not isinstance(s,str) for s in scope)):
+        if type(scope_limit) is not int or not 1<=scope_limit<=10_000:
+            raise ValueError('Invalid scope limit')
+        if scope is not None and (not scope or len(scope)>scope_limit or any(not isinstance(s,str) for s in scope)):
             raise ValueError('Invalid meeting scope')
         started=time.monotonic()
         status=await self.sync_async(scope)
@@ -220,9 +222,9 @@ class MeetingSearch:
         hybrid=self.embedding_config is not None
         lexical=self._query(retrieval_query(query) if hybrid else query,status,limit=100 if hybrid else limit,offset=0 if hybrid else offset,meeting_id=meeting_id,
                            meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
-                           match_all=False if hybrid else match_all)
+                           match_all=False if hybrid else match_all,scope_limit=scope_limit)
         result=await self._hybrid(semantic_query or query,lexical,limit=limit,offset=offset,meeting_id=meeting_id,
-                                  meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to)
+                                  meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,scope_limit=scope_limit)
         self.work.check()
         self.work.retrieval_ms=round((time.monotonic()-started)*1000)
         result['usage']=self.work.public()
@@ -295,7 +297,7 @@ class MeetingSearch:
                 'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM embedding_index_state WHERE generation=?',
                                                      (config.generation,)).fetchone()[0]}
 
-    async def _hybrid(self,query,lexical,*,limit,offset,meeting_id,meeting_ids,person_id,date_from,date_to):
+    async def _hybrid(self,query,lexical,*,limit,offset,meeting_id,meeting_ids,person_id,date_from,date_to,scope_limit=100):
         if self.embedding_config is None:
             lexical['index']['semantic']={'enabled':False,'status':'keyword_only'}
             lexical['retrieval_mode']='keyword'
@@ -330,7 +332,7 @@ class MeetingSearch:
                 raise ValueError('Meeting changed during semantic search; submit again')
         index=SqliteVecIndex(self.conn,dim=self.embedding_config.dimensions,
                              generation=self.embedding_config.generation)
-        chunks=index.search(query_vector,k=min(100,max(20,limit*4)),session_ids=scope,
+        chunks=index.search(query_vector,k=min(100,max(20,limit*4)),session_ids=scope,scope_limit=scope_limit,
                             person_id=person_id,date_from=date_from,date_to=date_to)
         best={}
         for rank,chunk in enumerate(chunks,1):
@@ -378,7 +380,7 @@ class MeetingSearch:
             raise ValueError('Invalid search page')
 
     def _query(self, query, status, *, limit, offset, meeting_id, meeting_ids,
-               person_id, date_from, date_to, match_all):
+               person_id, date_from, date_to, match_all,scope_limit=100):
         where=[]; args=[]
         if not self.include_titles:
             where.append("d.source_type != 'title'")
@@ -388,7 +390,7 @@ class MeetingSearch:
             where.append('d.session_id=?'); args.append(meeting_id)
         if meeting_ids is not None:
             if (not isinstance(meeting_ids,(list,tuple)) or not meeting_ids or
-                    len(meeting_ids)>100 or any(not isinstance(value,str) for value in meeting_ids)):
+                    len(meeting_ids)>scope_limit or any(not isinstance(value,str) for value in meeting_ids)):
                 raise ValueError('Invalid meeting scope')
             values=tuple(dict.fromkeys(meeting_ids))
             where.append('d.session_id IN ('+','.join('?' for _ in values)+')')
