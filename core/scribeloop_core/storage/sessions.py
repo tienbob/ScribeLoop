@@ -756,6 +756,20 @@ class SessionStore:
     def begin_delete(self, session_id):
         self.transition(session_id, 'deleting')
 
+    def delete_ask_history(self, thread_id=None):
+        """Erase saved chats and their citations without changing meeting data."""
+        from .db import purge_checkpoint
+        if thread_id is not None and (not isinstance(thread_id,str) or
+                                     not re.fullmatch(r'[0-9a-f]{32}',thread_id)):
+            raise ValueError('Invalid Ask thread')
+        with self.conn:
+            if thread_id is None:
+                count=self.conn.execute('DELETE FROM meeting_answers').rowcount
+            else:
+                count=self.conn.execute('DELETE FROM meeting_answers WHERE thread_id=?',(thread_id,)).rowcount
+        purge_checkpoint(self.conn)
+        return count
+
     def finish_delete(self, session_id):
         """Delete dependent data in FK order; callers have already retired audio keys."""
         self.memory_cache.invalidate(session_id)
