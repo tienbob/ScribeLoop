@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from scribeloop_core.api.linux_state import LinuxState, summary_text
 
 
@@ -125,10 +124,12 @@ def test_history_refresh_keeps_selected_gtk_row_stable():
 
     class State:
         selected_id = 'first'
-        sessions = [
-            {'id':'first','title':'First','status':'completed','started_at':1},
-            {'id':'second','title':'Second','status':'completed','started_at':2},
-        ]
+
+        def __init__(self):
+            self.sessions = [
+                {'id':'first','title':'First','status':'completed','started_at':1},
+                {'id':'second','title':'Second','status':'completed','started_at':2},
+            ]
 
         def ordered_sessions(self):
             return self.sessions
@@ -299,7 +300,7 @@ def test_native_playback_start_failure_removes_plaintext(tmp_path, monkeypatch):
 
 
 def test_system_capture_status_discloses_output_scope():
-    from scribeloop_core.api.linux_native import recording_provider_missing, session_status_text
+    from scribeloop_core.api.linux_native import session_status_text
 
     system_session = {'title':'Call','status':'recording',
         'capture':{'scope':'system'}}
