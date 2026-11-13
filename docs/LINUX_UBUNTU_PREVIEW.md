@@ -1,5 +1,8 @@
 # Ubuntu desktop preview validation
 
+See the [Ubuntu desktop release plan](LINUX_UBUNTU_APP_PLAN.md) for the roadmap
+from this preview to a supported release.
+
 Implemented on `feat/ubuntu-22-desktop`. Install/build instructions and primary
 research sources are in [Linux packaging](../packaging/linux/README.md).
 
@@ -7,11 +10,12 @@ The preview uses a native GTK 3 shell with the same Notes / Transcript / Audio
 layout as the macOS shell. It reuses the same core, encrypted storage and local
 loopback backend. The first native pass covers conversation history, live
 transcript, notes, retained-audio playback, provider settings, the recording
-dialog and the first-use agreement. macOS-only shell integrations such as
-Calendar and Email sharing, per-application capture and automatic call detection
-are not included. GStreamer pulls explicit microphone and default-output-monitor
-sources through PulseAudio, including the protocol used by PipeWire's Pulse
-server.
+dialog and the first-use agreement. Calendar and Email sharing, per-application
+capture, and user-facing call suggestions are not included. An opt-in metadata
+observer checks known apps' PulseAudio/PipeWire-Pulse stream activity; it does
+not read audio, start recording, or provide reliable per-application capture.
+GStreamer pulls explicit microphone and default-output-monitor sources through
+PulseAudio, including the protocol used by PipeWire's Pulse server.
 
 Validation on 2026-10-30:
 
@@ -65,4 +69,3 @@ Validation for this integration:
   both its capture and desktop checks explicitly.
 - Packages were rebuilt for Ubuntu 22.04 and 24.04 on amd64 and arm64 after the
   native-shell command reconciliation. `SHA256SUMS` covers the four packages.
-

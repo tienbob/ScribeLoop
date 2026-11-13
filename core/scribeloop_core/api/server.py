@@ -478,7 +478,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             retention_task = None
             rolling_task = None
             try:
-                if desktop and not desktop.settings.value.detection_enabled:
+                if ((desktop and not desktop.settings.value.detection_enabled)
+                    or (not desktop and settings and not settings.value.detection_enabled)):
                     await app.state.discovery.set_enabled(False)
                 await app.state.discovery.start()
                 closing = False
@@ -986,6 +987,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             elif app.state.recording:
                                 app.state.recording.base_config = settings.cloud()
                                 app.state.recording.cloud = app.state.recording.base_config
+                            await app.state.discovery.set_enabled(settings.value.detection_enabled)
                             await publish({'type':'settings','settings':settings.value.public(),
                                 'summary_provider':summary_provider.public(),
                                 'transcription':app.state.recording.cloud.public()
@@ -1373,6 +1375,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     'Ask could not prepare evidence. Check the question and meeting scope; your saved conversations are unchanged.'
                                     if action in {'ask_evidence','ask_history','ask_question','cancel_ask'} else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
+                            continue
+                        if not desktop and action == 'save_settings':
+                            queue.put_nowait({'type':'error','context':'settings',
+                                'message':'Settings were not saved. Check the provider URL/model and Secret Service, then try again.'})
                             continue
                         meeting = (isinstance(action, str) and action
                                    in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person','check_ollama'})
