@@ -26,6 +26,7 @@ class DiscoveryService:
         freshness_s=5,
         confirmation_samples=2,
         startup_samples=3,
+        allow_application_capture=True,
     ):
         for value in (poll_s, freshness_s):
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
@@ -43,6 +44,7 @@ class DiscoveryService:
         self._freshness_s = freshness_s
         self._confirmation_samples = confirmation_samples
         self._startup_samples = startup_samples
+        self._allow_application_capture = allow_application_capture
         self._apps: tuple[AppIdentity, ...] = ()
         self._detector = MeetingDetector(
             (), confirmation_samples=confirmation_samples, startup_samples=startup_samples
@@ -182,7 +184,8 @@ class DiscoveryService:
                     "kind": candidate.kind,
                     "evidence": list(candidate.evidence),
                     "confidence": candidate.confidence,
-                    "selectable": available and self._fresh(candidate.last_seen),
+                    "selectable": (available and self._allow_application_capture
+                                   and self._fresh(candidate.last_seen)),
                 }
                 for candidate in self._detector.candidates
             ],
@@ -225,6 +228,8 @@ class DiscoveryService:
             if microphone_id != "default" and microphone is None:
                 raise ValueError("Microphone is not available")
             app = next((app for app in self._apps if app.app_id == app_id), None)
+            if scope == "application" and not self._allow_application_capture:
+                raise ValueError("Per-application capture is unavailable on this platform")
             if scope == "application" and app is None:
                 raise ValueError("App is not available")
             if scope in {"system", "microphone"} and (
