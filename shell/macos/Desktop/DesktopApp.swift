@@ -184,6 +184,7 @@ struct Notebook: View {
     @State private var calendarSettingsRequested = false
     @State private var showPeople = false
     @State private var showSearch = false
+    @State private var showAsk = false
     @State private var tab = "Notes"
     @State private var confirmed: String?
     @State private var renaming: Record?
@@ -205,6 +206,20 @@ struct Notebook: View {
                 Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                 Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
+                Button { showAsk = true } label: { Label("Ask",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
+                    .disabled(!core.accepted || !core.connected || core.busy || !core.askHybridEnabled || core.summaryProvider["configured"] as? Bool != true)
+                    .keyboardShortcut("k",modifiers:.command)
+                    .help(!core.askHybridEnabled ? "Enable Hybrid search in Settings → Models → Meeting search to use Ask" : core.summaryProvider["configured"] as? Bool == true ? "Ask questions about saved meetings" : "Set up a notes provider in Preferences to use Ask")
+                if !core.askHybridEnabled {
+                    VStack(alignment:.leading,spacing:5) {
+                        Text("Ask needs Hybrid search").font(.caption.weight(.medium))
+                        Text("Find meaning across languages, then get AI answers with sources.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Set up Hybrid search…") { preferencesRequest=SettingsDestination(id:"Models") }
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(ScribeTheme.accent)
+                            .disabled(!core.connected || core.busy || !core.accepted)
+                    }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,6)
+                }
                 HStack { Text("CONVERSATIONS").tracking(1.3); Spacer(); Text("\(core.sessions.count)").monospacedDigit() }.font(.system(size:10,weight:.semibold)).foregroundStyle(.secondary).padding(.top,12)
                 List(selection:$core.selectedID) {
                     ForEach(core.sessions) { row in
@@ -386,8 +401,16 @@ struct Notebook: View {
                 else if result.text("source_type") == "transcript" {
                     tab="Transcript"
                     core.loadPage(0,anchor:result.text("source_id"))
-                }
+                } else { tab="Transcript" }
             }.frame(width:760,height:620)
+        }
+        .sheet(isPresented:$showAsk) {
+            MeetingAskView(core:core) { citation in
+                showAsk=false
+                core.select(citation.text("meeting_id"))
+                if citation.text("source_type") == "summary" { tab="Notes" }
+                else { tab="Transcript"; core.loadPage(0,anchor:citation.text("source_id")) }
+            }.frame(width:820,height:700)
         }
         .sheet(item:$renaming) { row in RenameConversation(core:core,conversation:row) }
         .alert("Delete this conversation permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
@@ -441,7 +464,7 @@ struct Notebook: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment:.leading,spacing:14) {
-                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn) }
+                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn).id(turn.id) }
                         ForEach(core.partials.keys.sorted(),id:\.self) { stream in
                             if let value = core.partials[stream], !value.isEmpty { Text("Recognizing speaker… · \(value)").italic().foregroundStyle(.secondary)
                                 .frame(maxWidth:.infinity,alignment:["application","system"].contains(core.transcriptCaptureScope) && stream == "mic" ? .trailing : .leading) }
@@ -452,11 +475,8 @@ struct Notebook: View {
                         .background(TranscriptScrollTracking(following:core.transcriptFollow.following,
                             onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
                 }
-                .onChange(of:core.pageSerial) { _ in
-                    if let citation = core.citationID { proxy.scrollTo(citation,anchor:.center) }
-                    else if core.pageScrollToLatest { proxy.scrollTo("transcript-bottom",anchor:.bottom) }
-                    else if let first = core.rows.first { proxy.scrollTo(first.id,anchor:.top) }
-                }
+                .onChange(of:core.pageSerial) { _ in scrollTranscript(proxy) }
+                .onAppear { scrollTranscript(proxy) }
             }
             .overlay(alignment:.bottomTrailing) {
                 if !core.transcriptFollow.following {
@@ -474,6 +494,18 @@ struct Notebook: View {
             }
             .animation(.easeOut(duration:0.15),value:core.transcriptFollow)
         }
+    }
+    private func scrollTranscript(_ proxy:ScrollViewProxy) {
+        if let citation=core.citationID,
+           let turn=core.transcriptTurns.first(where:{$0.rows.contains(where:{$0.id==citation})}) {
+            // Lazy rows expose the outer turn before their nested segment anchors.
+            proxy.scrollTo(turn.id,anchor:.center)
+            DispatchQueue.main.async {
+                guard core.citationID==citation else { return }
+                proxy.scrollTo(citation,anchor:.center)
+            }
+        } else if core.pageScrollToLatest { proxy.scrollTo("transcript-bottom",anchor:.bottom) }
+        else if let first=core.transcriptTurns.first { proxy.scrollTo(first.id,anchor:.top) }
     }
     private var notes: some View {
         ScrollView {
@@ -571,8 +603,11 @@ struct MeetingSearchView: View {
     @State private var personID=""
     @State private var dateRange=0
     @State private var debounce:Task<Void,Never>?
+    private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
+    private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
 
     private func runSearch() {
+        guard !core.searchLoading else { return }
         let now=Int(Date().timeIntervalSince1970*1000)
         let from=dateRange == 0 ? nil : now-dateRange*86_400_000
         core.search(query,meetingID:meetingID.isEmpty ? nil : meetingID,
@@ -580,6 +615,7 @@ struct MeetingSearchView: View {
     }
     private func scheduleSearch() {
         debounce?.cancel()
+        guard !hybrid else { return }
         debounce=Task { @MainActor in
             try? await Task.sleep(nanoseconds:250_000_000)
             guard !Task.isCancelled else { return }
@@ -591,7 +627,7 @@ struct MeetingSearchView: View {
             HStack {
                 VStack(alignment:.leading,spacing:4) {
                     Text("Search conversations").font(.system(size:24,weight:.semibold,design:.serif))
-                    Text("Titles, current transcripts and current notes · searched privately on this Mac")
+                    Text(remoteEmbeddings ? "Hybrid search · query text and indexed passages use your embedding provider" : "Titles, current transcripts and current notes · searched privately on this Mac")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -604,8 +640,15 @@ struct MeetingSearchView: View {
                         .textFieldStyle(.plain).font(.title3)
                         .onSubmit { runSearch() }
                         .onChange(of:query) { _ in scheduleSearch() }
+                    if hybrid {
+                        Button("Search") { runSearch() }.buttonStyle(.borderedProminent)
+                            .disabled(core.searchLoading || query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                    }
                     if core.searchLoading { ProgressView().controlSize(.small) }
-                    if !query.isEmpty { Button { query=""; core.searchResults=[] } label: { Image(systemName:"xmark.circle.fill") }.buttonStyle(.borderless) }
+                    if !query.isEmpty {
+                        Button { query=""; core.search("") } label: { Image(systemName:"xmark.circle.fill") }
+                            .buttonStyle(.borderless).accessibilityLabel("Clear search")
+                    }
                 }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
                 HStack {
                     Picker("Meeting",selection:$meetingID) {
@@ -620,9 +663,9 @@ struct MeetingSearchView: View {
                         Text("Anyone").tag("")
                         ForEach(core.people) { row in Text(row.text("canonical_name")).tag(row.id) }
                     }.frame(maxWidth:220)
-                }.onChange(of:meetingID) { _ in runSearch() }
-                    .onChange(of:dateRange) { _ in runSearch() }
-                    .onChange(of:personID) { _ in runSearch() }
+                }.onChange(of:meetingID) { _ in if !hybrid { runSearch() } }
+                    .onChange(of:dateRange) { _ in if !hybrid { runSearch() } }
+                    .onChange(of:personID) { _ in if !hybrid { runSearch() } }
             }.padding(18)
             Divider()
             Group {
@@ -661,12 +704,17 @@ struct MeetingSearchView: View {
                     Label(pending == 0 ? "Index current" : "Indexing · \(pending) meetings remaining",
                           systemImage:pending == 0 ? "checkmark.circle" : "clock")
                     Spacer()
-                    Text(text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
+                    let semantic=core.searchIndex["semantic"] as? Object ?? [:]
+                    Text(semantic["enabled"] as? Bool == true ? "Hybrid · \(text(semantic["provider"]))" : hybrid ? "Keyword results · semantic search unavailable" : text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,20).padding(.vertical,10)
+                if let semantic=core.searchIndex["semantic"] as? Object, !text(semantic["message"]).isEmpty {
+                    Text(text(semantic["message"])).font(.caption).foregroundStyle(ScribeTheme.warning).padding(.horizontal,20).padding(.bottom,10)
+                }
+                if !core.searchUsage.isEmpty { RetrievalUsage(usage:core.searchUsage).padding(.horizontal,20).padding(.bottom,10) }
             }
         }.background(ScribeTheme.canvas)
         .onAppear { core.send(["action":"people_page"]) }
-        .onDisappear { debounce?.cancel() }
+        .onDisappear { debounce?.cancel(); core.search("") }
     }
     private func searchEmpty(_ title:String,_ icon:String,_ detail:String)->some View {
         VStack(spacing:10) {
@@ -674,6 +722,341 @@ struct MeetingSearchView: View {
             Text(title).font(.title3.weight(.semibold))
             Text(detail).foregroundStyle(.secondary)
         }.frame(maxWidth:.infinity,maxHeight:.infinity)
+    }
+}
+
+struct MeetingAskView: View {
+    @ObservedObject var core:DesktopClient
+    let open:(Record)->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var question=""
+    @State private var scope="current"
+    @State private var selected=Set<String>()
+    @State private var showMeetings=false
+    @State private var previousAnswerID:String?
+
+    private var scopeIDs:[String] { scope == "selected" ? Array(selected).sorted() : [] }
+    private var scopeReady:Bool { scope != "current" || core.selectedID != nil }
+    private var answer:Object { core.askResult["answer"] as? Object ?? [:] }
+    private var evidence:[Record] { objects((core.askResult["evidence"] as? Object)?["passages"]) }
+    private var scopeLabel:String {
+        if scope == "current" { return core.selected?.text("title") ?? "No meeting selected" }
+        if scope == "selected" { return "\(selected.count) chosen meeting\(selected.count == 1 ? "" : "s")" }
+        let searched=(((core.askResult["evidence"] as? Object)?["scope"] as? Object)?["meeting_ids"] as? [String])?.count
+        return searched.map { "All \($0) saved meetings" } ?? "All saved meetings"
+    }
+    private var previousQuestion:String {
+        guard let previousAnswerID else { return "" }
+        return core.askHistory.first(where:{$0.id==previousAnswerID})?.text("question") ??
+            text((core.askResult["evidence"] as? Object)?["question"])
+    }
+    private func refreshHistory() {
+        guard scopeReady, scope != "selected" || !selected.isEmpty else { core.askHistory=[]; return }
+        core.loadAskHistory(scope:scope,currentID:core.selectedID,selectedIDs:scopeIDs)
+    }
+    private func submit() {
+        core.ask(question,scope:scope,currentID:core.selectedID,selectedIDs:scopeIDs,
+                 previousAnswerID:previousAnswerID)
+    }
+    var body:some View {
+        VStack(spacing:0) {
+            HStack {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("Ask your meetings").font(.system(size:24,weight:.semibold,design:.serif))
+                    Text("Answers use current saved transcripts and show the evidence behind each claim.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(); Button("Done") { if core.askLoading { core.cancelAsk() }; dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(22)
+            Divider()
+            HStack(spacing:14) {
+                Picker("Scope",selection:$scope) {
+                    Text("Current meeting").tag("current")
+                    Text("Chosen meetings").tag("selected")
+                    Text("All meetings").tag("all")
+                }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Meeting scope").frame(maxWidth:430)
+                    .disabled(core.askLoading)
+                if scope == "selected" {
+                    Button { showMeetings=true } label: {
+                        Label("\(selected.count) selected",systemImage:"slider.horizontal.3")
+                    }.fixedSize().disabled(core.askLoading).help("Change chosen meetings")
+                }
+                Spacer()
+                Text("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"]))")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }.padding(.horizontal,22).padding(.vertical,12)
+            HStack(spacing:6) {
+                Image(systemName:"scope").foregroundStyle(ScribeTheme.accent)
+                Text("Searching: \(scopeLabel)").lineLimit(1)
+                Spacer()
+            }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,22).padding(.bottom,10)
+            Divider()
+            ScrollView {
+                VStack(alignment:.leading,spacing:16) {
+                    if let error=core.askError { Label(error,systemImage:"exclamationmark.triangle").foregroundStyle(ScribeTheme.warning) }
+                    if !answer.isEmpty {
+                        let claims=objects(answer["claims"])
+                        if answer["insufficient_evidence"] as? Bool == true {
+                            Label(text(answer["caveat"]).isEmpty ? "Not found in the retrieved evidence." : text(answer["caveat"]),
+                                  systemImage:"questionmark.bubble").foregroundStyle(.secondary)
+                        }
+                        ForEach(Array(claims.enumerated()),id:\.offset) { _,claim in
+                            VStack(alignment:.leading,spacing:8) {
+                                Text(claim.text("kind").capitalized).font(.caption.weight(.semibold)).foregroundStyle(ScribeTheme.accent)
+                                Text(claim.text("text")).textSelection(.enabled)
+                                HStack {
+                                    ForEach((claim.raw["citation_ids"] as? [String] ?? []),id:\.self) { id in
+                                        if let source=evidence.first(where:{$0.text("citation_id")==id}) {
+                                            Button("Source · \(source.text("meeting_title"))") { open(source) }.buttonStyle(.borderless)
+                                        }
+                                    }
+                                }.font(.caption)
+                            }.notebookCard()
+                        }
+                        if answer["insufficient_evidence"] as? Bool != true && !text(answer["caveat"]).isEmpty {
+                            Label(text(answer["caveat"]),systemImage:"info.circle").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if (core.askResult["evidence"] as? Object)?["truncated"] as? Bool == true {
+                            Label("Evidence was limited to 20 passages / 48 KB. This is not an exhaustive search.",systemImage:"info.circle")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let packet=core.askResult["evidence"] as? Object, let index=packet["index"] as? Object,
+                           let semantic=index["semantic"] as? Object {
+                            if semantic["enabled"] as? Bool == true {
+                                Label("Hybrid search · \(text(semantic["provider"]))",systemImage:"sparkle.magnifyingglass")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if !text(semantic["message"]).isEmpty {
+                                Label(text(semantic["message"]),systemImage:"exclamationmark.triangle")
+                                    .font(.caption).foregroundStyle(ScribeTheme.warning)
+                            }
+                        }
+                        if let usage=core.askResult["usage"] as? Object { RetrievalUsage(usage:usage) }
+                        DisclosureGroup("Evidence · \(evidence.count) passages") {
+                            ForEach(evidence) { source in
+                                Button { open(source) } label: {
+                                    VStack(alignment:.leading,spacing:4) {
+                                        Text(source.text("meeting_title")).font(.caption.weight(.semibold))
+                                        Text(source.text("text")).lineLimit(4).multilineTextAlignment(.leading)
+                                    }.padding(.vertical,5).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                        Button("Ask a follow-up") {
+                            previousAnswerID=text(core.askResult["answer_id"]); question=""
+                        }.disabled(text(core.askResult["answer_id"]).isEmpty)
+                    } else if !core.askLoading {
+                        VStack(spacing:10) {
+                            Image(systemName:"sparkles").font(.system(size:32)).foregroundStyle(.secondary)
+                            Text("Ask about a decision, proposal or commitment").font(.title3.weight(.semibold))
+                            Text("ScribeLoop retrieves evidence locally, then sends only the bounded text packet to your notes provider.")
+                                .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }.frame(maxWidth:.infinity).padding(.top,80)
+                    }
+                    if !core.askHistory.isEmpty {
+                        Divider(); Text("Saved questions in this scope").font(.headline)
+                        ForEach(core.askHistory.prefix(8)) { row in
+                            HStack {
+                                Button { core.showAskHistory(row); previousAnswerID=nil } label: {
+                                    VStack(alignment:.leading) {
+                                        Text(row.text("question")).lineLimit(2)
+                                        Text(row.raw["stale"] as? Bool == true ? "Outdated · ask again" : "\(row.text("provider")) · \(row.text("model"))")
+                                            .font(.caption).foregroundStyle(row.raw["stale"] as? Bool == true ? ScribeTheme.warning : .secondary)
+                                    }.frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain).disabled(row.raw["stale"] as? Bool == true)
+                                if row.raw["stale"] as? Bool != true { Button("Follow up") { previousAnswerID=row.id; question="" } }
+                            }.padding(.vertical,4)
+                        }
+                    }
+                }.padding(22)
+            }
+            Divider()
+            VStack(alignment:.leading,spacing:8) {
+                if previousAnswerID != nil {
+                    HStack {
+                        Label("Following up: \(previousQuestion)",systemImage:"arrowshape.turn.up.left")
+                            .lineLimit(1).font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button { previousAnswerID=nil } label: { Image(systemName:"xmark.circle.fill") }
+                            .buttonStyle(.borderless).accessibilityLabel("Cancel follow-up")
+                    }
+                }
+                HStack(spacing:10) {
+                    TextField(previousAnswerID == nil ? "What did we agree about pricing?" : "Ask a follow-up…",text:$question)
+                        .textFieldStyle(.roundedBorder).onSubmit { if !core.askLoading { submit() } }
+                    if core.askLoading {
+                        ProgressView().controlSize(.small); Button("Cancel") { core.cancelAsk() }
+                    } else {
+                        Button("Ask") { submit() }.buttonStyle(.borderedProminent)
+                            .disabled(question.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ||
+                                      !scopeReady || (scope == "selected" && selected.isEmpty))
+                    }
+                }
+            }.padding(18)
+        }.background(ScribeTheme.canvas)
+        .onAppear {
+            core.askResult=[:]; core.askError=nil; previousAnswerID=nil
+            if let id=core.selectedID { selected=[id] }
+            refreshHistory()
+        }
+        .onChange(of:scope) { value in
+            previousAnswerID=nil; core.askResult=[:]; refreshHistory()
+            if value == "selected" { showMeetings=true }
+        }
+        .onChange(of:core.askHybridEnabled) { enabled in
+            if !enabled { if core.askLoading { core.cancelAsk() }; dismiss() }
+        }
+        .sheet(isPresented:$showMeetings) {
+            ChosenMeetingsPicker(core:core,applied:selected) { choices in
+                guard choices != selected else { return }
+                selected=choices; previousAnswerID=nil; core.askResult=[:]; core.askError=nil; refreshHistory()
+            }
+        }
+    }
+}
+
+struct RetrievalUsage:View {
+    let usage:Object
+    private func value(_ key:String)->Int { (usage[key] as? NSNumber)?.intValue ?? 0 }
+    var body:some View {
+        if usage["total_duration_ms"] != nil {
+            DisclosureGroup("\(value("total_requests")) model calls · \(value("total_duration_ms")) ms total") {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("Retrieval \(value("retrieval_ms")) ms, including indexing \(value("indexing_ms")) ms · Answer \(value("answer_ms")) ms")
+                    Text("\(value("embedding_requests")) embedding calls · \(value("answer_requests")) answer calls · \((value("embedding_input_bytes")+value("answer_input_bytes"))/1024) KB input processed")
+                }
+            }.font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("Answer generation: \(value("duration_ms")) ms · Earlier retrieval metrics unavailable")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct ChosenMeetingsPicker: View {
+    @ObservedObject var core:DesktopClient
+    let applied:Set<String>
+    let use:(Set<String>)->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft=Set<String>()
+    @State private var query=""
+    @State private var selectedOnly=false
+    @State private var loadingOlder=false
+    @State private var olderRequest:String?
+    @FocusState private var searchFocused:Bool
+
+    private var matches:[Record] {
+        core.sessions.filter { row in
+            (!selectedOnly || draft.contains(row.id)) &&
+            (query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ||
+             row.text("title").localizedStandardContains(query.trimmingCharacters(in:.whitespacesAndNewlines)))
+        }
+    }
+    private var canAddMatches:Bool { matches.contains { !draft.contains($0.id) } && draft.count < 100 }
+    private func toggle(_ row:Record) {
+        if draft.contains(row.id) { draft.remove(row.id) }
+        else if draft.count < 100 { draft.insert(row.id) }
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:0) {
+            HStack(alignment:.top) {
+                VStack(alignment:.leading,spacing:5) {
+                    Text("Choose conversations").font(.system(size:24,weight:.semibold,design:.serif))
+                    Text("Include the discussions you want your answer to draw from.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(24)
+            HStack(spacing:10) {
+                Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
+                TextField("Find a conversation by name",text:$query).textFieldStyle(.plain)
+                    .focused($searchFocused).accessibilityLabel("Find conversations")
+                if !query.isEmpty {
+                    Button { query="" } label: { Image(systemName:"xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Clear conversation search")
+                }
+            }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                .overlay { RoundedRectangle(cornerRadius:10).strokeBorder(ScribeTheme.border) }
+                .padding(.horizontal,24)
+            HStack {
+                Button { selectedOnly.toggle() } label: {
+                    Label(selectedOnly ? "Showing selected (\(draft.count))" : "Review selected (\(draft.count))",
+                          systemImage:selectedOnly ? "checkmark.circle.fill" : "checkmark.circle")
+                }.buttonStyle(.borderless).foregroundStyle(selectedOnly ? ScribeTheme.accent : .secondary)
+                Spacer()
+                if !selectedOnly {
+                    Button(query.isEmpty ? "Select listed" : "Select matches") {
+                        for row in matches where draft.count < 100 { draft.insert(row.id) }
+                    }.buttonStyle(.borderless).disabled(!canAddMatches)
+                }
+                Button("Clear selection") { draft=[] }.buttonStyle(.borderless).disabled(draft.isEmpty)
+            }.font(.caption).padding(.horizontal,24).padding(.vertical,14)
+            Divider()
+            ScrollView {
+                LazyVStack(spacing:6) {
+                    if matches.isEmpty {
+                        VStack(spacing:8) {
+                            Image(systemName:selectedOnly ? "checkmark.circle" : "magnifyingglass").font(.title2)
+                            Text(selectedOnly ? "No selected conversations match" : "No conversations match")
+                                .font(.headline)
+                            Text(selectedOnly ? "Show all conversations or try another name." : "Try another name, or load older conversations below.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }.frame(maxWidth:.infinity).padding(.vertical,50)
+                    }
+                    ForEach(matches) { row in
+                        Button { toggle(row) } label: {
+                            HStack(spacing:12) {
+                                Image(systemName:draft.contains(row.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size:20)).foregroundStyle(draft.contains(row.id) ? ScribeTheme.accent : .secondary)
+                                VStack(alignment:.leading,spacing:5) {
+                                    Text(row.text("title")).font(.body.weight(.medium)).lineLimit(2)
+                                        .foregroundStyle(.primary).multilineTextAlignment(.leading)
+                                    HStack(spacing:6) {
+                                        Text(Date(timeIntervalSince1970:Double(row.int("started_at"))/1000),format:.dateTime.month(.abbreviated).day().year().hour().minute())
+                                        Text("· \(row.text("status").capitalized)")
+                                    }.font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength:0)
+                            }.padding(12).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                                .background(draft.contains(row.id) ? ScribeTheme.subtle : ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                                .overlay { RoundedRectangle(cornerRadius:10).strokeBorder(draft.contains(row.id) ? ScribeTheme.accent.opacity(0.6) : ScribeTheme.border.opacity(0.5)) }
+                        }.buttonStyle(.plain)
+                            .disabled(!draft.contains(row.id) && draft.count >= 100)
+                            .accessibilityLabel("\(draft.contains(row.id) ? "Selected" : "Not selected"), \(row.text("title"))")
+                            .accessibilityHint("Toggle inclusion in the answer's meeting scope")
+                    }
+                }.padding(16)
+            }.frame(maxWidth:.infinity,maxHeight:.infinity)
+            if let cursor=core.nextCursor {
+                HStack {
+                    Text("Search covers \(core.sessions.count) loaded conversations.").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button(loadingOlder ? "Loading…" : "Load older conversations") {
+                        olderRequest=core.send(["action":"history_page","cursor":cursor])
+                        loadingOlder=olderRequest != nil
+                    }.disabled(loadingOlder)
+                }.padding(.horizontal,24).padding(.bottom,12)
+            }
+            Divider()
+            HStack {
+                VStack(alignment:.leading,spacing:4) {
+                    Text("\(draft.count) conversation\(draft.count == 1 ? "" : "s") selected").font(.callout.weight(.medium))
+                    Text(draft.count == 100 ? "Selection limit reached" : "Choose up to 100. Changes apply when you confirm.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Use selected meetings") { use(draft); dismiss() }
+                    .buttonStyle(.borderedProminent).tint(ScribeTheme.action).keyboardShortcut(.defaultAction)
+                    .disabled(draft.isEmpty)
+            }.padding(24)
+        }.frame(width:640,height:600).background(ScribeTheme.canvas).tint(ScribeTheme.accent)
+            .onAppear { draft=applied; searchFocused=true }
+            .onChange(of:core.sessions.count) { _ in loadingOlder=false }
+            .onChange(of:core.nextCursor == nil) { _ in loadingOlder=false }
+            .onChange(of:core.message) { _ in loadingOlder=false }
+            .onChange(of:core.requests[olderRequest ?? ""]) { status in
+                if ["accepted","rejected","unknown"].contains(status ?? "") { loadingOlder=false; olderRequest=nil }
+            }
     }
 }
 

@@ -53,6 +53,7 @@ class SessionStore:
         self.conn = conn
         self.memory_cache = memory_cache if memory_cache is not None else MemoryCache()
         self._cloud_usage_cache = {}
+        self._consent_epoch = 0
 
     AGREEMENT_VERSION = '2026-10-26-v3'
 
@@ -76,7 +77,18 @@ class SessionStore:
         with self.conn:
             self.conn.execute('UPDATE app_agreement SET revoked_at=? WHERE version=?',
                               (self._now(),self.AGREEMENT_VERSION))
+        self._consent_epoch += 1
         return self.agreement()
+
+    def search_authorization(self):
+        """A revoked request cannot regain authority when the user agrees again."""
+        from .search_work import SearchAuthorizationError
+        epoch=self._consent_epoch
+        def check():
+            if epoch != self._consent_epoch or not self.agreement()['accepted']:
+                raise SearchAuthorizationError('Search authorization was revoked; submit a new request')
+        check()
+        return check
 
     def recover(self):
         with self.conn:
@@ -750,13 +762,19 @@ class SessionStore:
         self._cloud_usage_cache.pop(session_id,None)
         from .search import MeetingSearch
         MeetingSearch(self).purge_session(session_id)
-        has_vectors=self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone()
-        if has_vectors:
+        vector_tables=[]
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embedding_index_generations'").fetchone():
+            vector_tables=[row[0] for row in self.conn.execute('SELECT table_name FROM embedding_index_generations')]
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='embeddings_chunks_vec'").fetchone():
+            vector_tables.append('embeddings_chunks_vec')
+        if vector_tables:
             from .vectors import load_vec_extension
             load_vec_extension(self.conn)
         with self.conn:
-            if has_vectors:
-                self.conn.execute('DELETE FROM embeddings_chunks_vec WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
+            for table in vector_tables:
+                if table != 'embeddings_chunks_vec' and not re.fullmatch(r'embeddings_chunks_vec_[0-9a-f]{16}',table):
+                    raise ValueError('Invalid vector table registry')
+                self.conn.execute(f'DELETE FROM {table} WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))
             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))

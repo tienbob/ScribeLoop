@@ -1,3 +1,5 @@
+ 
+
 # ScribeLoop meeting workspace — delivery plan
 
 Status: implementation started; F1 slices 1–3 are in progress. Updated 2026-11-10.
@@ -20,16 +22,18 @@ labels, structured cited summaries and action-item extraction, calendar links,
 manual transcript edits, retained-audio playback, provider selection, and email
 export/draft handoff. Extend these; do not build competing copies.
 
-`embeddings_chunks` and vector helpers are groundwork, not a shipped user-facing
-search/chat flow. Existing extracted action items are summary content, not a task
+`embeddings_chunks` and vector helpers are now being promoted into the F1/F2
+hybrid-search path. Existing extracted action items are summary content, not a task
 tracker. Existing summary instructions are not a template library. Existing email
 sharing opens a draft; it does not send email.
 
 Delivery rules:
 
 - Native macOS UX first. Preserve saved workspaces and settings during migrations.
-- Search is local. No API request on each search keystroke. Search/Ask must work
-  without loading an ASR model or uploading audio.
+- Keyword search and bundled local Hybrid search stay on this Mac. Remote Hybrid
+  uses the explicitly selected embedding provider for transcript chunks and queries.
+  Hybrid searches run on Submit; no API request occurs on each keystroke. Search/Ask
+  do not load an ASR model or upload audio.
 - Use the configured notes LLM for Ask and generated drafts. Show the destination
   and scope. No implicit fallback to another provider or automatic paid retry.
 - Scope defaults to the current conversation; expanding to multiple/all meetings
@@ -44,8 +48,8 @@ Delivery rules:
 
 ## Delivery order and dependencies
 
-Ship **F1 → F2 → F3 → F4 → F5 → F6**. F2 is retrieval over F1's lexical index;
-semantic embeddings are an optional later enhancement, not a prerequisite. F3 and
+Ship **F1 → F2 → F3 → F4 → F5 → F6**. F2 retrieves over F1's hybrid lexical and
+semantic index. F3 and
 F4 can reuse existing structured summaries. F5 extends source types and requires
 rechecking F2/F3/F6 grounding against that new source type.
 
@@ -85,12 +89,14 @@ revise the implementation or explicitly revise this plan; do not silently waive 
 **Scope:** search titles, selected saved transcript revisions and current summaries;
 filter by date, meeting and linked person. Return meeting title/date, snippet,
 speaker, source type and timestamp where available. Start with keyword/full-text
-retrieval plus deterministic ranking. Use an encrypted local index in the existing
+retrieval and add optional multilingual semantic retrieval, fused with deterministic
+reciprocal-rank fusion. Use encrypted local indexes in the existing
 workspace database, with an FTS capability check and migration/rebuild path.
 Summary hits open the summary source; transcript hits open the passage. Support
 expired audio by offering transcript navigation without a broken Play action.
 
 Implementation slices:
+
 1. Revision-aware index and incremental, resumable backfill. **Implemented; acceptance measurement pending.**
 2. Bounded paged query API, ranking and filters. **Implemented; corpus ranking measurement pending.**
 3. Native search entry/results, keyboard navigation and source opening. **Implemented; installed-app UX validation pending.**
@@ -117,6 +123,49 @@ cooperatively yields between fingerprint batches and indexed meetings, preventin
 the cold build from monopolizing the event loop. Latest-request binding prevents
 an older queued result from replacing a newer query or a cleared field.
 
+UX audit remediation (2026-11-10): FTS index version 3 no longer duplicates each
+meeting title into every transcript and summary row. Title queries therefore return
+the dedicated title result instead of unrelated passages from that meeting. Delete
+commands now use the exact indexed column values, preventing orphaned title tokens
+during rename/reconciliation. Clearing or closing Search invalidates the outstanding
+request so a late response cannot repopulate the sheet; title hits open Transcript.
+
+Hybrid-search amendment (2026-11-10): Settings offers Keyword only or Hybrid.
+Hybrid has an independent embedding provider: bundled local multilingual, OpenAI,
+Ollama, LM Studio, or a custom OpenAI-compatible endpoint. Each vector-index
+generation is bound to the provider, model, output dimensions, normalization and
+implementation version. A generation is rebuilt when any field changes; vectors
+from different models or shapes are never mixed. Meeting scope is applied inside
+nearest-neighbour retrieval, before results can become evidence. Lexical search
+remains available while a semantic model is missing, offline or rebuilding, with
+the reduced mode disclosed. No provider fallback and no automatic paid retry are
+allowed. Remote embedding sends transcript chunks while indexing and query text
+while searching to the explicitly selected provider; both must be identified as
+cloud processing in Settings.
+
+Implementation update (2026-11-11): the selector lives in Models. Keyword remains
+the default. Local Hybrid bundles the official Apache-2.0 IBM Granite multilingual
+97M R2 INT8 ONNX model at revision `835ad14087e140460703cf0fae09f97d469d65c2`,
+384-dimensional CLS embeddings with L2 normalization. Build-time SHA-256 checks
+verify every model/tokenizer asset; runtime never downloads weights. Remote routes
+use `/embeddings`; expected output dimensions are checked before a transaction can
+replace index rows. OpenAI third-generation models receive the requested dimensions;
+other compatible endpoints must return their model's configured native size.
+Scope-restricted queries compute exact distance inside the permitted meeting set,
+avoiding global candidate starvation. Ask excludes title documents before ranking
+so titles cannot consume its evidence budget. Failed semantic requests visibly
+return keyword results and require an explicit next submission to retry.
+Person-forgetting and conversation deletion purge every registered generation.
+Native packaging pins ONNX Runtime 1.18.1 to retain the macOS 13 deployment floor.
+
+Gemini amendment (2026-11-11): new settings default to Gemini for the Hybrid
+embedding provider (`gemini-embedding-001`, 768 dimensions). The native Gemini
+batch-embedding API requests the exact output size and uses separate document/query
+retrieval task types. Keyword-only stays the initial search mode; choosing this
+default alone does not upload a transcript. Existing explicit provider choices are
+preserved. The standard Gemini destination may reuse the saved Gemini notes key;
+other providers and custom URLs cannot inherit it.
+
 Recorded development-Mac scale result for a synthetic 1,000-meeting/100,000-segment
 SQLCipher workspace: 101,000 search documents, 4.419 s cold build, 71.05 ms warm
 p50, 79.63 ms warm p95 and 82.12 ms warm maximum over 100 queries. This passes the
@@ -142,6 +191,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] All currently selected saved revisions are indexed; old revisions do not leak
   into default results. Interrupted backfill resumes without duplicated hits.
 - [ ] Title, transcript and summary search plus all three filters work in the native
@@ -158,20 +208,101 @@ flowchart TD
 
 ## F2 — Ask your meetings
 
+### Audit remediation — 2026-11-12
+
+Branch: `fix/search-ask-quality-and-privacy`. This is implementation work;
+the independent production-model release evaluation remains a separate gate.
+Implementation and verification evidence: `SEARCH_ASK_AUDIT_REMEDIATION.md`.
+Remediation implemented: 882 full-suite tests pass; 35 focused tests pass after
+the final request-accounting adjustment. Native compilation/build/signature and
+real Gemini/UI checks pass. The original architecture transcript moved from rank
+13 to rank 1; Search and saved Ask citations now visibly highlight 3:12. Synthetic
+local recall is 38/40 at five passages and 39/40 at twenty for both Search and Ask.
+Independent production-scale/multilingual grounding release gates below remain open.
+
+| Finding                     | Planned change                                                                                                    | Finished when                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Weak passage ranking        | Preserve chunk rank, score bounded source excerpts and remove common query-word noise                             | Versioned multilingual corpus improves final passage recall; exact matches outrank adjacent boilerplate |
+| Source navigation           | Resolve cited segment to its containing lazy turn before scrolling/highlighting                                   | Search and Ask open middle/end/grouped/page-boundary sources at the actual cited text                   |
+| Lost long-source evidence   | Carry matched excerpt offsets and full-source fingerprints through evidence/history                               | A tail match beyond 48 KiB reaches generation without uploading the full source                         |
+| Filter starvation           | Apply meeting/date/person eligibility before nearest-neighbor selection                                           | Excluded candidates cannot crowd out eligible results                                                   |
+| History and Unicode budgets | Separate excerpt/source hashes; budget actual UTF-8 provider bodies                                               | New clipped answers reopen and follow up; equivalent Vietnamese input respects wire-byte limits         |
+| Consent revocation          | Cancel registered jobs and check an authorization generation before every outbound request and result publication | Same-client and cross-client revocation start no subsequent embedding/answer request                    |
+| Performance accounting      | Measure whole request plus indexing/retrieval/answer stages and count embedding/answer requests separately        | UI/history show total latency and all provider work, including cold indexing                            |
+
+Regression checks use synthetic sources and fake providers first. Repeat the saved
+40-query corpus, full suite and native compilation, then verify the rebuilt app's
+navigation and configured-provider flow. Do not replace bounded RAG with a full
+transcript fallback, add automatic paid retries, or mark unrun acceptance checks done.
+
+```mermaid
+flowchart LR
+    Q[Question and explicit scope] --> A[Capture authorization generation]
+    A --> F[Apply all eligibility filters]
+    F --> I[Index current eligible sources with cancellation checks]
+    I --> R[Rank matching excerpts and retain source offsets]
+    R --> B[Fit evidence into serialized request budget]
+    B --> G[Recheck authorization then generate]
+    G --> V[Validate citations and current source fingerprints]
+    V --> S[Save answer, excerpts and complete usage]
+    S --> U[Open containing transcript turn then highlight cited segment]
+```
+
+Live-failure fix (2026-11-11): the supplied selected-meeting architecture question
+reproduced `ask_missing_limit_notice` with the real Gemini provider. Valid cited
+answers were discarded when retrieval was bounded and the model omitted a caveat.
+The app now supplies its own coverage notice after citation/schema validation.
+Sanitized HTTP/validation diagnostics and code-only events replace the generic
+failure banner. Scope/citation checks and bounded evidence remain enforced, with
+no automatic paid retries. Regression tests cover the notice and invalid citations;
+the complete suite passes (862 tests). The rebuilt app answered the exact question
+with the real Gemini provider in approximately 3.9 seconds: architecture supports
+AI Agent development and plugin integration, with clickable sources. Hybrid RAG
+sent 14 KB of evidence, bounded at 20 passages; no full transcript was uploaded.
+
+Hybrid key UX (2026-11-11): show the masked saved key and Saved badge outside
+the password input, distinguish a shared notes key from a dedicated embedding key,
+and show unsaved replacement / missing-key states. A saved credential does not
+claim provider access has been tested.
+
+Hybrid prerequisite (2026-11-11): Ask requires the user to enable Hybrid in
+Settings → Models → Meeting search. Enforce this for questions, evidence and
+history in the desktop API as well as the native client. Keyword-only users see
+an explanation and a direct settings link. Settings explains semantic retrieval,
+the embedding destination and the separate notes-provider destination. No automatic
+enablement or full-transcript fallback is permitted.
+
+Chosen-meeting UX refinement (2026-11-11): replace the short inline checklist with
+a searchable, larger draft picker. Selecting Chosen meetings opens the picker;
+Apply updates scope/history once, while Cancel preserves the applied selection.
+Show selection count, selected-only review, additive filtered selection, a 100-item
+limit and explicit older-history loading. Disable scope edits during a running Ask.
+Implemented and verified in the rebuilt macOS app: accent-insensitive `kiem tra`
+matched Vietnamese titles; filtered selection retained an earlier choice; Cancel
+kept the prior one-meeting scope; Apply changed it to two meetings; an empty
+selection disabled Apply. The user's original scope and question were restored.
+Native compilation and deep signature verification passed. Older-history paging
+and the 100-item cap are implemented but were not exercised against the user's
+eight-conversation workspace. No provider request was submitted by this UX check.
+
 **User outcome:** ask “What did we agree about pricing?” and inspect the evidence.
 
 **Scope:** a meeting-scoped conversation plus explicitly selected meetings or all
 meetings. Retrieve relevant text locally, then send a bounded evidence packet to
 the chosen notes provider. Answers distinguish decisions, proposals and conflicting
 accounts, and link factual claims to sources. Show which meetings were searched.
-No new embedding provider in this increment. Explain when lexical retrieval found
+Hybrid retrieval combines exact lexical hits (important for names, identifiers and
+dates) with multilingual semantic hits (paraphrases and cross-language questions).
+Explain when semantic retrieval is unavailable or the combined retrieval found
 insufficient evidence rather than claiming exhaustive knowledge.
 
 Implementation slices:
-1. Retrieval/evidence contract, source scopes and request budget.
-2. Structured cited-answer generation, validation and cancellation.
-3. Native Ask interface, evidence drawer and follow-up questions.
-4. Revision-aware history, invalidation and grounded-answer evaluation.
+
+1. Retrieval/evidence contract, source scopes and request budget. **Implemented.**
+2. Structured cited-answer generation, validation and cancellation. **Implemented.**
+3. Native Ask interface, evidence drawer and follow-up questions. **Implemented.**
+4. Revision-aware history and invalidation. **Implemented; the labelled 40-question
+   human grounding evaluation remains a release gate.**
 
 Initial bounds: retrieve ≤20 passages and ≤48 KB evidence per answer, generate
 ≤2,000 output tokens, and make at most one generation request per submitted
@@ -194,6 +325,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] Scope is visible and enforced server-side for retrieval, generation, follow-up
   history and every citation. No answer draws from a meeting outside the scope.
 - [ ] All rendered citation IDs resolve to the correct permitted meeting/revision;
@@ -237,6 +369,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] All six built-in templates produce the intended sections on representative
   fixtures; absent facts are omitted rather than invented to fill headings.
 - [ ] Default selection and per-meeting overrides survive quit/reopen; changing a
@@ -274,6 +407,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] User can accept/edit/dismiss suggestions, create a manual task, mark done and
   reopen; state persists across restart and is independent of summary regeneration.
 - [ ] Repeated generation cannot duplicate accepted tasks or overwrite manual
@@ -319,6 +453,7 @@ flowchart TD
 ```
 
 **Finished only when:**
+
 - [ ] Exact user text autosaves within 1 second of inactivity and immediately on
   navigation/normal quit. Force-stop recovery preserves acknowledged saves; unsaved
   status is visible. No LLM output overwrites the personal-note document.
@@ -365,6 +500,7 @@ flowchart TD
 ```
 
 **F6a finished only when:**
+
 - [ ] Draft generation uses selected decisions/tasks and current evidence; no
   invented promise, deadline or owner appears in the acceptance fixtures.
 - [ ] User edits survive navigation/restart and are not overwritten by regeneration
@@ -397,6 +533,7 @@ flowchart TD
 ```
 
 **F6b finished only when:**
+
 - [ ] Slack posting and Linear task creation each pass a real sandbox-account
   end-to-end test, including destination selection, preview and returned remote link.
 - [ ] Cancel before final confirmation performs no write. The exact reviewed
@@ -414,15 +551,15 @@ flowchart TD
 
 ## Architecture and data work
 
-| Area | Planned addition | Existing path to extend |
-|---|---|---|
-| Search | Revision-aware documents, local FTS, backfill cursor, paged queries | `storage/sessions.py`, database migrations; assess `storage/vectors.py` later |
-| Ask | Scoped retrieval, evidence contract, cited answers/history, invalidation | `llm/summary_provider.py`, `api/desktop_contract.py`, authenticated command receipts |
-| Templates | Versioned templates, default and meeting override, provenance | Existing structured summary and rolling-notes pipeline |
-| Tasks | Durable tasks, suggestion/source links, edits and status | Existing grounded summary action items and people links |
-| Personal notes | Separate authored documents, marks, autosave and evidence IDs | Encrypted workspace, recording timeline and playback |
-| Follow-up | Saved drafts, evidence selection and destination adapters | `api/email_exports.py`, native `EmailSharing.swift` |
-| Connectors | Keychain credentials, destination mappings, dispatch receipts | Existing account/provider-secret patterns; no transcript-controlled tools |
+| Area           | Planned addition                                                         | Existing path to extend                                                                  |
+| -------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Search         | Revision-aware documents, local FTS, backfill cursor, paged queries      | `storage/sessions.py`, database migrations; assess `storage/vectors.py` later        |
+| Ask            | Scoped retrieval, evidence contract, cited answers/history, invalidation | `llm/summary_provider.py`, `api/desktop_contract.py`, authenticated command receipts |
+| Templates      | Versioned templates, default and meeting override, provenance            | Existing structured summary and rolling-notes pipeline                                   |
+| Tasks          | Durable tasks, suggestion/source links, edits and status                 | Existing grounded summary action items and people links                                  |
+| Personal notes | Separate authored documents, marks, autosave and evidence IDs            | Encrypted workspace, recording timeline and playback                                     |
+| Follow-up      | Saved drafts, evidence selection and destination adapters                | `api/email_exports.py`, native `EmailSharing.swift`                                  |
+| Connectors     | Keychain credentials, destination mappings, dispatch receipts            | Existing account/provider-secret patterns; no transcript-controlled tools                |
 
 Schema decisions must be reviewed per increment. Every new source-bearing table
 needs revision handling and tested delete/forget cleanup; avoid large catch-all
@@ -447,15 +584,15 @@ JSON state that makes those dependencies invisible.
 
 ## Delivery tracking
 
-| Increment | Status | Depends on | Closeout artifact |
-|---|---|---|---|
-| F1 Search | Not started | Existing selected revisions | `SEARCH_CLOSEOUT.md` |
-| F2 Ask | Not started | F1 | `MEETING_CHAT_CLOSEOUT.md` |
-| F3 Templates | Not started | Existing summary schema | `TEMPLATES_CLOSEOUT.md` |
-| F4 Tasks | Not started | Existing action extraction | `ACTION_TRACKING_CLOSEOUT.md` |
-| F5 Personal notes | Not started | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md` |
-| F6a Drafts | Not started | F3/F4 and evidence contract | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
-| F6b Integrations | Not started | F6a + connector credentials | `INTEGRATIONS_CLOSEOUT.md` |
+| Increment         | Status                                     | Depends on                            | Closeout artifact               |
+| ----------------- | ------------------------------------------ | ------------------------------------- | ------------------------------- |
+| F1 Search         | Not started                                | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
+| F2 Ask            | Implemented; acceptance evaluation pending | F1                                    | `MEETING_CHAT_CLOSEOUT.md`    |
+| F3 Templates      | Not started                                | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
+| F4 Tasks          | Not started                                | Existing action extraction            | `ACTION_TRACKING_CLOSEOUT.md` |
+| F5 Personal notes | Not started                                | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md`  |
+| F6a Drafts        | Not started                                | F3/F4 and evidence contract           | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
+| F6b Integrations  | Not started                                | F6a + connector credentials           | `INTEGRATIONS_CLOSEOUT.md`    |
 
 The next implementation task is F1 slice 1: encrypted, revision-aware local search
 index and its update/delete contracts, followed by the native search surface.

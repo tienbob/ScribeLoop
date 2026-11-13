@@ -9,7 +9,7 @@ import Darwin
 typealias Object = [String: Any]
 struct Record: Identifiable {
     let raw: Object
-    var id: String { raw["id"] as? String ?? "" }
+    var id: String { raw["id"] as? String ?? raw["citation_id"] as? String ?? raw["answer_id"] as? String ?? "" }
     func text(_ key: String) -> String { raw[key] as? String ?? "" }
     func int(_ key: String) -> Int { (raw[key] as? NSNumber)?.intValue ?? 0 }
     func object(_ key: String) -> Object { raw[key] as? Object ?? [:] }
@@ -99,8 +99,15 @@ struct PreferencesSaveProgress {
     @Published var sessions: [Record] = []
     @Published var searchResults: [Record] = []
     @Published var searchIndex: Object = [:]
+    @Published var searchUsage: Object = [:]
     @Published var searchLoading = false
     private var searchRequest: String?
+    @Published var askResult: Object = [:]
+    @Published var askHistory: [Record] = []
+    @Published var askLoading = false
+    @Published var askError: String?
+    private var askRequest: String?
+    private var askHistoryRequest: String?
     @Published var selectedID: String?
     @Published var detail: Object = [:] {
         didSet {
@@ -183,7 +190,7 @@ struct PreferencesSaveProgress {
     private var lastSequence = 0
     var connected: Bool { state == "Connected" }
     var running: Bool { process?.isRunning == true }
-    var busy: Bool { activeID != nil || processingID != nil || summaryID != nil }
+    var busy: Bool { activeID != nil || processingID != nil || summaryID != nil || askLoading }
     var accepted: Bool { agreement["accepted"] as? Bool == true }
     func savedTranscriptionCommand(action:String,sessionID:String) -> Object? {
         guard ["resume","reprocess"].contains(action) else { return nil }
@@ -380,9 +387,9 @@ struct PreferencesSaveProgress {
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access"]
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence"]
         let isRead = reads.contains(action)
-        let emergency = ["stop","stop_recording","revoke_agreement"].contains(action)
+        let emergency = ["stop","stop_recording","revoke_agreement","cancel_ask"].contains(action)
         if !isRead && !emergency && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
@@ -446,6 +453,9 @@ struct PreferencesSaveProgress {
             if id == searchRequest && ["rejected","unknown"].contains(status) {
                 searchLoading = false
             }
+            if id == askRequest && ["rejected","unknown"].contains(status) {
+                askLoading = false; askError = "Ask was rejected. Check the provider and meeting scope."
+            }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
@@ -457,7 +467,23 @@ struct PreferencesSaveProgress {
             guard text(v["response_to"]) == searchRequest else { return }
             searchResults = objects(v["results"])
             searchIndex = v["index"] as? Object ?? [:]
+            searchUsage = v["usage"] as? Object ?? [:]
             searchLoading = false
+        case "ask_history":
+            guard text(v["response_to"]) == askHistoryRequest else { return }
+            askHistory = objects(v["answers"])
+        case "ask_started":
+            guard text(v["request_id"]) == askRequest else { return }
+            askLoading = true; askError = nil
+        case "ask_answer":
+            guard text(v["request_id"]) == askRequest else { return }
+            askResult = v; askLoading = false; askError = nil
+        case "ask_error":
+            guard text(v["request_id"]) == askRequest else { return }
+            askLoading = false; askError = text(v["message"])
+        case "ask_cancelled":
+            guard text(v["request_id"]) == askRequest else { return }
+            askLoading = false; askError = "Ask was cancelled. Your earlier answers are still saved."
         case "meeting_page":
             guard text((v["session"] as? Object)?["id"]) == selectedID,
                 text(v["response_to"]) == pageRequest else { return }
@@ -602,7 +628,7 @@ struct PreferencesSaveProgress {
     func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
                 dateFrom:Int? = nil, dateTo:Int? = nil) {
         let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchLoading=false; return }
+        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchUsage=[:]; searchIndex=[:]; searchLoading=false; return }
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }
@@ -612,6 +638,40 @@ struct PreferencesSaveProgress {
         searchRequest=send(command)
         if searchRequest == nil { searchLoading=false }
     }
+    var askHybridEnabled:Bool { text(settings["search_mode"]) == "hybrid" }
+    func ask(_ question:String,scope:String,currentID:String?,selectedIDs:[String],previousAnswerID:String? = nil) {
+        guard askHybridEnabled else { askError="Enable Hybrid search in Settings → Models → Meeting search to use Ask."; return }
+        let value=question.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.isEmpty, summaryProvider["configured"] as? Bool == true else {
+            askError = "Enter a question and configure the notes provider first."; return
+        }
+        var command:Object=["action":"ask_question","question":value,"scope":scope]
+        if scope == "current", let currentID { command["current_id"]=currentID }
+        if scope == "selected" { command["selected_ids"]=selectedIDs }
+        if let previousAnswerID, !previousAnswerID.isEmpty { command["previous_answer_id"]=previousAnswerID }
+        askLoading=true; askError=nil
+        askRequest=send(command)
+        if askRequest == nil { askLoading=false; askError=message ?? "Ask could not start." }
+    }
+    func loadAskHistory(scope:String,currentID:String?,selectedIDs:[String]) {
+        guard askHybridEnabled else { askHistory=[]; return }
+        var command:Object=["action":"ask_history","scope":scope,"limit":50]
+        if scope == "current", let currentID { command["current_id"]=currentID }
+        if scope == "selected" { command["selected_ids"]=selectedIDs }
+        askHistoryRequest=send(command)
+    }
+    func showAskHistory(_ row:Record) {
+        guard row.raw["stale"] as? Bool != true else { return }
+        askResult=["answer_id":row.id,"answer":row.raw["answer"] as? Object ?? [:],
+            "evidence":["passages":row.raw["evidence"] as? [Object] ?? [],
+                        "truncated":row.raw["truncated"] as? Bool ?? false],
+            "provider":row.text("provider"),"model":row.text("model"),
+            "usage":(row.raw["usage"] as? Object).flatMap { $0.isEmpty ? nil : $0 } ??
+                ["duration_ms":row.int("duration_ms"),"input_bytes":row.int("input_bytes"),
+                 "output_bytes":row.int("output_bytes"),"requests":1,"max_output_tokens":2000]]
+        askError=nil
+    }
+    func cancelAsk() { guard askLoading else { return }; send(["action":"cancel_ask"]) }
     func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }
         if !scroll && navigationPending { refreshAfterPage = true; return }

@@ -83,8 +83,11 @@ async def test_forget_purges_exemplars_links_vectors_names_notes_and_cache(state
     store.save_grounded_summary(sid,1,fingerprint,notes,provider='test',model='test')
     index=SqliteVecIndex(store.conn,dim=16)
     index.add(sid,0,32000,[row['id']],'Alice spoke',np.ones(16,dtype='float32').tobytes())
+    hybrid=SqliteVecIndex(store.conn,dim=32,generation='multilingual-model:32:v1')
+    hybrid.add(sid,0,32000,[row['id']],'Alice spoke',np.ones(32,dtype='float32').tobytes())
     before=RollingNotes(store,Provider()).public(sid)
     assert registry.forget(person)==[sid]
+    assert not hybrid.search(np.ones(32,dtype='float32').tobytes())
     after=RollingNotes(store,Provider()).public(sid)
     assert after['requests']==before['requests'] and after['input_bytes']==before['input_bytes']
     for table in ('speakers','speaker_embeddings','exemplar_provenance','person_links','person_link_history','grounded_summaries','summary_jobs','embeddings_chunks','embeddings_chunks_vec'):

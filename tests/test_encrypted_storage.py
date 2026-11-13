@@ -11,6 +11,7 @@ import pytest
 import soundfile as sf
 from fastapi.testclient import TestClient
 from scribeloop_core.api.server import create_app
+from scribeloop_core.storage.db import SCHEMA_VERSION
 from scribeloop_core.storage.encrypted import (
     EncryptedStorageError,
     connect_encrypted,
@@ -42,6 +43,31 @@ class MemoryKeys:
 
     def delete(self, account):
         del self.keys[account]
+
+
+@pytest.mark.asyncio
+async def test_search_excerpt_filters_and_answer_history_survive_encrypted_reopen(tmp_path):
+    from scribeloop_core.llm.meeting_ask import AskScope, MeetingAsk
+    from scribeloop_core.storage.search import MeetingSearch
+    from test_search_ask_audit import CONFIG, Embedder, cited, meeting, provider
+
+    path=tmp_path/'search.sqlcipher'; keys=MemoryKeys()
+    with encrypted_database(path,keys) as conn:
+        store=SessionStore(conn)
+        for index in range(25): meeting(store,[f'NEEDLE old {index}'],at=1600000000000)
+        sid=meeting(store,['background '*6000+' NEEDLE architecture supports plugins'],at=1800000000000)
+        person=store.segments(sid)[0]['display_speaker_id']
+        result=await MeetingSearch(store,embedding_config=CONFIG,embedder=Embedder()).query_async(
+            'architecture',person_id=person,date_from=1700000000000,limit=5)
+        assert len(result['results'])==1 and result['results'][0]['session_id']==sid
+        scope=AskScope.resolve(store,'current',current_id=sid)
+        answer=await MeetingAsk(store,provider(cited),embedding_config=CONFIG,embedder=Embedder()).answer('architecture',scope)
+        assert answer['evidence']['passages'][0]['excerpt_start']>48000
+    with encrypted_database(path,keys) as conn:
+        history=await MeetingAsk(SessionStore(conn),provider(cited)).history(scope)
+        assert len(history)==1 and not history[0]['stale']
+        assert 'NEEDLE' in history[0]['evidence'][0]['text'] and history[0]['usage']['total_requests']>0
+    assert b'NEEDLE architecture supports plugins' not in path.read_bytes()
 
 
 def test_workspace_unlock_reopens_multiple_audio_keys_without_native_audio_reads(tmp_path):
@@ -133,7 +159,7 @@ def test_wrong_key_fails_closed_and_releases_resources(tmp_path):
     with pytest.raises(EncryptedStorageError):
         connect_encrypted(path, secrets.token_bytes(32))
     with encrypted_database(path, keys) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 16
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
 
 
 def test_exclusive_database_lock_and_exception_release(tmp_path):

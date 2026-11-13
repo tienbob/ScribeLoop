@@ -94,6 +94,8 @@ defaults, proposed work and recorded prices do not override the current closeout
 - [UX/UI review](UX_UI_REVIEW.md)
 - [M5/M6 implementation checkpoint](M5_M6.md)
 
-The repository [architecture](../ARCHITECTURE.md) includes longer-term design
-and deferred work. Optional evaluation scripts remain available for reproducing
-historical results; the default app does not run local models or multiple providers.
+The repository [architecture](../ARCHITECTURE.md) maps the current desktop system
+with diagrams for launch, call detection, transcription, notes, Search/Ask,
+authorization and storage. Historical research is linked separately there.
+Optional evaluation scripts reproduce earlier experiments; the default transcription
+engine is cloud streaming, with optional Ollama and local embedding routes documented.

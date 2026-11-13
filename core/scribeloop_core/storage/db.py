@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 21
 
 DDL = """
 CREATE TABLE sessions (
@@ -101,7 +101,7 @@ CREATE TABLE embeddings_chunks (
   id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id),
   chunk_start_ms INTEGER, chunk_end_ms INTEGER,
   segment_ids TEXT,                    -- JSON array
-  chunk_text TEXT, model_name TEXT, vec BLOB);
+  chunk_text TEXT, model_name TEXT, vec BLOB, generation TEXT NOT NULL DEFAULT 'legacy');
 
 -- audit log: session/state transitions, errors, agent actions ONLY
 CREATE TABLE events (
@@ -307,7 +307,73 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
               document_count INTEGER NOT NULL
             );
             """)
-            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            conn.execute("PRAGMA user_version=16")
+    if version < 17:
+        with conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS meeting_answers (
+              id TEXT PRIMARY KEY, question TEXT NOT NULL, scope_kind TEXT NOT NULL,
+              scope_json TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
+              answer_json TEXT NOT NULL, evidence_bytes INTEGER NOT NULL,
+              truncated INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS meeting_answer_sources (
+              answer_id TEXT NOT NULL REFERENCES meeting_answers(id) ON DELETE CASCADE,
+              session_id TEXT NOT NULL REFERENCES sessions(id), revision INTEGER NOT NULL,
+              citation_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+              PRIMARY KEY(answer_id,citation_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_meeting_answer_sources_session
+              ON meeting_answer_sources(session_id);
+            CREATE TRIGGER IF NOT EXISTS purge_meeting_answers_before_session_delete
+              BEFORE DELETE ON sessions BEGIN
+                DELETE FROM meeting_answers WHERE id IN
+                  (SELECT answer_id FROM meeting_answer_sources WHERE session_id=OLD.id);
+            END;
+            """)
+            conn.execute("PRAGMA user_version=17")
+    if version < 18:
+        with conn:
+            answer_columns={row[1] for row in conn.execute('PRAGMA table_info(meeting_answers)')}
+            for column in ('duration_ms','input_bytes','output_bytes'):
+                if column not in answer_columns:
+                    conn.execute(f'ALTER TABLE meeting_answers ADD COLUMN {column} INTEGER')
+            conn.execute('PRAGMA user_version=18')
+    if version < 19:
+        with conn:
+            columns={row[1] for row in conn.execute('PRAGMA table_info(embeddings_chunks)')}
+            if 'generation' not in columns:
+                conn.execute("ALTER TABLE embeddings_chunks ADD COLUMN generation TEXT NOT NULL DEFAULT 'legacy'")
+            conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_embeddings_chunks_generation_session
+              ON embeddings_chunks(generation,session_id);
+            CREATE TABLE IF NOT EXISTS embedding_index_generations (
+              generation TEXT PRIMARY KEY, table_name TEXT NOT NULL UNIQUE,
+              dimensions INTEGER NOT NULL, created_at INTEGER NOT NULL
+            );
+            """)
+            conn.execute('PRAGMA user_version=19')
+    if version < 20:
+        with conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS embedding_index_state (
+              session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+              generation TEXT NOT NULL, fingerprint TEXT NOT NULL,
+              indexed_at INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
+              PRIMARY KEY(session_id,generation)
+            );
+            """)
+            conn.execute('PRAGMA user_version=20')
+    if version < 21:
+        with conn:
+            for table,columns in (
+                ('embeddings_chunks',{'source_spans':"TEXT NOT NULL DEFAULT '[]'"}),
+                ('meeting_answer_sources',{'excerpt_start':'INTEGER','excerpt_end':'INTEGER'}),
+                ('meeting_answers',{'usage_json':"TEXT NOT NULL DEFAULT '{}'"})):
+                existing={row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                for name,kind in columns.items():
+                    if name not in existing: conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {kind}')
+            conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
     return conn
 
 

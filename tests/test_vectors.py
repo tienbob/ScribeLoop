@@ -118,3 +118,36 @@ def test_multiple_chunks_keep_distinct_ids_and_metadata(conn):
     assert len({hit["id"] for hit in hits}) == 3
     assert hits[0]["segment_ids"] == ["seg0"]
     assert [hit["distance"] for hit in hits] == sorted(hit["distance"] for hit in hits)
+
+
+def test_vector_scope_is_enforced_before_results_return(conn):
+    idx = SqliteVecIndex(conn, dim=DIM, generation='provider:model:4:l2:v1')
+    idx.add("s1",0,1,["one"],"nearest but outside scope",vec(1,0,0,0))
+    idx.add("s2",0,1,["two"],"allowed",vec(.8,.2,0,0))
+    hits=idx.search(vec(1,0,0,0),k=1,session_ids=['s2'])
+    assert [hit['session_id'] for hit in hits] == ['s2']
+
+
+def test_vector_generations_never_mix_shapes_or_models(conn):
+    first=SqliteVecIndex(conn,dim=4,generation='local:model-a:4:l2:v1')
+    second=SqliteVecIndex(conn,dim=2,generation='remote:model-b:2:l2:v1')
+    first.add('s1',0,1,['one'],'first',vec(1,0,0,0))
+    second.add('s1',0,1,['two'],'second',vec(1,0))
+    assert [row['chunk_text'] for row in first.search(vec(1,0,0,0))] == ['first']
+    assert [row['chunk_text'] for row in second.search(vec(1,0))] == ['second']
+    with pytest.raises(ValueError,match='shape mismatch'):
+        SqliteVecIndex(conn,dim=3,generation='local:model-a:4:l2:v1')
+
+
+def test_conversation_delete_purges_every_registered_vector_generation(conn):
+    from scribeloop_core.storage.sessions import SessionStore
+    first=SqliteVecIndex(conn,dim=4,generation='generation-one')
+    second=SqliteVecIndex(conn,dim=2,generation='generation-two')
+    first.add('s1',0,1,['one'],'first',vec(1,0,0,0))
+    second.add('s1',0,1,['two'],'second',vec(1,0))
+    with conn:
+        conn.execute("UPDATE sessions SET status='completed' WHERE id='s1'")
+    store=SessionStore(conn); store.begin_delete('s1'); store.finish_delete('s1')
+    assert not conn.execute("SELECT 1 FROM embeddings_chunks WHERE session_id='s1'").fetchone()
+    assert not first.search(vec(1,0,0,0))
+    assert not second.search(vec(1,0))

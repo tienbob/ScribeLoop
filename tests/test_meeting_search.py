@@ -7,6 +7,7 @@ import pytest
 from scribeloop_core.api.desktop_contract import DesktopContract
 from scribeloop_core.api.desktop_settings import DesktopSettings
 from scribeloop_core.storage.db import SCHEMA_VERSION, connect, migrate
+from scribeloop_core.storage.embeddings import EmbeddingConfig, pack_embedding
 from scribeloop_core.storage.search import MeetingSearch, _summary_text
 from scribeloop_core.storage.sessions import SessionStore
 
@@ -67,11 +68,16 @@ def test_search_title_summary_accent_filters_and_delete():
     search=MeetingSearch(store)
     # A stale grounded summary is intentionally excluded.
     assert not search.query('Renewal decision')['results']
-    assert search.query('ke hoach')['results'][0]['session_id']==old
+    title_results=search.query('ke hoach')['results']
+    assert title_results[0]['session_id']==old
+    assert [row['source_type'] for row in title_results]==['title']
     assert not search.query('ngan sach',date_from=1_700_000_000_000)['results']
     assert search.query('Alice',meeting_id=new)['results']
+    store.rename_conversation(old,'Kế hoạch năm')
+    assert not search.query('quý')['results']
+    assert [row['source_type'] for row in search.query('ke hoach nam')['results']]==['title']
     store.begin_delete(old); store.finish_delete(old)
-    assert not search.query('ke hoach')['results']
+    assert not search.query('ke hoach nam')['results']
     if search.fts:
         assert not conn.execute("SELECT rowid FROM search_documents_fts WHERE search_documents_fts MATCH 'ke'").fetchall()
 
@@ -93,6 +99,28 @@ def test_summary_search_text_excludes_internal_ids_and_citations():
     value={'overview':{'id':'private-node-id','text':'The launch is approved',
                        'citation_ids':['private-citation-id']},'decision_id':'internal'}
     assert _summary_text(value) == 'The launch is approved'
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_retrieves_vietnamese_with_english_question_and_keeps_scope():
+    conn=migrate(connect(':memory:')); store=SessionStore(conn)
+    relevant=meeting(store,'Thiết kế',['Ứng dụng được nhắc đến như một trợ lý ghi chú cuộc họp'])
+    outside=meeting(store,'Other',['Ứng dụng cũng được nhắc ở đây'])
+    class FakeMultilingual:
+        async def embed(self,texts):
+            values=[]
+            for text in texts:
+                vector=[0.0]*32
+                vector[0]=1 if ('how did the app' in text.casefold() or 'trợ lý ghi chú' in text.casefold()) else .1
+                vector[1]=1 if 'cũng được nhắc' in text.casefold() else 0
+                values.append(pack_embedding(vector,32))
+            return values
+    config=EmbeddingConfig('Custom','http://localhost:1234/v1','test-multilingual',32)
+    result=await MeetingSearch(store,embedding_config=config,embedder=FakeMultilingual()).query_async(
+        'How did the app work in the conversation?',meeting_id=relevant,match_all=False)
+    assert result['retrieval_mode']=='hybrid'
+    assert result['results'] and result['results'][0]['session_id']==relevant
+    assert all(row['session_id'] != outside for row in result['results'])
 
 
 @pytest.mark.asyncio

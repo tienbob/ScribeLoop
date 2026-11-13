@@ -327,7 +327,9 @@ async def test_five_minute_encrypted_tracks_preserve_offset_and_samples(setup):
                 count += frame.pcm.size
             assert count == 300 * 16000
     runner = RecordingRunner(store, audio, lambda *a, **kw: source, publish,
-                             transcriber=verify, queue_size=4096)
+                             # This accelerated fixture emits exactly 6,000 frames.
+                             # Overflow has its own test; disk speed must not decide this one.
+                             transcriber=verify, queue_size=6000)
     session = runner.start(None, {}, 'Generated five minutes', consent_confirmed=True)
     await asyncio.wait_for(runner.task, 15)
     assert store.get(session['id'])['status'] == 'completed'

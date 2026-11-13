@@ -8,6 +8,7 @@ from collections import OrderedDict
 from uuid import uuid4
 
 from ..llm.rolling import RollingNotes
+from ..storage.search_work import SearchWork
 
 PROTOCOL = 2
 ID = re.compile(r'^[0-9a-f]{32}$')
@@ -150,11 +151,60 @@ class DesktopContract:
                     (recording_task and not recording_task.done())):
                 raise ValueError('Search is available after setup and while recording is idle')
             from ..storage.search import MeetingSearch
-            result=await MeetingSearch(app.state.store).query_async(command.get('query'),
+            result=await MeetingSearch(app.state.store,
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).query_async(command.get('query'),
                 limit=command.get('limit',50),offset=command.get('offset',0),
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))
             return {'type':'search_results',**result}
+        if action == 'ask_evidence':
+            allowed={'action','question','scope','current_id','selected_ids'}
+            if set(command)-allowed:
+                raise ValueError('Invalid Ask request')
+            selected=command.get('selected_ids')
+            if selected is not None and (not isinstance(selected,list) or
+                    any(not isinstance(value,str) or not ID.fullmatch(value) for value in selected)):
+                raise ValueError('Invalid Ask meetings')
+            current=command.get('current_id')
+            if current is not None and (not isinstance(current,str) or not ID.fullmatch(current)):
+                raise ValueError('Invalid current meeting')
+            recorder=app.state.recording
+            recording_task=getattr(recorder,'task',None)
+            if (not app.state.store.agreement()['accepted'] or active_id or summary_id or
+                    (recording_task and not recording_task.done())):
+                raise ValueError('Ask is available after setup and while recording is idle')
+            from ..llm.meeting_ask import AskScope, MeetingEvidence
+            self.settings.value.require_hybrid_for_ask()
+            scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
+                                   selected_ids=selected)
+            result=await MeetingEvidence(app.state.store,
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).retrieve(command.get('question'),scope)
+            return {'type':'ask_evidence',**result}
+        if action == 'ask_history':
+            allowed={'action','scope','current_id','selected_ids','limit'}
+            if set(command)-allowed:
+                raise ValueError('Invalid Ask history request')
+            selected=command.get('selected_ids')
+            if selected is not None and (not isinstance(selected,list) or
+                    any(not isinstance(value,str) or not ID.fullmatch(value) for value in selected)):
+                raise ValueError('Invalid Ask meetings')
+            current=command.get('current_id')
+            if current is not None and (not isinstance(current,str) or not ID.fullmatch(current)):
+                raise ValueError('Invalid current meeting')
+            if not app.state.store.agreement()['accepted']:
+                raise ValueError('Ask is available after setup')
+            from ..llm.meeting_ask import AskScope, MeetingAsk
+            self.settings.value.require_hybrid_for_ask()
+            scope=AskScope.resolve(app.state.store,command.get('scope'),current_id=current,
+                                   selected_ids=selected)
+            result=await MeetingAsk(app.state.store,summary_provider,
+                embedding_config=self.settings.value.embedding(),
+                work=SearchWork(authorize=app.state.store.search_authorization())).history(
+                scope,limit=command.get('limit',50))
+            return {'type':'ask_history','scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},
+                    'answers':result}
         if action == 'meeting_page':
             return self.meeting(app,command,summary_provider)
         if action in {'audio_info','audio_window'}:

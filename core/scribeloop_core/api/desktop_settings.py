@@ -23,6 +23,12 @@ SUMMARY_PRESETS = {
     'LM Studio': 'http://localhost:1234/v1',
 }
 OLLAMA_ENDPOINT = 'http://localhost:11434/v1'
+EMBEDDING_PRESETS = {
+    'OpenAI': 'https://api.openai.com/v1',
+    'Gemini': 'https://generativelanguage.googleapis.com/v1beta',
+    'Ollama': 'http://localhost:11434/v1',
+    'LM Studio': 'http://localhost:1234/v1',
+}
 
 
 class Settings(BaseModel):
@@ -57,6 +63,15 @@ class Settings(BaseModel):
     local_cleanup_key: str = Field(default='', max_length=2048, repr=False)
     local_cleanup_keys: dict[str, str] = Field(default_factory=dict, repr=False)
     local_cleanup_models: dict[str, str] = Field(default_factory=dict, repr=False)
+    search_mode: Literal['keyword', 'hybrid'] = 'keyword'
+    embedding_provider: Literal['Local', 'OpenAI', 'Gemini', 'Ollama', 'LM Studio', 'Custom'] = 'Gemini'
+    embedding_endpoint: str = Field(default=EMBEDDING_PRESETS['Gemini'], max_length=500)
+    embedding_model: str = Field(default='gemini-embedding-001', min_length=1, max_length=160)
+    embedding_dimensions: int = Field(default=768, ge=32, le=4096)
+    embedding_key: str = Field(default='', max_length=2048, repr=False)
+    embedding_keys: dict[str, str] = Field(default_factory=dict, repr=False)
+    embedding_key_destinations: dict[str,str] = Field(default_factory=dict)
+    embedding_models: dict[str, str] = Field(default_factory=dict, repr=False)
 
     @field_validator('vocabulary')
     @classmethod
@@ -81,14 +96,14 @@ class Settings(BaseModel):
             raise ValueError('Unsupported duration')
         return value
 
-    @field_validator('summary_key', 'deepgram_key', 'assemblyai_key', 'local_cleanup_key')
+    @field_validator('summary_key', 'deepgram_key', 'assemblyai_key', 'local_cleanup_key', 'embedding_key')
     @classmethod
     def secret_valid(cls, value):
         if value and (not value.isascii() or any(c.isspace() for c in value)):
             raise ValueError('Invalid API key')
         return value
 
-    @field_validator('summary_keys', 'local_cleanup_keys')
+    @field_validator('summary_keys', 'local_cleanup_keys', 'embedding_keys')
     @classmethod
     def summary_keys_valid(cls, value):
         """Per-provider saved keys; switching providers restores the matching one."""
@@ -119,6 +134,22 @@ class Settings(BaseModel):
                 if isinstance(name, str) and len(name) <= 80
                 and isinstance(model, str) and len(model) <= 128
                 and not any(ord(c) < 32 for c in model)}
+
+    @field_validator('embedding_models')
+    @classmethod
+    def embedding_models_valid(cls, value):
+        if not isinstance(value, dict) or len(value) > 8:
+            raise ValueError('Invalid saved embedding models')
+        return {name:model for name,model in value.items()
+                if isinstance(name,str) and len(name) <= 80 and isinstance(model,str)
+                and 1 <= len(model) <= 160 and not any(ord(c) < 32 for c in model)}
+
+    @field_validator('embedding_key_destinations')
+    @classmethod
+    def embedding_key_destinations_valid(cls,value):
+        if len(value)>8 or any(len(name)>80 or len(endpoint)>500 for name,endpoint in value.items()):
+            raise ValueError('Invalid saved embedding destinations')
+        return value
 
     @field_validator('local_cleanup_provider')
     @classmethod
@@ -200,6 +231,33 @@ class Settings(BaseModel):
             'SUMMARY_BASE_URL': self.summary_endpoint, 'SUMMARY_MODEL': self.summary_model,
             'SUMMARY_PROVIDER': self.summary_provider,'SUMMARY_INSTRUCTIONS':self.summary_instructions})
 
+    def embedding(self):
+        """Return the selected immutable vector-shape contract."""
+        if self.search_mode != 'hybrid':
+            return None
+        from ..storage.embeddings import EmbeddingConfig
+        endpoint = '' if self.embedding_provider == 'Local' else (
+            self.embedding_endpoint.strip() or EMBEDDING_PRESETS.get(self.embedding_provider,''))
+        return EmbeddingConfig(provider=self.embedding_provider,endpoint=endpoint,
+            model=self.embedding_model.strip(),dimensions=self.embedding_dimensions,
+            api_key=self.effective_embedding_key())
+
+    def require_hybrid_for_ask(self):
+        if self.search_mode != 'hybrid':
+            raise ValueError('Enable Hybrid search in Settings → Models → Meeting search to use Ask')
+
+    def effective_embedding_key(self):
+        if self.embedding_provider == 'Local':
+            return ''
+        if self.embedding_key:
+            return self.embedding_key
+        # Reuse only the standard Gemini account destination; custom endpoints
+        # and other providers cannot inherit a notes credential.
+        if (self.embedding_provider == 'Gemini' and self.embedding_endpoint.rstrip('/') == EMBEDDING_PRESETS['Gemini'] and
+                self.summary_provider == 'Gemini' and self.summary_endpoint.rstrip('/') == SUMMARY_PRESETS['Gemini']):
+            return self.summary_key
+        return ''
+
     @staticmethod
     def _key_preview(key):
         return ((key[:4] if len(key) > 4 else '')+'********') if key else ''
@@ -211,7 +269,7 @@ class Settings(BaseModel):
                 local = self.local_transcription()
         cleanup = self.cleanup()
         return {**self.model_dump(exclude={'summary_key','deepgram_key','assemblyai_key','summary_keys',
-                    'local_cleanup_key','local_cleanup_keys'}),
+                    'local_cleanup_key','local_cleanup_keys','embedding_key','embedding_keys'}),
                 'language_hints':self.language_hints or (list(AUTO_LANGUAGES) if self.language=='auto' else [self.language]),
                 'supported_language_hints':HINT_LANGUAGE_NAMES,
                 'transcription_configured': bool(self.assemblyai_key if self.transcription_engine == 'assemblyai' else self.deepgram_key),
@@ -227,6 +285,17 @@ class Settings(BaseModel):
                 'summary_models': dict(self.summary_models),
                 'local_cleanup_key_preview': self._key_preview(self.local_cleanup_keys.get(self.local_cleanup_provider,'')),
                 'local_cleanup_key_previews': {name:self._key_preview(key) for name,key in self.local_cleanup_keys.items()},
+                'embedding_key_preview': self._key_preview(self.effective_embedding_key()),
+                'embedding_key_source': ('embedding' if self.embedding_key and self.embedding_provider!='Local' else
+                    'notes' if self.effective_embedding_key() else 'none'),
+                'embedding_key_previews': {name:self._key_preview(key) for name,key in self.embedding_keys.items()
+                    if self.embedding_key_destinations.get(name)==(
+                        self.embedding_endpoint.rstrip('/') if name=='Custom' else EMBEDDING_PRESETS.get(name,''))},
+                'gemini_embedding_shared_key_preview':self._key_preview(
+                    self.summary_key if self.summary_provider=='Gemini' and self.summary_endpoint.rstrip('/')==SUMMARY_PRESETS['Gemini']
+                    else ''),
+                'embedding_models': dict(self.embedding_models),
+                'embedding_presets': EMBEDDING_PRESETS,
                 'summary_configured': self.summary().configured,
                 'summary_presets': SUMMARY_PRESETS}
 
@@ -263,6 +332,15 @@ class DesktopSettings:
                     if isinstance(models,dict) else {value.get('summary_provider') or 'OpenAI': value['summary_model']}
             return Settings.model_validate(
                 {'detection_enabled': self.default_detection_enabled, **value})
+            if value.get('embedding_key'):
+                keys = value.get('embedding_keys')
+                value['embedding_keys'] = {**keys, value.get('embedding_provider') or 'Local': value['embedding_key']} \
+                    if isinstance(keys,dict) else {value.get('embedding_provider') or 'Local': value['embedding_key']}
+            if value.get('embedding_model'):
+                models = value.get('embedding_models')
+                value['embedding_models'] = {**models, value.get('embedding_provider') or 'Local': value['embedding_model']} \
+                    if isinstance(models,dict) else {value.get('embedding_provider') or 'Local': value['embedding_model']}
+            return Settings.model_validate(value)
         except Exception:  # noqa: BLE001 - native errors can include secret data
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None
 
@@ -325,6 +403,29 @@ class DesktopSettings:
             # Provider switch without an explicit model: restore that provider's
             # saved model so switching providers needs no re-entry.
             patch['local_cleanup_model'] = self.value.local_cleanup_models.get(cleanup_provider,'')
+        embedding_provider = patch.get('embedding_provider', self.value.embedding_provider)
+        if isinstance(embedding_provider,str) and embedding_provider in EMBEDDING_PRESETS and 'embedding_provider' in patch:
+            patch['embedding_endpoint'] = EMBEDDING_PRESETS[embedding_provider]
+        if embedding_provider == 'Local' and 'embedding_provider' in patch:
+            patch['embedding_endpoint'] = ''
+            patch['embedding_key'] = ''
+        if ('embedding_model' not in patch and isinstance(embedding_provider,str)
+                and embedding_provider != self.value.embedding_provider):
+            patch['embedding_model'] = self.value.embedding_models.get(embedding_provider,
+                'granite-embedding-97m-multilingual-r2' if embedding_provider == 'Local' else
+                'gemini-embedding-001' if embedding_provider == 'Gemini' else
+                'text-embedding-3-small' if embedding_provider == 'OpenAI' else '')
+        if embedding_provider != self.value.embedding_provider and 'embedding_dimensions' not in patch:
+            patch['embedding_dimensions'] = {'Local':384,'Gemini':768,'OpenAI':1536}.get(embedding_provider,768)
+        embedding_destination = patch.get('embedding_endpoint', self.value.embedding_endpoint)
+        if 'embedding_key' not in patch:
+            if isinstance(embedding_provider,str) and embedding_provider != self.value.embedding_provider:
+                saved_destination=self.value.embedding_key_destinations.get(embedding_provider)
+                patch['embedding_key'] = (self.value.embedding_keys.get(embedding_provider,'')
+                    if saved_destination==embedding_destination.rstrip('/') else '')
+            elif (isinstance(embedding_destination,str) and
+                    embedding_destination.rstrip('/') != self.value.embedding_endpoint.rstrip('/')):
+                patch['embedding_key'] = ''
         candidate = Settings.model_validate(self.value.model_dump() | patch)
         if candidate.summary_key and candidate.summary_keys.get(candidate.summary_provider) != candidate.summary_key:
             # Remember the key under its provider so later switches restore it.
@@ -343,6 +444,27 @@ class DesktopSettings:
             # Remember the cleanup model under its provider too.
             candidate = candidate.model_copy(update={'local_cleanup_models':
                 {**candidate.local_cleanup_models, candidate.local_cleanup_provider: cleanup_model}})
+        if (candidate.search_mode=='hybrid' and candidate.embedding_provider=='Gemini' and
+                candidate.embedding_endpoint.rstrip('/')==EMBEDDING_PRESETS['Gemini'] and not candidate.embedding_key):
+            key=candidate.effective_embedding_key()
+            if not key and self.value.search_mode=='hybrid' and self.value.embedding_provider=='Gemini':
+                key=self.value.effective_embedding_key()
+            if key:
+                # Once enabled, retain the embedding credential independently
+                # so changing the notes provider cannot clear working search.
+                candidate=candidate.model_copy(update={'embedding_key':key})
+        if candidate.embedding_key and candidate.embedding_keys.get(candidate.embedding_provider) != candidate.embedding_key:
+            candidate = candidate.model_copy(update={'embedding_keys':
+                {**candidate.embedding_keys,candidate.embedding_provider:candidate.embedding_key}})
+        if candidate.embedding_key:
+            candidate=candidate.model_copy(update={'embedding_key_destinations':
+                {**candidate.embedding_key_destinations,candidate.embedding_provider:candidate.embedding_endpoint.rstrip('/')}})
+        if candidate.embedding_models.get(candidate.embedding_provider) != candidate.embedding_model:
+            candidate = candidate.model_copy(update={'embedding_models':
+                {**candidate.embedding_models,candidate.embedding_provider:candidate.embedding_model}})
+        if candidate.search_mode == 'hybrid' and candidate.embedding_provider != 'Local' and not candidate.embedding_endpoint.strip():
+            raise ValueError('Enter an embedding endpoint')
+        candidate.embedding()  # Validate destination and fixed vector shape before saving.
         # Validate URL without a paid request; blank keys are allowed for staged setup.
         probe = candidate.model_copy(update={'summary_key': candidate.summary_key or 'validation-only'})
         if not probe.summary().configured:

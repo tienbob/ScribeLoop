@@ -8,7 +8,7 @@ import pytest
 from scribeloop_core.capture.source import AudioFrame
 from scribeloop_core.pipeline.recording import RecordingRunner
 from scribeloop_core.storage.audio import MAGIC, RECORD, AudioIntegrityError, SessionAudioStore
-from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.db import SCHEMA_VERSION, connect, migrate
 from scribeloop_core.storage.sessions import SessionStore
 
 
@@ -215,7 +215,7 @@ def test_v1_migration_preserves_existing_session(tmp_path):
     conn.commit()
     migrate(conn)
     migrate(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 16
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
     assert conn.execute("SELECT title FROM sessions WHERE id='legacy'").fetchone()[0] == 'Keep me'
     conn.close()
 

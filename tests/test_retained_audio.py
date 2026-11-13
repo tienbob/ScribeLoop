@@ -194,7 +194,9 @@ def test_api_startup_expiry_archive_and_playback_do_not_call_cloud(tmp_path,requ
     with TestClient(app,base_url='http://127.0.0.1') as client, connection(client) as ws:
         async def await_expiry():
             async with timeout(3):
-                while app.state.audio.status(expired)['available']:
+                # File deletion precedes the committed expiry marker and lease release.
+                while (app.state.audio.status(expired)['expired_at'] is None or
+                       app.state.audio.busy):
                     await asyncio.sleep(.01)
         client.portal.call(await_expiry)
         ws.send_text(token)
