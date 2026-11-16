@@ -34,7 +34,7 @@ jobs:
           "$(brew --prefix python@3.11)/bin/python3.11" -m venv "$RUNNER_TEMP/scribeloop-ci"
           echo "$RUNNER_TEMP/scribeloop-ci/bin" >> "$GITHUB_PATH"
       - name: Install (core + dev + portable security; native SQLCipher optional)
-        run: pip install -e ".[dev,security]" pytest-timeout==2.4.0
+        run: pip install -e ".[dev,security]" pytest-timeout==2.4.0 pip-audit==2.10.1 bandit==1.9.4
       - name: Real SQLCipher integration on Linux
         if: runner.os == 'Linux'
         run: |
@@ -44,6 +44,12 @@ jobs:
         run: python -c "import sqlite3; c=sqlite3.connect(':memory:'); assert hasattr(c, 'enable_load_extension'); c.enable_load_extension(True); c.enable_load_extension(False)"
       - name: Lint
         run: ruff check core scripts tests
+      - name: Dependency audit
+        run: pip-audit
+      - name: Security scan
+        # Reviewed existing SQL construction/local-only model loading; new findings fail.
+        # See docs/SECURITY_CHECKS.md before updating the baseline.
+        run: bandit -r core -ll -b security/bandit-baseline.json
       - name: Tests
         # Include collection and interpreter/executor shutdown in the watchdog;
         # per-test timeouts alone cannot diagnose a stalled session teardown.

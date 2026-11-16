@@ -6,6 +6,7 @@ transcript files. Keystore access stays in the parent; only PCM crosses the pipe
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
 import sys
@@ -14,8 +15,62 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 
+def _verify_model_integrity(model_path: Path) -> None:
+    """Check a complete, reviewed local file manifest before experimental loading.
+
+    This detects corruption relative to manifest.sha256; a manifest stored beside
+    the weights is not an independent authenticity guarantee or a code sandbox.
+    Review the model and manifest together and keep them read-only while loading.
+    """
+    if model_path.is_symlink() or not model_path.is_dir():
+        raise RuntimeError('MOSS requires a real local model directory')
+    manifest = model_path / 'manifest.sha256'
+    if manifest.is_symlink() or not manifest.is_file() or manifest.stat().st_size > 1_048_576:
+        raise RuntimeError('MOSS requires a regular manifest.sha256 under 1 MiB')
+    expected: dict[str, str] = {}
+    for line in manifest.read_text(encoding='utf-8').splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2 or len(parts[0]) != 64 or any(c not in '0123456789abcdefABCDEF' for c in parts[0]):
+            raise RuntimeError('Invalid MOSS SHA-256 manifest entry')
+        digest, rel = parts
+        rel = rel.strip().removeprefix('*')
+        if (not rel or '\\' in rel or Path(rel).is_absolute()
+                or any(part in {'', '.', '..'} for part in rel.split('/'))
+                or rel == 'manifest.sha256' or rel in expected):
+            raise RuntimeError('Invalid or duplicate MOSS manifest path')
+        expected[rel] = digest.lower()
+    if not expected:
+        raise RuntimeError('Empty MOSS manifest')
+    actual_files = {}
+    for path in model_path.rglob('*'):
+        if path.is_symlink():
+            raise RuntimeError('MOSS model symlinks are not allowed')
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise RuntimeError('MOSS model entries must be regular files')
+        rel = path.relative_to(model_path).as_posix()
+        if rel != 'manifest.sha256':
+            actual_files[rel] = path
+    if set(actual_files) != set(expected):
+        raise RuntimeError('MOSS manifest must cover every model file exactly')
+    for rel, path in actual_files.items():
+        digest = hashlib.sha256()
+        with path.open('rb') as source:
+            for chunk in iter(lambda: source.read(1_048_576), b''):
+                digest.update(chunk)
+        if digest.hexdigest() != expected[rel]:
+            raise RuntimeError(f'MOSS model file hash mismatch for {rel}')
+
+
 def main():
     import resource
+
+    root = Path(__file__).resolve().parents[3]
+    model_path = root / 'models/MOSS-Transcribe-Diarize'
+    _verify_model_integrity(model_path)
 
     import numpy as np
     import torch
@@ -28,14 +83,13 @@ def main():
         raise RuntimeError('This local MOSS profile requires Apple MPS; no silent model fallback')
     device = torch.device('mps')
     dtype = torch.float16
-    root = Path(__file__).resolve().parents[3]
-    model_path = root / 'models/MOSS-Transcribe-Diarize'
     # Model/runtime status is diagnostic, never mixed with the response protocol.
     with redirect_stdout(sys.stderr):
         model = AutoModelForCausalLM.from_pretrained(str(model_path), trust_remote_code=True,
             local_files_only=True, dtype=dtype, attn_implementation='sdpa').to(device).eval()
         processor = AutoProcessor.from_pretrained(str(model_path), trust_remote_code=True,
                                                   local_files_only=True)
+
     def decode(payload):
         began = time.monotonic()
         with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
