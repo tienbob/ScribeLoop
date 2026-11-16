@@ -4,7 +4,17 @@ from __future__ import annotations
 from zipfile import ZipFile
 
 import pytest
+from defusedxml.common import EntitiesForbidden
 from scribeloop_core.evaluation.ami import convert_annotations
+
+
+def test_annotation_entities_rejected(tmp_path):
+    path = tmp_path / 'annotations.zip'
+    with ZipFile(path, 'w') as archive:
+        archive.writestr('words/TEST.A.words.xml',
+            '<!DOCTYPE root [<!ENTITY injected "expansion">]><root>&injected;</root>')
+    with ZipFile(path) as archive, pytest.raises(EntitiesForbidden):
+        convert_annotations(archive, 'TEST')
 
 
 def test_manual_annotation_conversion(tmp_path):

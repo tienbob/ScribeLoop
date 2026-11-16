@@ -1,0 +1,484 @@
+{
+  "results": [
+    {
+      "code": "294             ids=scope.meeting_ids\n295             present=self.store.conn.execute('SELECT count(*) FROM sessions WHERE status!=? AND id IN ('+\n296                 ','.join('?' for _ in ids)+')',('deleting',*ids)).fetchone()[0]\n297             if present!=len(ids):\n",
+      "col_offset": 44,
+      "end_col_offset": 103,
+      "filename": "core/scribeloop_core/llm/meeting_ask.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 295,
+      "line_range": [
+        295,
+        296
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "379         params=(limit,) if scope.kind=='all' else (scope_json,limit)\n380         rows=self.store.conn.execute(f'''SELECT thread_id,max(created_at) AS updated_at,\n381             count(*) AS turn_count FROM meeting_answers WHERE {condition}\n382             GROUP BY thread_id ORDER BY updated_at DESC,thread_id LIMIT ?''',\n383             params).fetchall()\n",
+      "col_offset": 37,
+      "end_col_offset": 76,
+      "filename": "core/scribeloop_core/llm/meeting_ask.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 380,
+      "line_range": [
+        380,
+        381,
+        382
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "87     with redirect_stdout(sys.stderr):\n88         model = AutoModelForCausalLM.from_pretrained(str(model_path), trust_remote_code=True,\n89             local_files_only=True, dtype=dtype, attn_implementation='sdpa').to(device).eval()\n90         processor = AutoProcessor.from_pretrained(str(model_path), trust_remote_code=True,\n",
+      "col_offset": 16,
+      "end_col_offset": 75,
+      "filename": "core/scribeloop_core/pipeline/moss_worker.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 494,
+        "link": "https://cwe.mitre.org/data/definitions/494.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Unsafe Hugging Face Hub download without revision pinning in from_pretrained()",
+      "line_number": 88,
+      "line_range": [
+        88,
+        89
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b615_huggingface_unsafe_download.html",
+      "test_id": "B615",
+      "test_name": "huggingface_unsafe_download"
+    },
+    {
+      "code": "89             local_files_only=True, dtype=dtype, attn_implementation='sdpa').to(device).eval()\n90         processor = AutoProcessor.from_pretrained(str(model_path), trust_remote_code=True,\n91                                                   local_files_only=True)\n92 \n",
+      "col_offset": 20,
+      "end_col_offset": 72,
+      "filename": "core/scribeloop_core/pipeline/moss_worker.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 494,
+        "link": "https://cwe.mitre.org/data/definitions/494.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Unsafe Hugging Face Hub download without revision pinning in from_pretrained()",
+      "line_number": 90,
+      "line_range": [
+        90,
+        91
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b615_huggingface_unsafe_download.html",
+      "test_id": "B615",
+      "test_name": "huggingface_unsafe_download"
+    },
+    {
+      "code": "108                 for table in ('embeddings_chunks','grounded_summaries','summary_jobs','summaries'):\n109                     self.conn.execute(f'DELETE FROM {table} WHERE session_id=?',(sid,))\n110                 if self.store.get(sid).get('capture',{}).get('auto_title'):\n",
+      "col_offset": 38,
+      "end_col_offset": 79,
+      "filename": "core/scribeloop_core/speakers/registry.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 109,
+      "line_range": [
+        109
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "247         for action, references in [('INSERT',('NEW',)),('DELETE',('OLD',)),('UPDATE',('OLD','NEW'))]:\n248             changes=''.join(f'''INSERT INTO summary_source_versions(session_id,bucket,generation)\n249                 VALUES ({ref}.session_id,{ref}.start_ms/900000,1)\n250                 ON CONFLICT(session_id,bucket) DO UPDATE SET generation=generation+1;'''\n251                 for ref in references)\n",
+      "col_offset": 28,
+      "end_col_offset": 88,
+      "filename": "core/scribeloop_core/storage/db.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 248,
+      "line_range": [
+        248,
+        249,
+        250
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "256                 condition=' OR '.join(f'session_id={ref}.session_id' for ref in references)\n257                 conn.executescript(f'''CREATE TRIGGER IF NOT EXISTS summary_{table}_{action.lower()}\n258                     AFTER {action} ON {table} BEGIN\n259                     UPDATE summary_source_versions SET generation=generation+1 WHERE {condition}; END;''')\n260         conn.executescript('''CREATE TRIGGER IF NOT EXISTS summary_person_name_update\n",
+      "col_offset": 35,
+      "end_col_offset": 105,
+      "filename": "core/scribeloop_core/storage/db.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 257,
+      "line_range": [
+        257,
+        258,
+        259
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "143                 fields=tuple(doc)\n144                 cur=self.conn.execute(f\"INSERT INTO search_documents ({','.join(fields)}) VALUES ({','.join('?' for _ in fields)})\",\n145                                       tuple(doc.values()))\n",
+      "col_offset": 38,
+      "end_col_offset": 131,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 144,
+      "line_range": [
+        144
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "168         where=(' WHERE id IN ('+','.join('?' for _ in scope)+')') if scope is not None else ''\n169         for index,row in enumerate(self.conn.execute('SELECT id FROM sessions'+where+' ORDER BY started_at DESC,id DESC',scope or ())):\n170             self.work.check()\n",
+      "col_offset": 53,
+      "end_col_offset": 78,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 169,
+      "line_range": [
+        169
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "281             with self.conn:\n282                 self.conn.execute(f'DELETE FROM {index._table} WHERE id IN '\n283                     '(SELECT rowid FROM embeddings_chunks WHERE session_id=? AND generation=?)',\n284                     (session_id,config.generation))\n",
+      "col_offset": 34,
+      "end_col_offset": 95,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 282,
+      "line_range": [
+        282,
+        283
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "349             if date_to is not None: constraints.append('started_at<?'); args.append(date_to)\n350             rows=self.conn.execute(f'SELECT * FROM search_documents WHERE id IN ({placeholders})'+\n351                 ((' AND '+' AND '.join(constraints)) if constraints else ''),args).fetchall()\n",
+      "col_offset": 35,
+      "end_col_offset": 97,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 350,
+      "line_range": [
+        350
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "409             match=operator.join('\"'+term.replace('\"','\"\"')+'\"*' for term in terms[:12])\n410             sql=('SELECT d.*,bm25(search_documents_fts,1.0,2.5,1.5) AS score '\n411                  'FROM search_documents_fts JOIN search_documents d ON d.rowid=search_documents_fts.rowid '\n412                  'WHERE search_documents_fts MATCH ?'+clause+\n413                  \" ORDER BY score,CASE d.source_type WHEN 'title' THEN 0 WHEN 'transcript' THEN 1 ELSE 2 END,d.started_at DESC LIMIT ? OFFSET ?\")\n",
+      "col_offset": 17,
+      "end_col_offset": 53,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "LOW",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 410,
+      "line_range": [
+        410,
+        411,
+        412
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "417             # The fallback is deliberately bounded and reports itself as basic.\n418             rows=[r for r in self.conn.execute('SELECT d.*,0.0 AS score FROM search_documents d WHERE 1=1'+clause+\n419                                                 ' ORDER BY d.started_at DESC LIMIT 5000',args)\n",
+      "col_offset": 47,
+      "end_col_offset": 106,
+      "filename": "core/scribeloop_core/storage/search.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 418,
+      "line_range": [
+        418
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "205             row['local_speaker_id'] = self._speaker(session_id,stream,chunk.get('speaker_key'))\n206             self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('\n207                               + ','.join('?' for _ in row) + ')', tuple(row.values()))\n",
+      "col_offset": 30,
+      "end_col_offset": 54,
+      "filename": "core/scribeloop_core/storage/sessions.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 206,
+      "line_range": [
+        206
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "590                        'local_speaker_id':self._speaker(session_id,chunk['stream'],chunk.get('speaker_key'))}\n591                 self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('\n592                                   + ','.join('?' for _ in row) + ')', tuple(row.values()))\n",
+      "col_offset": 34,
+      "end_col_offset": 58,
+      "filename": "core/scribeloop_core/storage/sessions.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 591,
+      "line_range": [
+        591
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "732                     'local_speaker_id':self._speaker(session_id,stream,chunk.get('speaker_key'))}\n733                 self.conn.execute('INSERT INTO segments (' + ','.join(row) + ') VALUES ('\n734                     + ','.join('?' for _ in row) + ')', tuple(row.values()))\n",
+      "col_offset": 34,
+      "end_col_offset": 58,
+      "filename": "core/scribeloop_core/storage/sessions.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 733,
+      "line_range": [
+        733
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "807                     raise ValueError('Invalid vector table registry')\n808                 self.conn.execute(f'DELETE FROM {table} WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',(session_id,))\n809             self.conn.execute('DELETE FROM segment_links WHERE online_segment_id IN '\n",
+      "col_offset": 34,
+      "end_col_offset": 125,
+      "filename": "core/scribeloop_core/storage/sessions.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 808,
+      "line_range": [
+        808
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "816                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'\n817                 self.conn.execute(f'DELETE FROM {table} WHERE {column}=?', (session_id,))\n818             self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))\n",
+      "col_offset": 34,
+      "end_col_offset": 73,
+      "filename": "core/scribeloop_core/storage/sessions.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 817,
+      "line_range": [
+        817
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "110         self._conn.execute(\n111             f\"INSERT INTO {self._table}(id, vec) VALUES (?, ?)\",\n112             (cur.lastrowid, vector),\n",
+      "col_offset": 12,
+      "end_col_offset": 63,
+      "filename": "core/scribeloop_core/storage/vectors.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 111,
+      "line_range": [
+        111
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "148             rows=self._conn.execute(\n149                 'SELECT m.id,m.session_id,m.chunk_start_ms,m.chunk_end_ms,m.segment_ids,m.chunk_text,'\n150                 'vec_distance_L2(m.vec,?) AS distance,m.source_spans FROM embeddings_chunks m WHERE '+\n151                 ' AND '.join(constraints)+' ORDER BY distance,m.session_id,m.chunk_start_ms,m.rowid LIMIT ?',args).fetchall()\n152             return self._hits(rows)\n",
+      "col_offset": 16,
+      "end_col_offset": 101,
+      "filename": "core/scribeloop_core/storage/vectors.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 149,
+      "line_range": [
+        149,
+        150,
+        151
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "155         rows = self._conn.execute(\n156             \"SELECT m.id, m.session_id, m.chunk_start_ms, m.chunk_end_ms,\"\n157             \" m.segment_ids, m.chunk_text, v.distance,m.source_spans\"\n158             \" FROM (\"\n159             f\"   SELECT id, distance FROM {self._table}\"\n160             \"  WHERE vec MATCH ? AND k = ? ORDER BY distance\"\n161             \" ) v JOIN embeddings_chunks m ON m.rowid = v.id WHERE m.generation=?\"\n162             \" ORDER BY v.distance LIMIT ?\",\n163             args,\n",
+      "col_offset": 12,
+      "end_col_offset": 42,
+      "filename": "core/scribeloop_core/storage/vectors.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 156,
+      "line_range": [
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "193             self._conn.executemany(\n194                 f\"DELETE FROM {self._table} WHERE id = ?\", ((rowid,) for rowid in rowids)\n195             )\n",
+      "col_offset": 16,
+      "end_col_offset": 57,
+      "filename": "core/scribeloop_core/storage/vectors.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 194,
+      "line_range": [
+        194
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "211             raise ValueError('Invalid vector table registry')\n212         conn.execute(f'DELETE FROM {table} WHERE id IN (SELECT rowid FROM embeddings_chunks WHERE session_id=?)',\n213                      (session_id,))\n",
+      "col_offset": 21,
+      "end_col_offset": 112,
+      "filename": "core/scribeloop_core/storage/vectors.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 212,
+      "line_range": [
+        212
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    }
+  ]
+}

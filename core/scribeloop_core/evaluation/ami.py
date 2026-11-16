@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from zipfile import ZipFile
+
+from defusedxml import ElementTree as ET
 
 NITE = "{http://nite.sourceforge.net/}"
 
