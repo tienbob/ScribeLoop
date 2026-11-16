@@ -14,7 +14,12 @@ import time
 import unicodedata
 
 from .db import DATABASE_ERRORS
-from .embeddings import CompatibleEmbeddingProvider, GeminiEmbeddingProvider, LocalEmbeddingProvider
+from .embeddings import (
+    CompatibleEmbeddingProvider,
+    GeminiEmbeddingProvider,
+    LocalEmbeddingProvider,
+    embedding_failure,
+)
 from .search_work import SearchAuthorizationError, SearchWork
 from .vectors import SqliteVecIndex
 
@@ -203,6 +208,19 @@ class MeetingSearch:
                            meeting_ids=meeting_ids,person_id=person_id,date_from=date_from,date_to=date_to,
                            match_all=match_all)
 
+    def _eligible_scope(self, scope, person_id, date_from, date_to):
+        """Apply meeting-level constraints before any indexing/provider work."""
+        rows=self.conn.execute('''SELECT s.id FROM sessions s WHERE s.status!='deleting'
+            AND (? IS NULL OR s.started_at>=?) AND (? IS NULL OR s.started_at<?)
+            AND (? IS NULL OR EXISTS (SELECT 1 FROM person_links p WHERE p.session_id=s.id
+                AND p.revision=(SELECT MAX(revision) FROM segments WHERE session_id=s.id)
+                AND p.person_id=?) OR EXISTS (SELECT 1 FROM segments g WHERE g.session_id=s.id
+                AND g.revision=(SELECT MAX(revision) FROM segments WHERE session_id=s.id)
+                AND g.local_speaker_id=?)) ORDER BY s.started_at DESC,s.id''',
+            (date_from,date_from,date_to,date_to,person_id,person_id,person_id))
+        selected=set(scope) if scope is not None else None
+        return [row['id'] for row in rows if selected is None or row['id'] in selected]
+
     async def query_async(self, query: str, *, limit=50, offset=0, meeting_id=None,
                           meeting_ids=None, person_id=None, date_from=None, date_to=None, match_all=True,
                           semantic_query=None,scope_limit=100):
@@ -216,7 +234,19 @@ class MeetingSearch:
             raise ValueError('Invalid scope limit')
         if scope is not None and (not scope or len(scope)>scope_limit or any(not isinstance(s,str) for s in scope)):
             raise ValueError('Invalid meeting scope')
+        if meeting_id and meeting_ids is not None:
+            raise ValueError('Choose one meeting scope')
+        if person_id is not None or date_from is not None or date_to is not None:
+            scope=self._eligible_scope(scope,person_id,date_from,date_to)
+            if not scope:
+                return {'query':query.strip(),'results':[],'next_offset':None,
+                    'index':{'complete':True,'pending':0,'engine':'fts5' if self.fts else 'basic',
+                             'semantic':{'enabled':False,'status':'no_eligible_meetings'}},
+                    'retrieval_mode':'keyword','usage':self.work.public()}
+            meeting_id=None; meeting_ids=scope
+            scope_limit=max(scope_limit,len(scope))
         started=time.monotonic()
+        await self.work.report('preparing')
         status=await self.sync_async(scope)
         self.work.indexing_ms += round((time.monotonic()-started)*1000)
         hybrid=self.embedding_config is not None
@@ -262,8 +292,9 @@ class MeetingSearch:
                                     (row['session_id'],config.generation)).fetchone()
             if not known or known['fingerprint'] != row['fingerprint']:
                 changed.append((row['session_id'],row['fingerprint']))
-        for session_id,fingerprint in changed:
+        for completed,(session_id,fingerprint) in enumerate(changed):
             self.work.check()
+            await self.work.report('indexing',completed,len(changed))
             chunks=self._semantic_chunks(session_id)
             vectors=[]
             for start in range(0,len(chunks),16):
@@ -292,6 +323,7 @@ class MeetingSearch:
                     'fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at,chunk_count=excluded.chunk_count',
                     (session_id,config.generation,fingerprint,int(time.time()*1000),len(chunks)))
             await asyncio.sleep(0)
+        await self.work.report('searching',len(changed),len(changed))
         return {'enabled':True,'status':'ready','generation':config.generation,
                 'provider':config.provider,'model':config.model,'dimensions':config.dimensions,
                 'indexed_meetings':self.conn.execute('SELECT COUNT(*) FROM embedding_index_state WHERE generation=?',
@@ -308,8 +340,8 @@ class MeetingSearch:
             semantic=await self._sync_semantic(scope)
         except SearchAuthorizationError:
             raise
-        except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; disclose keyword-only results
-            semantic={'enabled':False,'status':'embedding_error','message':'Semantic indexing failed. Check the embedding provider and vector dimensions; submit again to retry.'}
+        except Exception as error:  # noqa: BLE001 - sanitize embedding bodies/keys
+            semantic={'enabled':False,'status':'embedding_error','message':embedding_failure(error)}
         finally:
             self.work.indexing_ms += round((time.monotonic()-started)*1000)
         lexical['index']['semantic']=semantic
@@ -318,11 +350,12 @@ class MeetingSearch:
             lexical['retrieval_mode']='keyword'
             return lexical
         try:
+            await self.work.report('searching')
             query_vector=(await self.work.embed(self.embedder,[query.strip()],query=True))[0]
         except SearchAuthorizationError:
             raise
-        except Exception:  # noqa: BLE001 - sanitize embedding bodies/keys; no automatic retry
-            semantic.update(enabled=False,status='embedding_error',message='Semantic query failed. Check the embedding provider and submit again to retry.')
+        except Exception as error:  # noqa: BLE001 - sanitize embedding bodies/keys; no retry
+            semantic.update(enabled=False,status='embedding_error',message=embedding_failure(error))
             lexical['results']=lexical['results'][offset:offset+limit]
             lexical['retrieval_mode']='keyword'
             return lexical

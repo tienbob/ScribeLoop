@@ -127,7 +127,7 @@ class DesktopContract:
             'rolling':RollingNotes(store,summary_provider).latest(sid),
             'budget':RollingNotes(store,summary_provider).public(sid)}
 
-    async def read(self, app, command, summary_provider, active_id, summary_id):
+    async def read(self, app, command, summary_provider, active_id, summary_id, *, work=None):
         action = command.get('action')
         if action == 'desktop_snapshot' and set(command)=={'action'}:
             return self.snapshot(app, summary_provider, active_id, summary_id)
@@ -153,7 +153,7 @@ class DesktopContract:
             from ..storage.search import MeetingSearch
             result=await MeetingSearch(app.state.store,
                 embedding_config=self.settings.value.embedding(),
-                work=SearchWork(authorize=app.state.store.search_authorization())).query_async(command.get('query'),
+                work=work or SearchWork(authorize=app.state.store.search_authorization())).query_async(command.get('query'),
                 limit=command.get('limit',50),offset=command.get('offset',0),
                 meeting_id=command.get('meeting_id'),person_id=command.get('person_id'),
                 date_from=command.get('date_from'),date_to=command.get('date_to'))
@@ -180,7 +180,7 @@ class DesktopContract:
                                    selected_ids=selected)
             result=await MeetingEvidence(app.state.store,
                 embedding_config=self.settings.value.embedding(),
-                work=SearchWork(authorize=app.state.store.search_authorization())).retrieve(command.get('question'),scope)
+                work=work or SearchWork(authorize=app.state.store.search_authorization())).retrieve(command.get('question'),scope)
             return {'type':'ask_evidence',**result}
         if action == 'ask_history':
             allowed={'action','scope','current_id','selected_ids','limit','thread_id','threads_only'}

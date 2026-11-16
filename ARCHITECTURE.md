@@ -1,6 +1,6 @@
 # ScribeLoop — Current architecture
 
-Updated **12 November 2026** after the Search/Ask remediation and code cleanup.
+Updated **16 November 2026** after the Search responsiveness and audit fixes.
 This describes implemented behavior, not release acceptance. Historical research
 and future work are linked separately below.
 
@@ -279,14 +279,27 @@ chosen embedding service. Local embeddings avoid cloud embedding uploads; Ask ma
 still send evidence to a cloud notes provider.
 
 Native Search runs automatically 500 ms after the last query/filter edit, in both
-Keyword and Hybrid modes. There is no Search submit button. Pending edits coalesce
-behind an in-flight request; obsolete results are hidden/discarded. Clearing the
-field or closing Search clears its display without starting another provider call.
+Keyword and Hybrid modes. There is no Search submit button. Editing, clearing or
+closing cancels obsolete work; request IDs prevent late results replacing current
+state. Preparation/search progress, Cancel and explicit Retry preserve query and
+filters. Keyword fallback is labeled when embeddings fail.
+
+Desktop retrieval runs in tracked tasks with a 120-second deadline, leaving the
+command reader available for recording and revocation. Search/evidence and Ask
+share a retrieval lock on the DB owner thread. Recording, settings changes and
+revocation invalidate pending Search jobs before proceeding; a cancellation flag
+and authorization epoch prevent further uploads even if an adapter finishes an
+in-flight request despite cancellation. Embedding responses are streamed with a
+16 MB decoded-body cap and a 60-second total request deadline. Date/person/meeting
+eligibility is resolved before on-demand indexing, so excluded meetings are not
+embedded merely to answer a filtered search.
 
 ```mermaid
 flowchart TD
   Q["Search typing pause / Ask send"] --> Guard["Capture authorization epoch and scope"]
-  Guard --> Sync["Reconcile current transcript, titles and fresh notes"]
+  Guard --> Scope["Resolve eligible meetings before indexing"]
+  Scope --> Job["Cancellable retrieval task · DB owner thread"]
+  Job --> Sync["Reconcile eligible transcript, titles and fresh notes"]
   Sync --> Lex["Keyword retrieval"]
   Sync --> Mode{"Hybrid enabled?"}
   Mode -->|"Yes"| Index["Lazily index changed source excerpts"]

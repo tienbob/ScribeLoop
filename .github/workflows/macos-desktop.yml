@@ -57,3 +57,13 @@ jobs:
             tests/native_streaming_status.swift \
             -o "$RUNNER_TEMP/ScribeLoopStreamingStatus"
           "$RUNNER_TEMP/ScribeLoopStreamingStatus"
+      - name: Verify desktop Search states and control bookkeeping
+        run: |
+          xcrun swiftc -parse-as-library -swift-version 5 -D DESKTOP_AUDIT_TESTS \
+            -target "$(uname -m)-apple-macos13.0" \
+            -module-cache-path "$RUNNER_TEMP/swift-cache" \
+            shell/macos/Desktop/DesktopClient.swift \
+            shell/macos/Desktop/MeetingPlayback.swift \
+            tests/native/DesktopAuditTests.swift \
+            -o "$RUNNER_TEMP/ScribeLoopDesktopAudit"
+          "$RUNNER_TEMP/ScribeLoopDesktopAudit"

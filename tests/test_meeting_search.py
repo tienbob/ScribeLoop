@@ -150,3 +150,36 @@ async def test_async_reconciliation_yields_and_desktop_requires_agreement():
     app.state.recording=None
     allowed=await desktop.read(app,command,desktop.settings.value.summary(),None,None)
     assert allowed['type']=='search_results' and allowed['results']
+
+
+@pytest.mark.parametrize('filter_kind',['date','person','none_eligible'])
+async def test_filters_scope_indexing_before_upload_and_reuse_vectors(filter_kind):
+    conn=migrate(connect(':memory:'));store=SessionStore(conn)
+    try:
+        old=meeting(store,'Excluded',['excluded private old passage'],at=1600000000000)
+        new=meeting(store,'Eligible',['eligible architecture passage'],at=1800000000000)
+        from scribeloop_core.speakers.registry import SpeakerRegistry
+        registry=SpeakerRegistry(store)
+        person=registry.create('Minh')
+        registry.link(new,1,store.segments(new)[0]['local_speaker_id'],person)
+        calls=[]
+        class Embedder:
+            async def embed(self,texts):
+                calls.append(list(texts))
+                return [pack_embedding([1.0]+[0.0]*31,32) for _ in texts]
+        config=EmbeddingConfig('Custom','https://fake.example/v1','test',32,'fake-key')
+        search=MeetingSearch(store,embedding_config=config,embedder=Embedder())
+        filters=({'person_id':person} if filter_kind=='person' else
+                 {'date_from':1900000000000} if filter_kind=='none_eligible' else {'date_from':1750000000000})
+        result=await search.query_async('architecture',**filters)
+        assert all('excluded' not in text for batch in calls for text in batch)
+        assert not conn.execute('SELECT 1 FROM search_index_state WHERE session_id=?',(old,)).fetchone()
+        if filter_kind=='none_eligible':
+            assert not calls and not result['results']
+        else:
+            assert result['results'] and {r['session_id'] for r in result['results']}=={new}
+            assert len(calls)==2  # one document batch and one query
+            calls.clear()
+            await search.query_async('architecture',**filters)
+            assert calls==[['architecture']]  # saved vectors reused
+    finally:conn.close()

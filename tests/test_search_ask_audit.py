@@ -227,7 +227,8 @@ async def test_ollama_metadata_await_cannot_bypass_revocation(store,monkeypatch)
 
 
 @pytest.mark.parametrize('action',['ask_question','search_meetings','ask_evidence'])
-def test_authenticated_revocation_stops_same_and_cross_socket_work(monkeypatch,action):
+@pytest.mark.parametrize('same_socket',[False,True])
+def test_authenticated_revocation_stops_same_and_cross_socket_work(monkeypatch,action,same_socket):
     class Vault:
         value=None
         def get_password(self,*_): return self.value
@@ -266,12 +267,12 @@ def test_authenticated_revocation_stops_same_and_cross_socket_work(monkeypatch,a
                      {'action':action,'question':'architecture','scope':'current','current_id':sid})
             send(one,command)
             assert paused.wait(3)
-            # Ask leaves its reader available; inline Search/evidence use another socket.
-            control=one if action=='ask_question' else two
+            # All retrieval leaves the initiating reader available for revocation.
+            control=one if same_socket else two
             send(control,{'action':'revoke_agreement'})
             assert not receive(control,'agreement')['agreement']['accepted']
             release.set()
-            receive(one,'ask_cancelled' if action=='ask_question' else 'error')
+            receive(one,'ask_cancelled' if action=='ask_question' else 'search_cancelled')
             assert calls==['embedding']
             assert not client.portal.call(lambda:list(app.state.store.conn.execute('SELECT id FROM meeting_answers')))
 

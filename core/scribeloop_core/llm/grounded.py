@@ -128,7 +128,9 @@ def export_markdown(session, rows, revisions, saved_summary):
         if session.get(key) is not None:
             parts.append(f"{label} (UTC): {datetime.fromtimestamp(session[key]/1000,timezone.utc).isoformat()}")
     matching = (saved_summary and not saved_summary['stale'] and
-        saved_summary.get('revision') == revision and saved_summary.get('input_hash') == transcript_hash(rows))
+        saved_summary.get('revision') == revision and
+        (saved_summary['content_hash'] == summary_content_hash(rows)
+         if saved_summary.get('content_hash') else saved_summary.get('input_hash') == transcript_hash(rows)))
     if matching:
         parts += [f"Summary provider: {escape_md(saved_summary['provider'])} · Model: {escape_md(saved_summary['model'])}",
                   summary_markdown(saved_summary['summary'])]

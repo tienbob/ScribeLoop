@@ -612,6 +612,7 @@ struct MeetingSearchView: View {
     @State private var waitingForSearch=false
     private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
     private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
+    private var queryLength:Int { query.trimmingCharacters(in:.whitespacesAndNewlines).unicodeScalars.count }
 
     private func runSearch() {
         guard !core.searchLoading else { return }
@@ -641,7 +642,7 @@ struct MeetingSearchView: View {
             HStack {
                 VStack(alignment:.leading,spacing:4) {
                     Text("Search conversations").font(.system(size:24,weight:.semibold,design:.serif))
-                    Text(remoteEmbeddings ? "Hybrid search · query text and indexed passages use your embedding provider" : "Titles, current transcripts and current notes · searched privately on this Mac")
+                    Text(remoteEmbeddings ? "Hybrid search · only meetings matching your filters are prepared with your embedding provider" : "Titles, current transcripts and current notes · searched privately on this Mac")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -654,11 +655,22 @@ struct MeetingSearchView: View {
                         .textFieldStyle(.plain).font(.title3)
                         .onChange(of:query) { _ in scheduleSearch() }
                     if core.searchLoading || waitingForSearch { ProgressView().controlSize(.small) }
+                    if core.searchLoading {
+                        Button("Cancel") { debounce?.cancel(); searchDue=false; waitingForSearch=false; core.cancelSearch() }
+                            .buttonStyle(.borderless).foregroundStyle(ScribeTheme.accent)
+                    }
                     if !query.isEmpty {
                         Button { query=""; core.search("") } label: { Image(systemName:"xmark.circle.fill") }
                             .buttonStyle(.borderless).accessibilityLabel("Clear search")
                     }
                 }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                if queryLength > 160 {
+                    HStack {
+                        Text(queryLength > 200 ? "Shorten your query to continue." : "Up to 200 characters")
+                        Spacer()
+                        Text("\(queryLength) / 200 characters").monospacedDigit()
+                    }.font(.caption).foregroundStyle(queryLength > 200 ? ScribeTheme.warning : Color.secondary)
+                }
                 HStack {
                     Picker("Meeting",selection:$meetingID) {
                         Text("All meetings").tag("")
@@ -681,8 +693,24 @@ struct MeetingSearchView: View {
                 if query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
                     searchEmpty("Find a conversation","text.magnifyingglass",
                                 "Try a project name, a decision, or words someone used.")
+                } else if !core.searchError.isEmpty || core.searchCancelled {
+                    VStack(spacing:14) {
+                        searchEmpty(core.searchCancelled ? "Search cancelled" : queryLength > 200 ? "Shorten your search" : "Search could not finish",
+                            core.searchCancelled ? "pause.circle" : "exclamationmark.circle",
+                            core.searchCancelled ? "Your query and filters are kept." : core.searchError)
+                        if queryLength <= 200 { Button("Retry search") { runSearch() }.buttonStyle(.bordered) }
+                    }
                 } else if waitingForSearch || core.searchLoading {
-                    searchEmpty("Searching…","magnifyingglass","Results update after you pause typing.")
+                    VStack(spacing:12) {
+                        searchEmpty(core.searchPhase == "indexing" || core.searchPhase == "preparing" ? "Preparing meeting index…" : "Searching…",
+                            "magnifyingglass",waitingForSearch ? "Results update after you pause typing." :
+                            core.searchPhase == "indexing" ? "Preparing \(core.searchCompleted + 1) of \(core.searchTotal) meetings. Saved vectors are reused." :
+                            core.searchPhase == "waiting" ? "Waiting for the current retrieval to finish. You can cancel anytime." : "Finding matching passages in your selected scope.")
+                        if core.searchPhase == "indexing" && core.searchTotal > 0 {
+                            ProgressView(value:Double(core.searchCompleted),total:Double(core.searchTotal))
+                                .tint(ScribeTheme.accent).frame(maxWidth:260)
+                        }
+                    }
                 } else if core.searchResults.isEmpty {
                     searchEmpty("No matches","magnifyingglass",
                                 "Try fewer words or broaden the meeting, date or person filters.")
@@ -716,7 +744,7 @@ struct MeetingSearchView: View {
                           systemImage:pending == 0 ? "checkmark.circle" : "clock")
                     Spacer()
                     let semantic=core.searchIndex["semantic"] as? Object ?? [:]
-                    Text(semantic["enabled"] as? Bool == true ? "Hybrid · \(text(semantic["provider"]))" : hybrid ? "Keyword results · semantic search unavailable" : text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
+                    Text(text(semantic["status"]) == "no_eligible_meetings" ? "No meetings match these filters" : semantic["enabled"] as? Bool == true ? "Hybrid · \(text(semantic["provider"]))" : hybrid ? "Keyword results · semantic search unavailable" : text(core.searchIndex["engine"]) == "fts5" ? "Full-text search" : "Basic search · full-text index unavailable")
                 }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,20).padding(.vertical,10)
                 if let semantic=core.searchIndex["semantic"] as? Object, !text(semantic["message"]).isEmpty {
                     Text(text(semantic["message"])).font(.caption).foregroundStyle(ScribeTheme.warning).padding(.horizontal,20).padding(.bottom,10)
