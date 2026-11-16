@@ -1,6 +1,7 @@
 """Explicit, shape-safe embedding providers for hybrid meeting retrieval."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -22,7 +23,7 @@ EMBEDDING_DEADLINE_S = 60
 
 
 def embedding_failure(error):
-    if isinstance(error,(TimeoutError,httpx.TimeoutException)):
+    if isinstance(error,(TimeoutError,asyncio.TimeoutError,httpx.TimeoutException)):
         return 'Semantic search timed out. Keyword results are shown. Retry or narrow the filters.'
     if isinstance(error,httpx.HTTPStatusError):
         if error.response.status_code==429:
