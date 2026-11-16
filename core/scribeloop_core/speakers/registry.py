@@ -36,6 +36,7 @@ class SpeakerRegistry:
             raise ValueError('Unknown person')
         if speaker not in {r['display_speaker_id'] for r in self.store.segments(sid) if r['display_speaker_id']}:
             raise ValueError('Unknown meeting speaker')
+        baseline=self.store.summary_label_baseline(sid)
         with self.conn:
             if person is None:
                 self.conn.execute('DELETE FROM person_links WHERE session_id=? AND revision=? AND speaker_id=?',(sid,revision,speaker))
@@ -45,6 +46,7 @@ class SpeakerRegistry:
                     'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET person_id=excluded.person_id',
                     (sid,revision,speaker,person))
             self.store._write_transcript_notes(sid)
+            self.store.preserve_summary_label_baseline(baseline)
 
     def name_speaker(self,sid,revision,speaker,*,name=None,person_id=None):
         """Create/reuse a person and link in one transaction; stale reads create nothing."""
@@ -56,6 +58,7 @@ class SpeakerRegistry:
             raise ValueError('Choose a speaker in the current saved transcript')
         # create/link normally commit their own transactions; an explicit outer
         # savepoint keeps both mutations and derived notes atomic here.
+        baseline=self.store.summary_label_baseline(sid)
         self.conn.execute('SAVEPOINT name_speaker')
         try:
             if name is not None:
@@ -75,6 +78,7 @@ class SpeakerRegistry:
                 'ON CONFLICT(session_id,revision,speaker_id) DO UPDATE SET person_id=excluded.person_id',
                 (sid,revision,speaker,person_id))
             self.store._write_transcript_notes(sid)
+            self.store.preserve_summary_label_baseline(baseline)
             self.conn.execute('RELEASE name_speaker')
         except BaseException:
             self.conn.execute('ROLLBACK TO name_speaker')

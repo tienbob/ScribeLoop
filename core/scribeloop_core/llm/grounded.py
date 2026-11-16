@@ -17,6 +17,13 @@ def transcript_hash(rows):
     return hashlib.sha256(json.dumps(data,ensure_ascii=True,sort_keys=True).encode()).hexdigest()
 
 
+def summary_content_hash(rows):
+    """Saved-note freshness ignores display names, but retains speaker attribution."""
+    fields=('id','revision','stream','start_ms','end_ms','text','language','display_speaker_id')
+    data=[{key:row.get(key) for key in fields} for row in rows]
+    return hashlib.sha256(json.dumps(data,ensure_ascii=True,sort_keys=True).encode()).hexdigest()
+
+
 def summary_messages(rows, instructions=''):
     transcript = [{key:row.get(key) for key in ('id','stream','start_ms','end_ms','speaker_label','language','text')}
                   for row in rows]

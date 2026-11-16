@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 DDL = """
 CREATE TABLE sessions (
@@ -393,6 +393,12 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
                 END;
             ''')
             conn.execute('PRAGMA user_version=22')
+    if version < 23:
+        with conn:
+            columns={row[1] for row in conn.execute('PRAGMA table_info(grounded_summaries)')}
+            if 'content_hash' not in columns:
+                conn.execute('ALTER TABLE grounded_summaries ADD COLUMN content_hash TEXT')
+            conn.execute('PRAGMA user_version=23')
     return conn
 
 

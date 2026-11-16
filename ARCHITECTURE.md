@@ -235,6 +235,14 @@ Cleanup preserves provenance; it does not establish ground truth. Valid source I
 also do not prove that generated prose is supported. Jobs use bounded inputs and
 budgets without automatic paid retries or provider fallback.
 
+Saved-note freshness uses a content/attribution hash that excludes display names.
+Person/speaker renaming therefore keeps notes current without regenerating them;
+speaker merges, text edits and source-revision changes still invalidate notes.
+The strict generation-input hash continues to include labels. Schema v23 adds the
+separate content hash; fresh legacy notes establish it within the name-edit
+transaction, while already-stale legacy notes retain their stale state. Generated
+prose is preserved rather than automatically replacing names inside sentences.
+
 Saved meetings offer a seekable audio playbar with speed control, transcript source
 navigation, person naming, manual rename/delete, Markdown export, email handoff and
 optional Calendar links. Calendar uses EventKit. Email handoff requires user action,
@@ -363,7 +371,7 @@ and [Hybrid validation](docs/HYBRID_SEARCH_VALIDATION.md).
 
 Production uses one SQLCipher workspace for meetings, transcript revisions, people,
 summaries, jobs, FTS, vector metadata and Ask history. The authoritative schema is
-[db.py](core/scribeloop_core/storage/db.py), currently version 22; executable DDL
+[db.py](core/scribeloop_core/storage/db.py), currently version 23; executable DDL
 is not duplicated here. Vectors share the encrypted workspace rather than a
 plaintext external index.
 

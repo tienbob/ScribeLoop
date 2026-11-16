@@ -380,6 +380,7 @@ class SessionStore:
         if merge_target is not None and (merge_target not in identities or merge_target == speaker_id or
                 speaker_id.rsplit(':',1)[0] != merge_target.rsplit(':',1)[0]):
             raise ValueError('Merge requires distinct speakers from the same source and generation')
+        baseline=self.summary_label_baseline(session_id) if label is not None else None
         with self.conn:
             self.conn.execute('DELETE FROM person_links WHERE session_id=? AND revision=? AND speaker_id=?',(session_id,revision,speaker_id))
             self.conn.execute('INSERT INTO revision_speaker_edits '
@@ -392,6 +393,7 @@ class SessionStore:
                     'WHERE session_id=? AND revision=? AND merge_target=?',
                     (merge_target,session_id,revision,speaker_id))
             self._write_transcript_notes(session_id)
+            self.preserve_summary_label_baseline(baseline)
 
     def create_recording(self, title, metadata):
         session_id = uuid4().hex
@@ -448,16 +450,16 @@ class SessionStore:
         return rows,transcript_hash(rows),summary_messages(rows) if build_messages else None
 
     def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model):
-        from ..llm.grounded import validate_summary
+        from ..llm.grounded import summary_content_hash, validate_summary
         rows,current_hash,_ = self.summary_input(session_id,revision,build_messages=False)
         if current_hash != input_hash:
             raise ValueError('Transcript changed during summary generation')
         summary = validate_summary(value,rows)
         with self.conn:
             self.conn.execute('INSERT INTO grounded_summaries '
-                '(id,session_id,revision,input_hash,provider,model,summary_json,created_at) '
-                'VALUES (?,?,?,?,?,?,?,?)',
-                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now()))
+                '(id,session_id,revision,input_hash,provider,model,summary_json,created_at,content_hash) '
+                'VALUES (?,?,?,?,?,?,?,?,?)',
+                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now(),summary_content_hash(rows)))
             selection = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='recording_selection' ORDER BY id LIMIT 1",(session_id,)).fetchone()
             manual_title = self.conn.execute("SELECT 1 FROM events WHERE session_id=? "
@@ -470,7 +472,7 @@ class SessionStore:
         return self.grounded_summary(session_id)
 
     def grounded_summary(self, session_id):
-        from ..llm.grounded import transcript_hash
+        from ..llm.grounded import summary_content_hash, transcript_hash
         row = self.conn.execute('SELECT * FROM grounded_summaries WHERE session_id=? '
             'ORDER BY created_at DESC,rowid DESC LIMIT 1',(session_id,)).fetchone()
         if not row:
@@ -500,14 +502,29 @@ class SessionStore:
                     result['stale'] = True
                     return result
             rows = self.segments(session_id)
-            prior = (versions,transcript_hash(rows),len(rows))
+            prior = (versions,transcript_hash(rows),len(rows),summary_content_hash(rows))
             cache[session_id] = prior
         cache.move_to_end(session_id)
-        result['stale'] = result['input_hash'] != prior[1]
+        result['stale'] = (result['content_hash'] != prior[3] if result['content_hash'] is not None
+                           else result['input_hash'] != prior[1])
         if not result['stale']:
             known[count_key] = prior[2]
             known.move_to_end(count_key)
         return result
+
+    def summary_label_baseline(self, session_id):
+        """Promote only a verified-current legacy summary during a label edit."""
+        from ..llm.grounded import summary_content_hash
+        saved=self.grounded_summary(session_id)
+        if saved and not saved['stale'] and saved['content_hash'] is None:
+            return saved['id'],summary_content_hash(self.segments(session_id))
+        return None
+
+    def preserve_summary_label_baseline(self, baseline):
+        """Caller owns the speaker-edit transaction; do not commit independently."""
+        if baseline:
+            self.conn.execute('UPDATE grounded_summaries SET content_hash=? WHERE id=? AND content_hash IS NULL',
+                              (baseline[1],baseline[0]))
 
     def relabel_speech(self, session_id, stream, original, revised):
         """Apply provider speaker corrections without changing words/checkpoints.
