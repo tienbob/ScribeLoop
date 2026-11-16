@@ -113,14 +113,16 @@ class SqliteVecIndex:
         )
 
     def search(self, vector: bytes, k: int = 8, *, session_ids: list[str] | tuple[str,...] | None = None,
-               person_id=None, date_from=None, date_to=None) -> list[dict]:
+               person_id=None, date_from=None, date_to=None,scope_limit=100) -> list[dict]:
         """KNN search: returns top-k chunks joined with their metadata.
 
         Use vec0's explicit k constraint: Ubuntu 22.04's SQLite cannot pass
         LIMIT constraints to virtual tables. The same query works on newer SQLite.
         """
         k = max(1, int(k))
-        if session_ids is not None and (not session_ids or len(session_ids)>100 or
+        if type(scope_limit) is not int or not 1<=scope_limit<=10_000:
+            raise ValueError('Invalid vector scope limit')
+        if session_ids is not None and (not session_ids or len(session_ids)>scope_limit or
                 any(not isinstance(value,str) for value in session_ids)):
             raise ValueError('Invalid vector meeting scope')
         if session_ids is not None or person_id or date_from is not None or date_to is not None:

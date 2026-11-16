@@ -55,18 +55,18 @@ is enabled. Saved user preferences override defaults; cloud calls need credentia
 
 ## 2. Component ownership
 
-| Component | Responsibility | Source |
-| --- | --- | --- |
-| Native shell | Window, Preferences, meeting selection, source navigation, playback and platform integrations | [shell/macos/Desktop](shell/macos/Desktop) |
-| Bootstrap/protocol | Child lifecycle, private handshake, authenticated commands and receipts | [desktop.py](core/scribeloop_core/api/desktop.py), [desktop_contract.py](core/scribeloop_core/api/desktop_contract.py) |
-| API/settings | Local HTTP/WebSocket transport, dispatch, provider configuration | [server.py](core/scribeloop_core/api/server.py), [desktop_settings.py](core/scribeloop_core/api/desktop_settings.py) |
-| Discovery | Metadata observation, candidates and automatic end monitoring | [meetings](core/scribeloop_core/meetings) |
-| Capture | Native helpers, shared-clock streams, microphone processing and recording gates | [capture](core/scribeloop_core/capture) |
-| Transcription | Engine routing, cloud live streams, batch reruns and optional Ollama | [pipeline](core/scribeloop_core/pipeline) |
-| Notes/Ask | Cleanup, bounded grounded notes, structured answers and provider adapters | [llm](core/scribeloop_core/llm) |
-| Persistence | Encryption, playback, retention, FTS, vector generations and answer history | [storage](core/scribeloop_core/storage) |
-| People | Manual identities and separately gated calibration primitives | [speakers](core/scribeloop_core/speakers) |
-| Packaging | Frozen core, native helpers, assets and bundle verification | [packaging/macos](packaging/macos) |
+| Component          | Responsibility                                                                                | Source                                                                                                               |
+| ------------------ | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Native shell       | Window, Preferences, meeting selection, source navigation, playback and platform integrations | [shell/macos/Desktop](shell/macos/Desktop)                                                                            |
+| Bootstrap/protocol | Child lifecycle, private handshake, authenticated commands and receipts                       | [desktop.py](core/scribeloop_core/api/desktop.py), [desktop_contract.py](core/scribeloop_core/api/desktop_contract.py) |
+| API/settings       | Local HTTP/WebSocket transport, dispatch, provider configuration                              | [server.py](core/scribeloop_core/api/server.py), [desktop_settings.py](core/scribeloop_core/api/desktop_settings.py)   |
+| Discovery          | Metadata observation, candidates and automatic end monitoring                                 | [meetings](core/scribeloop_core/meetings)                                                                             |
+| Capture            | Native helpers, shared-clock streams, microphone processing and recording gates               | [capture](core/scribeloop_core/capture)                                                                               |
+| Transcription      | Engine routing, cloud live streams, batch reruns and optional Ollama                          | [pipeline](core/scribeloop_core/pipeline)                                                                             |
+| Notes/Ask          | Cleanup, bounded grounded notes, structured answers and provider adapters                     | [llm](core/scribeloop_core/llm)                                                                                       |
+| Persistence        | Encryption, playback, retention, FTS, vector generations and answer history                   | [storage](core/scribeloop_core/storage)                                                                               |
+| People             | Manual identities and separately gated calibration primitives                                 | [speakers](core/scribeloop_core/speakers)                                                                             |
+| Packaging          | Frozen core, native helpers, assets and bundle verification                                   | [packaging/macos](packaging/macos)                                                                                    |
 
 Python owns durable state and provider requests. Swift owns platform UI and native
 integrations. Capture runs outside Python's interpreter. Research workers present
@@ -250,12 +250,16 @@ Search returns matching saved sources. Ask uses retrieved context to generate a
 structured cited answer. Ask requires configured Hybrid Search; weak retrieval
 does not trigger a full-transcript upload.
 
-The native Ask sheet presents a chronological chat timeline, automatic follow-ups,
-a multiline composer, starter questions and a separate saved-answer history panel.
-Sources and usage details expand beneath each answer. Changing scope or choosing
-New chat clears the visible conversation and follow-up context. History reopens
-individual saved answers rather than a durable full chat thread. Follow-ups use
-the previous saved answer plus newly retrieved evidence, not unlimited chat memory.
+The native Ask sheet has two entry points: Ask this meeting in a conversation and
+Ask across meetings in the sidebar. A compact expandable context bar and Change
+picker replace the scope tabs. Changing meetings starts a new chat; Cancel keeps
+the current chat. History restores complete saved threads and their original
+meeting context. Sources and usage details expand beneath each answer. Follow-ups
+use the previous turn plus fresh evidence, not unlimited model memory.
+Schema v22 adds thread/parent links; legacy answers become single-turn threads.
+All-meeting membership freezes at the first question. Threads are capped at 100
+answers and are purged when any scoped meeting is deleted. No-evidence replies
+are saved too, without an answer-model call.
 See [Ask UX flow and validation](docs/ASK_CHAT_UX.md).
 
 Keyword Search is local. Hybrid can upload source excerpts and queries to the
@@ -350,7 +354,7 @@ and [Hybrid validation](docs/HYBRID_SEARCH_VALIDATION.md).
 
 Production uses one SQLCipher workspace for meetings, transcript revisions, people,
 summaries, jobs, FTS, vector metadata and Ask history. The authoritative schema is
-[db.py](core/scribeloop_core/storage/db.py), currently version 21; executable DDL
+[db.py](core/scribeloop_core/storage/db.py), currently version 22; executable DDL
 is not duplicated here. Vectors share the encrypted workspace rather than a
 plaintext external index.
 

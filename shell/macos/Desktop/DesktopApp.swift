@@ -185,6 +185,7 @@ struct Notebook: View {
     @State private var showPeople = false
     @State private var showSearch = false
     @State private var showAsk = false
+    @State private var askEntry = "all"
     @State private var tab = "Notes"
     @State private var confirmed: String?
     @State private var renaming: Record?
@@ -206,7 +207,7 @@ struct Notebook: View {
                 Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                 Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
-                Button { showAsk = true } label: { Label("Ask",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
+                Button { askEntry="all"; showAsk = true } label: { Label("Ask across meetings",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .disabled(!core.accepted || !core.connected || core.busy || !core.askHybridEnabled || core.summaryProvider["configured"] as? Bool != true)
                     .keyboardShortcut("k",modifiers:.command)
                     .help(!core.askHybridEnabled ? "Enable Hybrid search in Settings → Models → Meeting search to use Ask" : core.summaryProvider["configured"] as? Bool == true ? "Ask questions about saved meetings" : "Set up a notes provider in Preferences to use Ask")
@@ -349,11 +350,15 @@ struct Notebook: View {
                                 }
                             }
                             Spacer(minLength:0)
+                            VStack(alignment:.trailing,spacing:8) {
+                            Button("Ask this meeting",systemImage:"sparkles") { askEntry="current"; showAsk=true }
+                                .disabled(!core.accepted || !core.connected || core.busy || !core.askHybridEnabled || core.summaryProvider["configured"] as? Bool != true)
                             HStack(spacing:8) {
                             Button("Name people",systemImage:"person.crop.circle.badge.plus") { core.send(["action":"people_page"]); showPeople = true }.disabled(!core.connected || core.busy || core.revision == 0)
                             Button("Email",systemImage:"envelope") { emailSharing = EmailSharingContext(conversation:selected,detail:core.detail) }
                                 .disabled(!canShare(selected))
                             Menu("Meeting") { meetingActions(selected) }.disabled(!core.connected)
+                            }
                             }.controlSize(.regular).font(.callout)
                         }
                         Picker("Meeting view",selection:$tab) { Label("Notes",systemImage:"note.text").tag("Notes"); Label("Transcript",systemImage:"text.bubble").tag("Transcript"); Label("Audio",systemImage:"waveform").tag("Audio") }.pickerStyle(.segmented).frame(maxWidth:390)
@@ -405,7 +410,7 @@ struct Notebook: View {
             }.frame(width:760,height:620)
         }
         .sheet(isPresented:$showAsk) {
-            MeetingAskView(core:core) { citation in
+            MeetingAskView(core:core,entry:askEntry) { citation in
                 showAsk=false
                 core.select(citation.text("meeting_id"))
                 if citation.text("source_type") == "summary" { tab="Notes" }
@@ -734,33 +739,51 @@ struct AskChatTurn: Identifiable {
 struct MeetingAskView: View {
     @ObservedObject var core:DesktopClient
     let open:(Record)->Void
+    let entry:String
     @Environment(\.dismiss) private var dismiss
     @FocusState private var composerFocused:Bool
     @State private var question=""
     @State private var scope="current"
+    @State private var contextMeetingID:String?
     @State private var selected=Set<String>()
     @State private var showMeetings=false
     @State private var showHistory=false
+    @State private var showContext=false
     @State private var turns:[AskChatTurn]=[]
     @State private var pendingQuestion:String?
+    @State private var threadStale=false
+    init(core:DesktopClient,entry:String = "all",open:@escaping (Record)->Void) {
+        self.core=core; self.open=open; self.entry=entry
+        _scope=State(initialValue:entry)
+        _contextMeetingID=State(initialValue:core.selectedID)
+        _selected=State(initialValue:core.selectedID.map { Set([$0]) } ?? [])
+    }
     private var scopeIDs:[String] { scope == "selected" ? Array(selected).sorted() : [] }
-    private var scopeReady:Bool { scope == "current" ? core.selectedID != nil : scope != "selected" || !selected.isEmpty }
+    private var scopeReady:Bool { scope == "current" ? contextMeetingID != nil : scope != "selected" || !selected.isEmpty }
     private var canSend:Bool {
         let value=question.trimmingCharacters(in:.whitespacesAndNewlines)
-        return !core.askLoading && scopeReady && !value.isEmpty && value.count <= 500
+        return !core.askLoading && !core.askThreadLoading && !threadStale && turns.count < 100 && scopeReady && !value.isEmpty && value.count <= 500
     }
     private var scopeLabel:String {
-        if scope == "current" { return core.selected?.text("title") ?? "Choose a meeting first" }
-        if scope == "selected" { return "\(selected.count) chosen meeting\(selected.count == 1 ? "" : "s")" }
-        return "All saved meetings"
+        if scope == "current" { return core.sessions.first(where:{$0.id==contextMeetingID})?.text("title") ?? "This meeting" }
+        if scope == "selected",selected.count==1 { return core.sessions.first(where:{selected.contains($0.id)})?.text("title") ?? "1 meeting" }
+        if scope == "selected" { return "\(selected.count) meetings" }
+        return turns.isEmpty ? "All saved meetings" : "\(contextIDs.count) meetings · all at chat start"
+    }
+    private var contextIDs:[String] {
+        if let first=turns.first, let packet=first.result["evidence"] as? Object,
+           let saved=packet["scope"] as? Object, let ids=saved["meeting_ids"] as? [String] { return ids }
+        if scope == "current" { return contextMeetingID.map { [$0] } ?? [] }
+        return scope == "selected" ? scopeIDs : core.sessions.map(\.id)
     }
     private func refreshHistory() {
         guard scopeReady else { core.askHistory=[]; return }
-        core.loadAskHistory(scope:scope,currentID:core.selectedID,selectedIDs:scopeIDs)
+        core.loadAskHistory(scope:"all",currentID:nil,selectedIDs:[])
     }
     private func newChat() {
-        guard !core.askLoading else { return }
+        guard !core.askLoading && !core.askThreadLoading else { return }
         turns=[]; pendingQuestion=nil; question=""; core.askResult=[:]; core.askError=nil
+        threadStale=false; core.askResumeContext=[:]
         composerFocused=true
     }
     private func submit() {
@@ -769,9 +792,8 @@ struct MeetingAskView: View {
         pendingQuestion=value
         core.askResult=[:]
         let last=turns.last
-        let hasSources = !objects((last?.result["evidence"] as? Object)?["passages"]).isEmpty
-        core.ask(value,scope:scope,currentID:core.selectedID,selectedIDs:scopeIDs,
-                 previousAnswerID:hasSources ? last?.id : nil)
+        core.ask(value,scope:scope,currentID:contextMeetingID,selectedIDs:scopeIDs,
+                 previousAnswerID:last?.id)
         if core.askLoading { question="" }
         else { pendingQuestion=nil }
     }
@@ -790,32 +812,41 @@ struct MeetingAskView: View {
             HStack(spacing:12) {
                 Image(systemName:"sparkles").font(.title2).foregroundStyle(ScribeTheme.accent)
                 VStack(alignment:.leading,spacing:3) {
-                    Text("Ask your meetings").font(.system(size:24,weight:.semibold,design:.serif))
+                    Text(entry == "current" ? "Ask this meeting" : "Ask across meetings").font(.system(size:24,weight:.semibold,design:.serif))
                     Text("A conversation grounded in your saved meetings.").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { showHistory=true; refreshHistory() } label: { Label("History",systemImage:"clock") }
-                    .disabled(core.askLoading)
+                    .disabled(core.askLoading || core.askThreadLoading)
                 Button { newChat() } label: { Label("New chat",systemImage:"square.and.pencil") }
-                    .disabled(core.askLoading || turns.isEmpty)
+                    .disabled(core.askLoading || core.askThreadLoading || turns.isEmpty)
                 Button("Done") { if core.askLoading { core.cancelAsk() }; dismiss() }.keyboardShortcut(.cancelAction)
             }.padding(22)
             Divider()
-            HStack(spacing:12) {
-                Picker("Meeting scope",selection:$scope) {
-                    Text("Current meeting").tag("current")
-                    Text("Chosen meetings").tag("selected")
-                    Text("All meetings").tag("all")
-                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth:430).disabled(core.askLoading)
-                if scope == "selected" {
-                    Button { showMeetings=true } label: { Label("\(selected.count) selected",systemImage:"slider.horizontal.3") }
-                        .disabled(core.askLoading)
-                }
-                Spacer()
-            }.padding(.horizontal,22).padding(.top,12)
             HStack(spacing:6) {
                 Image(systemName:"doc.text.magnifyingglass").foregroundStyle(ScribeTheme.accent)
-                Text(scopeLabel).lineLimit(1)
+                Button { showContext.toggle() } label: {
+                    HStack(spacing:5) { Text(scopeLabel).lineLimit(1); Image(systemName:"chevron.down").font(.caption2) }
+                }.buttonStyle(.plain).help("Show meetings in this chat")
+                    .popover(isPresented:$showContext) {
+                        VStack(alignment:.leading,spacing:12) {
+                            Text("Meetings in this chat").font(.headline)
+                            ScrollView {
+                                VStack(alignment:.leading,spacing:10) {
+                                    ForEach(contextIDs.prefix(50),id:\.self) { id in
+                                        Label(core.sessions.first(where:{$0.id==id})?.text("title") ?? "Earlier saved meeting",systemImage:"doc.text")
+                                            .font(.callout).lineLimit(2)
+                                    }
+                                }.frame(maxWidth:.infinity,alignment:.leading)
+                            }.frame(maxHeight:260)
+                            if contextIDs.count>50 { Text("And \(contextIDs.count-50) more").font(.caption).foregroundStyle(.secondary) }
+                            if scope == "all" && turns.isEmpty {
+                                Text("Showing loaded meetings. The first question includes all saved meetings.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.padding(18).frame(width:330)
+                    }
+                Button("Change") { showMeetings=true }.buttonStyle(.borderless)
+                    .disabled(core.askLoading || core.askThreadLoading)
                 Spacer()
                 Text("Hybrid search").foregroundStyle(ScribeTheme.accent)
             }.font(.caption).foregroundStyle(.secondary).padding(.horizontal,22).padding(.vertical,10)
@@ -824,11 +855,12 @@ struct MeetingAskView: View {
                 ScrollView {
                     LazyVStack(alignment:.leading,spacing:24) {
                         Color.clear.frame(height:1).id("chat-top")
-                        if turns.isEmpty && pendingQuestion == nil { welcome }
+                        if core.askThreadLoading { ProgressView("Opening chat…").frame(maxWidth:.infinity) }
+                        else if turns.isEmpty && pendingQuestion == nil { welcome }
                         ForEach(turns) { turn in
                             VStack(alignment:.leading,spacing:18) {
                                 userMessage(turn.question)
-                                AskChatAnswer(result:turn.result,open:open)
+                                AskChatAnswer(result:turn.result) { source in rememberChat(); open(source) }
                             }.id(turn.id)
                         }
                         if let pending=pendingQuestion {
@@ -841,6 +873,9 @@ struct MeetingAskView: View {
                         if let error=core.askError {
                             Label(error,systemImage:"exclamationmark.triangle")
                                 .foregroundStyle(ScribeTheme.warning).font(.callout)
+                        }
+                        if threadStale || turns.count >= 100 {
+                            Button("Start a new chat") { newChat() }.buttonStyle(.bordered)
                         }
                         Color.clear.frame(height:1).id("chat-bottom")
                     }.frame(maxWidth:690).frame(maxWidth:.infinity).padding(24)
@@ -858,23 +893,46 @@ struct MeetingAskView: View {
         .interactiveDismissDisabled(core.askLoading)
         .onAppear {
             core.askResult=[:]; core.askError=nil
-            if let id=core.selectedID { selected=[id] }
+            let resume=core.askResumeContext
+            if text(resume["entry"])==entry && (entry != "current" || text(resume["current_id"])==contextMeetingID),
+               let savedScope=resume["scope"] as? String, let thread=resume["thread_id"] as? String {
+                scope=savedScope
+                contextMeetingID=resume["current_id"] as? String
+                selected=Set(resume["selected_ids"] as? [String] ?? [])
+                core.loadAskThread(thread,scope:scope,currentID:contextMeetingID,selectedIDs:scopeIDs)
+            }
             refreshHistory(); composerFocused=true
         }
-        .onChange(of:scope) { value in
-            newChat(); refreshHistory()
-            if value == "selected" { showMeetings=true }
+        .onDisappear { rememberChat() }
+        .onChange(of:core.askThreadSerial) { _ in
+            turns=core.askThreadTurns.map { AskChatTurn(id:$0.id,question:$0.text("question"),result:core.askHistoryResult($0)) }
+            threadStale=core.askThreadTurns.contains(where:{$0.raw["stale"] as? Bool == true})
+            if turns.isEmpty { core.askError="This chat is no longer available in these meetings." }
+            question=""; composerFocused=true
         }
         .onChange(of:core.askHybridEnabled) { enabled in
             if !enabled { if core.askLoading { core.cancelAsk() }; dismiss() }
         }
+        .onChange(of:core.connected) { connected in
+            if !connected && core.askThreadLoading {
+                core.askThreadLoading=false; core.askError="Connection interrupted. Reopen the chat from History after reconnecting."
+            }
+        }
         .sheet(isPresented:$showMeetings) {
-            ChosenMeetingsPicker(core:core,applied:selected) { choices in
-                guard choices != selected else { return }
-                selected=choices; newChat(); refreshHistory()
+            ChosenMeetingsPicker(core:core,applied:scope == "all" ? [] : selected,useAll:{
+                guard scope != "all" else { return }
+                newChat(); scope="all"; selected=[]; refreshHistory()
+            }) { choices in
+                guard scope != "selected" || choices != selected else { return }
+                newChat(); selected=choices; scope="selected"; refreshHistory()
             }
         }
         .sheet(isPresented:$showHistory) { history }
+    }
+    private func rememberChat() {
+        guard let last=turns.last,core.accepted else { return }
+        core.askResumeContext=["entry":entry,"scope":scope,"current_id":contextMeetingID ?? "",
+            "selected_ids":scopeIDs,"thread_id":text(last.result["thread_id"]).isEmpty ? last.id : text(last.result["thread_id"])]
     }
     private func userMessage(_ value:String)->some View {
         HStack {
@@ -919,7 +977,7 @@ struct MeetingAskView: View {
             }.padding(14).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:16))
                 .overlay(RoundedRectangle(cornerRadius:16).stroke(composerFocused ? ScribeTheme.accent : ScribeTheme.border,lineWidth:1))
             HStack {
-                Text(scopeReady ? (turns.isEmpty ? "Answers may contain mistakes. Check the sources." : "Follow-ups use the previous turn and fresh meeting evidence.") : "Choose at least one meeting to begin.")
+                Text(threadStale ? "Sources changed. Start a new chat for current evidence." : turns.count >= 100 ? "Chat limit reached. Start a new chat to continue." : scopeReady ? (turns.isEmpty ? "Answers may contain mistakes. Check the sources." : "Follow-ups use the previous turn and fresh meeting evidence.") : "Choose at least one meeting to begin.")
                 Spacer()
                 if question.count > 450 {
                     Text("\(question.count)/500").foregroundStyle(question.count > 500 ? ScribeTheme.warning : .secondary)
@@ -934,30 +992,35 @@ struct MeetingAskView: View {
         VStack(alignment:.leading,spacing:16) {
             HStack {
                 VStack(alignment:.leading,spacing:4) {
-                    Text("Saved answers").font(.title2.weight(.semibold))
-                    Text("Reopen a question in this meeting scope.").font(.caption).foregroundStyle(.secondary)
+                    Text("Chat history").font(.title2.weight(.semibold))
+                    Text("Return to a saved chat. Its meeting context is restored.").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(); Button("Done") { showHistory=false }
             }
             Divider()
-            if core.askHistory.isEmpty { Text("No saved answers in this scope yet.").foregroundStyle(.secondary) }
+            if core.askThreads.isEmpty { Text("Your chats will appear here after the first saved answer.").foregroundStyle(.secondary) }
             ScrollView {
                 LazyVStack(alignment:.leading,spacing:12) {
-                    ForEach(core.askHistory) { row in
-                        let stale=row.raw["stale"] as? Bool == true
+                    ForEach(core.askThreads) { row in
                         Button {
-                            if stale { newChat(); question=row.text("question") }
-                            else {
-                                core.showAskHistory(row)
-                                turns=[AskChatTurn(id:row.id,question:row.text("question"),result:core.askResult)]
-                                question=""; pendingQuestion=nil; composerFocused=true
+                            newChat()
+                            if let saved=row.raw["scope"] as? Object {
+                                scope=text(saved["kind"])
+                                let ids=saved["meeting_ids"] as? [String] ?? []
+                                selected=Set(ids)
+                                if scope == "current" { contextMeetingID=ids.first }
                             }
+                            core.loadAskThread(row.id,scope:scope,currentID:contextMeetingID,selectedIDs:scopeIDs)
                             showHistory=false
                         } label: {
                             VStack(alignment:.leading,spacing:6) {
                                 Text(row.text("question")).lineLimit(3).multilineTextAlignment(.leading)
-                                Text(stale ? "Sources changed · open question to ask again" : "\(row.text("provider")) · \(row.text("model"))")
-                                    .font(.caption).foregroundStyle(stale ? ScribeTheme.warning : .secondary)
+                                let saved=row.raw["scope"] as? Object ?? [:]
+                                let ids=saved["meeting_ids"] as? [String] ?? []
+                                Text(ids.count == 1 ? (core.sessions.first(where:{$0.id==ids.first})?.text("title") ?? "1 meeting") : "\(ids.count) meetings")
+                                    .font(.caption).foregroundStyle(ScribeTheme.accent)
+                                Text("\(row.int("turn_count")) answer\(row.int("turn_count") == 1 ? "" : "s") · \(Date(timeIntervalSince1970:Double(row.int("updated_at"))/1000).formatted(date:.abbreviated,time:.shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth:.infinity,alignment:.leading).padding(14)
                                 .background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:12))
                         }.buttonStyle(.plain)
@@ -977,6 +1040,10 @@ struct AskChatAnswer:View {
     var body:some View {
         VStack(alignment:.leading,spacing:14) {
             Label("ScribeLoop",systemImage:"sparkles").font(.caption.weight(.semibold)).foregroundStyle(ScribeTheme.accent)
+            if result["stale"] as? Bool == true {
+                Label("Saved answer · sources have changed. Start a new chat to verify this against current evidence.",systemImage:"exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(ScribeTheme.warning)
+            }
             if answer["insufficient_evidence"] as? Bool == true {
                 Text(text(answer["caveat"]).isEmpty ? "I couldn't find enough evidence in these meetings to answer that." : text(answer["caveat"]))
                     .foregroundStyle(.secondary).textSelection(.enabled)
@@ -1052,6 +1119,7 @@ struct RetrievalUsage:View {
 struct ChosenMeetingsPicker: View {
     @ObservedObject var core:DesktopClient
     let applied:Set<String>
+    var useAll:(()->Void)? = nil
     let use:(Set<String>)->Void
     @Environment(\.dismiss) private var dismiss
     @State private var draft=Set<String>()
@@ -1084,6 +1152,14 @@ struct ChosenMeetingsPicker: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding(24)
+            if let useAll {
+                HStack {
+                    Text("Changing meetings starts a new chat. Your saved chat stays in History.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("All saved meetings") { useAll(); dismiss() }
+                }.padding(.horizontal,24).padding(.bottom,14)
+            }
             HStack(spacing:10) {
                 Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
                 TextField("Find a conversation by name",text:$query).textFieldStyle(.plain)

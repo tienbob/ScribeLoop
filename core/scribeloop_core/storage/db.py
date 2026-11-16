@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 DDL = """
 CREATE TABLE sessions (
@@ -373,7 +373,26 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
                 existing={row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
                 for name,kind in columns.items():
                     if name not in existing: conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {kind}')
-            conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+            conn.execute('PRAGMA user_version=21')
+    if version < 22:
+        with conn:
+            columns={row[1] for row in conn.execute('PRAGMA table_info(meeting_answers)')}
+            for name in ('thread_id','parent_answer_id'):
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE meeting_answers ADD COLUMN {name} TEXT')
+            conn.execute('UPDATE meeting_answers SET thread_id=id WHERE thread_id IS NULL')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_meeting_answers_thread ON meeting_answers(thread_id,created_at)')
+            conn.executescript('''
+                DROP TRIGGER IF EXISTS purge_meeting_answers_before_session_delete;
+                CREATE TRIGGER purge_meeting_answers_before_session_delete
+                BEFORE DELETE ON sessions BEGIN
+                    DELETE FROM meeting_answers WHERE thread_id IN
+                        (SELECT a.thread_id FROM meeting_answers a
+                         WHERE EXISTS (SELECT 1 FROM json_each(a.scope_json,'$.meeting_ids')
+                                       WHERE value=OLD.id));
+                END;
+            ''')
+            conn.execute('PRAGMA user_version=22')
     return conn
 
 
