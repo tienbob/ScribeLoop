@@ -9,6 +9,9 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Changelog since the shared macOS beta](../CHANGELOG.md)
+- [Drive build comparison and artifact evidence](MACOS_DRIVE_COMPARISON_2026-11-12.md)
+
 - [Google sign-in/account implementation and deployment setup](GOOGLE_ACCOUNT_IMPLEMENTATION.md)
 
 - [Product roadmap for review — November 3](PRODUCT_ROADMAP_REVIEW_2026-11-03.md)
@@ -16,6 +19,7 @@ capture/release acceptance gates.
 - [Manual Stop, automatic notes, and default microphone handoff](MANUAL_STOP_AND_DEVICE_HANDOFF.md)
 
 - [Pause/Continue and transcript chat bubbles](RECORDING_PAUSE_AND_CHAT.md)
+- [Ask chat, meeting context and saved threads](ASK_CHAT_UX.md)
 
 - [Local Ollama transcription (batch-only after recording)](LOCAL_TRANSCRIPTION.md)
 - [Ollama functional fixes and validation](OLLAMA_FLOW_2026-11-03.md)

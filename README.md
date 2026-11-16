@@ -10,7 +10,7 @@ was actually said.
 
 [Get started](#get-started) · [Features](#a-notebook-for-the-whole-conversation) ·
 [Search & Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
-[Developer guides](#for-developers)
+[What's new](CHANGELOG.md) · [Developer guides](#for-developers)
 
 > **Internal preview:** Apple Silicon Macs, macOS 13 or later. Automatic call
 > detection requires macOS 14.2+. The app includes its runtime; no Python,
@@ -74,6 +74,9 @@ recording and Stop. Browser capture can include audio from other tabs in that br
 
 **Search** finds passages. **Ask** uses retrieved evidence to answer a question.
 
+Search updates automatically when you pause typing for half a second. With cloud
+Hybrid Search enabled, those searches use your configured embedding provider.
+
 | Mode | What it does |
 | --- | --- |
 | **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed. |
@@ -86,8 +89,11 @@ Try questions such as:
 - “Which tasks did we leave open?”
 - “How does the proposed architecture work?”
 
-Choose **Current meeting**, **Chosen meetings**, or **All meetings** to control the
-scope. Open a citation to inspect the source. Ask sends a bounded evidence packet,
+Use **Ask this meeting** inside a conversation, or **Ask across meetings** in the
+sidebar. The context bar shows which meetings are included; **Change** lets you
+choose specific meetings. Changing context starts a new chat, and History keeps
+your saved threads. History also lets you delete individual chats or clear them all.
+Open a citation to inspect the source. Ask sends a bounded evidence packet,
 rather than falling back to uploading entire transcripts.
 
 Embedding options include **Gemini** (default), **OpenAI**, **bundled local

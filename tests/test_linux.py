@@ -1,4 +1,5 @@
 """Linux selection, authentication boundary and encrypted notebook regressions."""
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -380,6 +381,18 @@ def test_linux_settings_default_detection_off_but_preserves_saved_choice():
     reloaded = DesktopSettings(backend, default_detection_enabled=False)
 
     assert reloaded.value.detection_enabled is True
+
+
+@pytest.mark.parametrize('default_detection',[False,True])
+def test_platform_detection_default_preserves_legacy_embedding_settings_migration(default_detection):
+    backend=SecretBackend()
+    backend.set_password('ai.scribeloop.providers.v1','desktop-settings',json.dumps({
+        'embedding_provider':'Gemini','embedding_key':'legacy-embedding-key',
+        'embedding_model':'gemini-embedding-001'}))
+    settings=DesktopSettings(backend,default_detection_enabled=default_detection)
+    assert settings.value.detection_enabled is default_detection
+    assert settings.value.embedding_keys['Gemini']=='legacy-embedding-key'
+    assert settings.value.embedding_models['Gemini']=='gemini-embedding-001'
 
 
 def test_saving_blank_key_fields_keeps_existing_api_keys():

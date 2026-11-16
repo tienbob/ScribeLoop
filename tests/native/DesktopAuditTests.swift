@@ -34,6 +34,47 @@ import Foundation
         let socket = transport.webSocketTask(with:URL(string:"ws://127.0.0.1:1/ws")!)
         defer { transport.invalidateAndCancel() }
         client.auditConnect(socket)  // Deliberately never resume the socket.
+        let searchClient=DesktopClient(database:"/tmp/unused-search-test.sqlcipher")
+        searchClient.auditConnect(socket)
+        searchClient.search("first query")
+        let firstSearch=searchClient.auditSearchRequest!
+        precondition(searchClient.searchLoading)
+        searchClient.search("newer query")
+        precondition(searchClient.auditSearchRequest==firstSearch,"Search requests must not overlap")
+        searchClient.search("")
+        precondition(searchClient.searchLoading,"Clearing must drain the in-flight request before another upload")
+        searchClient.auditReceive(["type":"receipt","request_id":firstSearch,"status":"accepted"])
+        searchClient.auditReceive(["type":"search_results","response_to":firstSearch,"results":[["id":"obsolete"]]])
+        precondition(!searchClient.searchLoading && searchClient.searchResults.isEmpty,"Cleared results must not reappear")
+        searchClient.search("newest query")
+        let latestSearch=searchClient.auditSearchRequest!
+        precondition(latestSearch != firstSearch)
+        searchClient.auditReceive(["type":"receipt","request_id":latestSearch,"status":"accepted"])
+        searchClient.auditReceive(["type":"search_results","response_to":latestSearch,"results":[["id":"latest"]]])
+        searchClient.auditReceive(["type":"search_results","response_to":firstSearch,"results":[["id":"obsolete"]]])
+        precondition(searchClient.searchResults.first?.id=="latest","Old responses cannot replace newer results")
+        let historyClient=DesktopClient(database:"/tmp/unused-history-test.sqlcipher")
+        historyClient.auditConnect(socket)
+        historyClient.settings=["search_mode":"hybrid"]
+        let deletedThread=String(repeating:"a",count:32),keptThread=String(repeating:"b",count:32)
+        historyClient.askThreads=[Record(raw:["id":deletedThread]),Record(raw:["id":keptThread])]
+        historyClient.askResult=["thread_id":deletedThread]
+        historyClient.askResumeContext=["thread_id":deletedThread]
+        historyClient.loadAskHistory(scope:"all",currentID:nil,selectedIDs:[])
+        let oldHistoryRead=historyClient.auditAskHistoryRequest!
+        historyClient.deleteAskHistory(threadID:deletedThread)
+        let deletion=historyClient.auditAskHistoryDeleteRequest!
+        historyClient.deleteAskHistory()
+        precondition(historyClient.auditAskHistoryDeleteRequest==deletion,"Deletion must not overlap")
+        historyClient.auditReceive(["type":"ask_history_deleted","response_to":deletion,"thread_id":deletedThread,"all":false])
+        precondition(!historyClient.askHistoryDeleting && historyClient.askThreads.map(\.id)==[keptThread])
+        precondition(historyClient.askResult.isEmpty && historyClient.askResumeContext.isEmpty)
+        historyClient.auditReceive(["type":"ask_history","response_to":oldHistoryRead,"threads":[["id":deletedThread]]])
+        precondition(historyClient.askThreads.map(\.id)==[keptThread],"Late history reads must not restore deleted chats")
+        historyClient.auditReceive(["type":"receipt","request_id":deletion,"status":"accepted"])
+        historyClient.deleteAskHistory()
+        historyClient.auditReceive(["type":"ask_history_deleted","response_to":historyClient.auditAskHistoryDeleteRequest!,"all":true])
+        precondition(historyClient.askThreads.isEmpty && historyClient.askHistoryDeleteSerial==2)
         let mutation = client.send(["action":"pause_detection"])!
         for n in 0..<255 { client.requests["legacy-read-\(n)"] = "unknown" }
         precondition(client.requests.count == 256)

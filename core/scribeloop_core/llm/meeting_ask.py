@@ -118,10 +118,11 @@ class MeetingEvidence:
             raise ValueError('Enter a question from 1 to 500 characters')
         if not isinstance(scope,AskScope):
             raise TypeError('Invalid Ask scope')
-        meeting_ids=None if scope.kind == 'all' else list(scope.meeting_ids)
+        meeting_ids=list(scope.meeting_ids)
         result=await MeetingSearch(self.store,embedding_config=self.embedding_config,
                                     embedder=self.embedder,include_titles=False,work=self.work).query_async(retrieval_query(question)[:200],limit=MAX_PASSAGES,
-                                                            meeting_ids=meeting_ids,match_all=False,semantic_query=question)
+                                                            meeting_ids=meeting_ids,match_all=False,semantic_query=question,
+                                                            scope_limit=10_000 if scope.kind=='all' else 100)
         candidates=result['results']
         retrieval_mode='hybrid' if result.get('retrieval_mode') == 'hybrid' else 'lexical'
         passages=[]; used=0; truncated=result['next_offset'] is not None or len(candidates)>MAX_PASSAGES
@@ -219,18 +220,26 @@ class MeetingAsk:
     async def answer(self, question, scope, *, previous_answer_id=None):
         if self._owns_work: self.work=SearchWork()
         self.work.check()
-        prior=None; retrieval_question=question
+        prior=None; retrieval_question=question; thread_id=None
         if previous_answer_id is not None:
             if not isinstance(previous_answer_id,str) or len(previous_answer_id)!=32:
                 raise ValueError('Invalid prior Ask answer')
-            row=self.store.conn.execute('SELECT question,answer_json,scope_json FROM meeting_answers WHERE id=?',
+            row=self.store.conn.execute('SELECT * FROM meeting_answers WHERE id=?',
                                         (previous_answer_id,)).fetchone()
             sources=list(self.store.conn.execute('SELECT * FROM meeting_answer_sources WHERE answer_id=?',
                                                  (previous_answer_id,)))
+            if row and scope.kind=='all':
+                saved=json.loads(row['scope_json'])
+                if saved['kind']=='all' and set(saved['meeting_ids'])<=set(scope.meeting_ids):
+                    scope=AskScope('all',tuple(saved['meeting_ids']))
             expected_scope={'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}
-            if (not row or json.loads(row['scope_json'])!=expected_scope or not sources or
+            if (not row or json.loads(row['scope_json'])!=expected_scope or
                     not {item['session_id'] for item in sources}<=set(scope.meeting_ids)):
                 raise ValueError('Prior Ask answer is outside the current scope')
+            thread_id=row['thread_id']
+            if self.store.conn.execute('SELECT count(*) FROM meeting_answers WHERE thread_id=?',
+                                       (thread_id,)).fetchone()[0]>=100:
+                raise ValueError('Ask chat reached 100 answers; start a new chat')
             await MeetingSearch(self.store,work=self.work).sync_async(list(scope.meeting_ids) if scope.kind!='all' else None)
             for source in sources:
                 document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=?',
@@ -245,9 +254,8 @@ class MeetingAsk:
                                      embedder=self.embedder,work=self.work).retrieve(retrieval_question,scope)
         packet['question']=question.strip()
         if not packet['sufficient']:
-            return {'answer':{'claims':[],'insufficient_evidence':True,
-                    'caveat':'Not found in the retrieved evidence.'},'evidence':packet,'saved':False,
-                    'usage':self.work.public()}
+            answer={'claims':[],'insufficient_evidence':True,'caveat':'Not found in the retrieved evidence.'}
+            return self._save_answer(scope,packet,answer,thread_id,previous_answer_id)
         messages=answer_messages(packet,prior)
         schema=MeetingAnswer.model_json_schema()
         def request_size():
@@ -275,26 +283,43 @@ class MeetingAsk:
             current=self.store.conn.execute('SELECT * FROM search_documents WHERE id=?',(row['citation_id'],)).fetchone()
             if not current or _evidence_hash(_document_passage(current))!=row['source_hash']:
                 raise ValueError('Meeting changed during Ask; submit again')
+        return self._save_answer(scope,packet,answer,thread_id,previous_answer_id,
+                                 duration_ms=duration_ms,input_bytes=input_bytes)
+
+    def _save_answer(self, scope, packet, answer, thread_id, previous_answer_id, *, duration_ms=0,input_bytes=0):
+        self.work.check()
         output_bytes=len(json.dumps(answer,ensure_ascii=False).encode())
         answer_id=uuid4().hex
         with self.store.conn:
+            ids=scope.meeting_ids
+            present=self.store.conn.execute('SELECT count(*) FROM sessions WHERE status!=? AND id IN ('+
+                ','.join('?' for _ in ids)+')',('deleting',*ids)).fetchone()[0]
+            if present!=len(ids):
+                raise ValueError('Meeting changed during Ask; submit again')
+            if previous_answer_id and not self.store.conn.execute(
+                    'SELECT 1 FROM meeting_answers WHERE id=? AND thread_id=?',
+                    (previous_answer_id,thread_id)).fetchone():
+                raise ValueError('Prior Ask chat changed; start a new chat')
+            if thread_id and self.store.conn.execute('SELECT count(*) FROM meeting_answers WHERE thread_id=?',
+                                                    (thread_id,)).fetchone()[0]>=100:
+                raise ValueError('Ask chat reached 100 answers; start a new chat')
             self.store.conn.execute('INSERT INTO meeting_answers '
                 '(id,question,scope_kind,scope_json,provider,model,answer_json,evidence_bytes,truncated,created_at,'
-                'duration_ms,input_bytes,output_bytes,usage_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                'duration_ms,input_bytes,output_bytes,usage_json,thread_id,parent_answer_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (answer_id,packet['question'],scope.kind,
-                json.dumps(packet['scope'],separators=(',',':')),self.provider.provider,self.provider.model,
+                json.dumps(packet['scope'],separators=(',',':')),getattr(self.provider,'provider','none'),getattr(self.provider,'model','none'),
                 json.dumps(answer,ensure_ascii=False,separators=(',',':')),packet['evidence_bytes'],
                 int(packet['truncated']),int(time.time()*1000),duration_ms,input_bytes,output_bytes,
-                json.dumps(self.work.public())))
+                json.dumps(self.work.public()),thread_id or answer_id,previous_answer_id))
             for row in packet['passages']:
                 digest=row['source_hash']
                 self.store.conn.execute('INSERT INTO meeting_answer_sources '
                     '(answer_id,session_id,revision,citation_id,content_hash,excerpt_start,excerpt_end) VALUES (?,?,?,?,?,?,?)',
                     (answer_id,row['meeting_id'],row['revision'],row['citation_id'],digest,row['excerpt_start'],row['excerpt_end']))
-        return {'answer_id':answer_id,'answer':answer,'evidence':packet,'saved':True,
-                'provider':self.provider.provider,'model':self.provider.model,
+        return {'answer_id':answer_id,'thread_id':thread_id or answer_id,'answer':answer,'evidence':packet,'saved':True,
+                'provider':getattr(self.provider,'provider','none'),'model':getattr(self.provider,'model','none'),
                 'usage':{**self.work.public(),'duration_ms':duration_ms,'input_bytes':input_bytes,'output_bytes':output_bytes,
-                         'requests':1,'max_output_tokens':2000}}
+                         'requests':self.work.answer_requests,'max_output_tokens':2000 if self.work.answer_requests else 0}}
 
     async def history(self, scope: AskScope, *, limit=50):
         if self._owns_work: self.work=SearchWork()
@@ -303,18 +328,23 @@ class MeetingAsk:
         self.work.check()
         await MeetingSearch(self.store,work=self.work).sync_async(list(scope.meeting_ids) if scope.kind!='all' else None)
         self.work.check()
-        allowed=set(scope.meeting_ids)
         rows=self.store.conn.execute('SELECT * FROM meeting_answers WHERE scope_json=? ORDER BY created_at DESC LIMIT ?',
             (json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':')),limit)).fetchall()
+        return self._history_rows(rows,scope)
+
+    def _history_rows(self, rows, scope):
+        allowed=set(scope.meeting_ids)
         result=[]
         for row in rows:
             saved_scope=json.loads(row['scope_json'])
-            if saved_scope!={'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}:
+            if (saved_scope!={'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)} and
+                    not (scope.kind=='all' and saved_scope['kind']=='all' and
+                         set(saved_scope['meeting_ids'])<=allowed)):
                 continue
             sources=list(self.store.conn.execute('SELECT * FROM meeting_answer_sources WHERE answer_id=?',
                                                  (row['id'],)))
             source_ids={source['session_id'] for source in sources}
-            if not source_ids or not source_ids<=allowed:
+            if not source_ids<=allowed:
                 continue
             stale=False
             evidence=[]
@@ -336,7 +366,41 @@ class MeetingAsk:
             item['evidence']=[] if stale else evidence
             item['usage']=json.loads(item.pop('usage_json'))
             result.append(item)
-            if len(result)>=limit:
-                break
         self.work.check()
         return result
+
+    async def threads(self, scope, *, limit=50):
+        """Metadata-only thread list; load source-validated turns on selection."""
+        if type(limit) is not int or not 1<=limit<=100:
+            raise ValueError('Invalid Ask history limit')
+        self.work.check()
+        scope_json=json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':'))
+        condition='1=1' if scope.kind=='all' else 'scope_json=?'
+        params=(limit,) if scope.kind=='all' else (scope_json,limit)
+        rows=self.store.conn.execute(f'''SELECT thread_id,max(created_at) AS updated_at,
+            count(*) AS turn_count FROM meeting_answers WHERE {condition}
+            GROUP BY thread_id ORDER BY updated_at DESC,thread_id LIMIT ?''',
+            params).fetchall()
+        result=[]
+        for row in rows:
+            first=self.store.conn.execute('SELECT question,scope_json FROM meeting_answers WHERE thread_id=? '
+                'ORDER BY created_at,rowid LIMIT 1',(row['thread_id'],)).fetchone()
+            saved=json.loads(first['scope_json'])
+            if not set(saved['meeting_ids'])<=set(scope.meeting_ids):
+                continue
+            result.append({**dict(row),'id':row['thread_id'],'question':first['question'],'scope':saved})
+        self.work.check()
+        return result
+
+    async def thread(self, scope, thread_id):
+        """Restore a bounded complete thread without embedding/provider requests."""
+        if not isinstance(thread_id,str) or len(thread_id)!=32 or any(c not in '0123456789abcdef' for c in thread_id):
+            raise ValueError('Invalid Ask thread')
+        self.work.check()
+        rows=self.store.conn.execute('SELECT * FROM meeting_answers WHERE thread_id=? '
+            'ORDER BY created_at,rowid LIMIT 101',(thread_id,)).fetchall()
+        if len(rows)>100:
+            raise ValueError('Ask thread exceeds limit')
+        await MeetingSearch(self.store,work=self.work).sync_async(list(scope.meeting_ids) if scope.kind!='all' else None)
+        self.work.check()
+        return self._history_rows(rows,scope)

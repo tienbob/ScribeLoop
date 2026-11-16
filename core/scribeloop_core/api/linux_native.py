@@ -888,7 +888,7 @@ class NativeShell:
         grid.set_margin_start(10);grid.set_margin_end(10)
         settings=self.state.settings or {}
         presets=settings.get('summary_presets') or {}
-        detection=Gtk.CheckButton(label='Suggest likely meetings from audio activity')
+        detection=Gtk.CheckButton(label='Monitor meeting-app activity (preview)')
         detection.set_active(settings.get('detection_enabled') is True)
         provider=Gtk.ComboBoxText()
         for name in (*presets.keys(),'Custom'):
@@ -923,7 +923,7 @@ class NativeShell:
         grid.attach(Gtk.Label(label='Notes API key'),0,3,1,1);grid.attach(summary_key,1,3,1,1)
         grid.attach(Gtk.Label(label='Deepgram API key'),0,4,1,1);grid.attach(deepgram_key,1,4,1,1)
         grid.attach(detection,0,5,2,1)
-        explanation=make_label('When enabled, ScribeLoop checks audio-stream metadata for known meeting apps. It never records until you choose Record.',
+        explanation=make_label('Metadata monitoring only. Start recording manually; automatic suggestions and app-specific audio capture are not available yet.',
             classes=('dialog-help',),wrap=True)
         grid.attach(explanation,0,6,2,1)
         save_status=make_label('',classes=('dialog-status',),wrap=True)

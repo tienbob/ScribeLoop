@@ -98,4 +98,7 @@ The existing independent 40-query / 40-question evaluation and human grounding
 review remain open. The tiny cross-language regression does not prove general
 retrieval accuracy. Private meetings were not uploaded to a new embedding provider
 for this validation. Cloud provider quota/account access requires the user's own
-configured key and an explicit submitted search.
+configured key. At the time of this validation, Hybrid required explicit Search
+submission. The native UI now searches automatically after a 500 ms typing/filter
+pause, coalesces pending edits and serializes in-flight searches. Enabling cloud
+Hybrid therefore permits automatic embedding requests as the user searches.

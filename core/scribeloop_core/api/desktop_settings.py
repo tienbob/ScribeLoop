@@ -330,8 +330,6 @@ class DesktopSettings:
                 models = value.get('summary_models')
                 value['summary_models'] = {**models, value.get('summary_provider') or 'OpenAI': value['summary_model']} \
                     if isinstance(models,dict) else {value.get('summary_provider') or 'OpenAI': value['summary_model']}
-            return Settings.model_validate(
-                {'detection_enabled': self.default_detection_enabled, **value})
             if value.get('embedding_key'):
                 keys = value.get('embedding_keys')
                 value['embedding_keys'] = {**keys, value.get('embedding_provider') or 'Local': value['embedding_key']} \
@@ -340,7 +338,7 @@ class DesktopSettings:
                 models = value.get('embedding_models')
                 value['embedding_models'] = {**models, value.get('embedding_provider') or 'Local': value['embedding_model']} \
                     if isinstance(models,dict) else {value.get('embedding_provider') or 'Local': value['embedding_model']}
-            return Settings.model_validate(value)
+            return Settings.model_validate({'detection_enabled': self.default_detection_enabled, **value})
         except Exception:  # noqa: BLE001 - native errors can include secret data
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None
 
