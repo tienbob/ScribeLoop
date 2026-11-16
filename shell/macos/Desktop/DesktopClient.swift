@@ -700,9 +700,14 @@ struct PreferencesSaveProgress {
             return
         }
         if searchLoading { cancelSearch() }
+        searchRequest=nil
         discardSearchResponse=false
         searchError=""; searchCancelled=false; searchPhase="waiting"
         searchCompleted=0; searchTotal=0
+        guard value.unicodeScalars.count <= 200 else {
+            searchError="Search supports up to 200 characters. Shorten your query; your filters are kept."
+            return
+        }
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }

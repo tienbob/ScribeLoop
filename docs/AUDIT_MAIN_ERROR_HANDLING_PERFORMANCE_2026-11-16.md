@@ -183,3 +183,20 @@ Visual UI interaction remains unverified: the computer-control service reported
 private recording, microphone or paid API was used. Hosted CI has not been run for
 this unpushed branch. Native state checks and compilation do not substitute for
 an on-screen layout check or real provider latency validation.
+
+### UI follow-up
+
+Desktop control later recovered. Visual checks passed for automatic keyword
+results, cited-passage navigation, error recovery, empty results, Clear and the
+production Hybrid Search layout. The check exposed generic guidance for queries
+over 200 characters. The follow-up fix validates locally before dispatch, shows
+the exact limit and a counter near the limit, hides Retry until the query is
+shortened, and retains query/filters. Backend validation uses the same allowlisted
+message. Swift counts Unicode scalars to match Python's character counting.
+
+Follow-up validation: 20 targeted tests passed; native tests passed for over-limit
+input, Unicode combining sequences, no dispatch and recovery after shortening.
+Production app rebuilt and bundle verification passed. Its permission-reset step
+needed app re-registration with Launch Services and then completed successfully.
+The final new-state visual check was blocked by `cgWindowNotFound` from desktop
+control, including Finder; it is not claimed as passed. No live API calls were made.

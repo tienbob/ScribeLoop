@@ -135,3 +135,12 @@ def test_immediate_cancellation_reconciles_the_receipt(desktop,monkeypatch):
             assert event['status']=='cancelled'
             break
     else:raise AssertionError('Cancelled search receipt missing')
+
+
+def test_overlong_query_explains_limit_and_shortened_query_recovers(desktop):
+    _app,_client,ws=desktop
+    identity=send(ws,'search_meetings',query='x'*201)
+    error=receive(ws,'search_error',identity)
+    assert error['message']=='Search supports up to 200 characters. Shorten your query; your filters are kept.'
+    identity=send(ws,'search_meetings',query='corrected')
+    assert receive(ws,'search_results',identity)['query']=='corrected'

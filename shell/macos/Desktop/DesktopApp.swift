@@ -612,6 +612,7 @@ struct MeetingSearchView: View {
     @State private var waitingForSearch=false
     private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
     private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
+    private var queryLength:Int { query.trimmingCharacters(in:.whitespacesAndNewlines).unicodeScalars.count }
 
     private func runSearch() {
         guard !core.searchLoading else { return }
@@ -663,6 +664,13 @@ struct MeetingSearchView: View {
                             .buttonStyle(.borderless).accessibilityLabel("Clear search")
                     }
                 }.padding(12).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+                if queryLength > 160 {
+                    HStack {
+                        Text(queryLength > 200 ? "Shorten your query to continue." : "Up to 200 characters")
+                        Spacer()
+                        Text("\(queryLength) / 200 characters").monospacedDigit()
+                    }.font(.caption).foregroundStyle(queryLength > 200 ? ScribeTheme.warning : Color.secondary)
+                }
                 HStack {
                     Picker("Meeting",selection:$meetingID) {
                         Text("All meetings").tag("")
@@ -687,10 +695,10 @@ struct MeetingSearchView: View {
                                 "Try a project name, a decision, or words someone used.")
                 } else if !core.searchError.isEmpty || core.searchCancelled {
                     VStack(spacing:14) {
-                        searchEmpty(core.searchCancelled ? "Search cancelled" : "Search could not finish",
+                        searchEmpty(core.searchCancelled ? "Search cancelled" : queryLength > 200 ? "Shorten your search" : "Search could not finish",
                             core.searchCancelled ? "pause.circle" : "exclamationmark.circle",
                             core.searchCancelled ? "Your query and filters are kept." : core.searchError)
-                        Button("Retry search") { runSearch() }.buttonStyle(.bordered)
+                        if queryLength <= 200 { Button("Retry search") { runSearch() }.buttonStyle(.bordered) }
                     }
                 } else if waitingForSearch || core.searchLoading {
                     VStack(spacing:12) {

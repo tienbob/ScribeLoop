@@ -63,6 +63,13 @@ import Foundation
         precondition(searchClient.searchError.isEmpty && searchClient.searchLoading)
         searchClient.cancelSearch()
         precondition(searchClient.searchCancelled && !searchClient.searchLoading)
+        searchClient.search(String(repeating:"x",count:201))
+        precondition(searchClient.auditSearchRequest == nil && !searchClient.searchLoading)
+        precondition(searchClient.searchError.contains("200 characters"))
+        searchClient.search(String(repeating:"a\u{301}",count:101))
+        precondition(searchClient.auditSearchRequest == nil,"Count Unicode scalars like the backend")
+        searchClient.search("shortened query")
+        precondition(searchClient.searchError.isEmpty && searchClient.searchLoading)
         let historyClient=DesktopClient(database:"/tmp/unused-history-test.sqlcipher")
         historyClient.auditConnect(socket)
         historyClient.settings=["search_mode":"hybrid"]

@@ -13,6 +13,8 @@ SEARCH_DEADLINE_S = 120
 
 
 def search_failure(error):
+    if isinstance(error,ValueError) and str(error)=='Enter from 1 to 200 search characters':
+        return 'Search supports up to 200 characters. Shorten your query; your filters are kept.'
     if isinstance(error,(TimeoutError,httpx.TimeoutException)):
         return 'Search timed out. Your query and filters are kept. Try again or narrow the meeting filters.'
     if isinstance(error,httpx.HTTPStatusError):
