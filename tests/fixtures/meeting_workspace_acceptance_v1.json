@@ -1,0 +1,1220 @@
+{
+  "version": "workspace-acceptance-v1",
+  "label_review": "Human review of ground truth pending; labels frozen before model execution",
+  "limitations": "Developer-authored synthetic evaluation; not independent human acceptance. No real customer data or retained audio.",
+  "meetings": [
+    {
+      "id": "Atlas-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Atlas: the early proposal was 30 dollars per user per month. This was not approved.",
+        "Dự án Atlas: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Atlas-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Lan",
+      "texts": [
+        "Dự án Atlas: Giá enterprise cuối cùng là 40 đô la mỗi người mỗi tháng. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Lan nhận nhiệm vụ viết tài liệu onboarding cho dự án Atlas, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Atlas-review",
+      "title": "Atlas review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Atlas: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Atlas: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Beacon-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Beacon: the early proposal was 14-day audio retention. This was not approved.",
+        "Dự án Beacon: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Beacon-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Minh",
+      "texts": [
+        "Dự án Beacon: Âm thanh được giữ 30 ngày, trừ khi người dùng archive. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Minh nhận nhiệm vụ viết tài liệu onboarding cho dự án Beacon, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Beacon-review",
+      "title": "Beacon review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Beacon: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Beacon: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Cedar-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Cedar: the early proposal was 2026-12-01 beta launch. This was not approved.",
+        "Dự án Cedar: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Cedar-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Alex",
+      "texts": [
+        "Dự án Cedar: Beta ra mắt ngày 15 tháng 12 năm 2026, sau khi kiểm tra bảo mật. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Alex nhận nhiệm vụ viết tài liệu onboarding cho dự án Cedar, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Cedar-review",
+      "title": "Cedar review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Cedar: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Cedar: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Delta-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Delta: the early proposal was weekly backups and twelve-hour recovery. This was not approved.",
+        "Dự án Delta: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Delta-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Sam",
+      "texts": [
+        "Dự án Delta: Sao lưu mỗi đêm và phục hồi cơ sở dữ liệu trong bốn giờ. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Sam nhận nhiệm vụ viết tài liệu onboarding cho dự án Delta, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Delta-review",
+      "title": "Delta review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Delta: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Delta: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Ember-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Ember: the early proposal was Beacon as the vendor. This was not approved.",
+        "Dự án Ember: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Ember-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Hà",
+      "texts": [
+        "Dự án Ember: Nhóm chọn vendor Atlas thay Beacon vì độ trễ thấp hơn. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Hà nhận nhiệm vụ viết tài liệu onboarding cho dự án Ember, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Ember-review",
+      "title": "Ember review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Ember: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Ember: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Falcon-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Falcon: the early proposal was password-only enterprise authentication. This was not approved.",
+        "Dự án Falcon: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Falcon-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Lan",
+      "texts": [
+        "Dự án Falcon: Khách hàng enterprise dùng SAML single sign-on. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Lan nhận nhiệm vụ viết tài liệu onboarding cho dự án Falcon, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Falcon-review",
+      "title": "Falcon review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Falcon: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Falcon: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Grove-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Grove: the early proposal was iOS release in Q1. This was not approved.",
+        "Dự án Grove: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Grove-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Minh",
+      "texts": [
+        "Dự án Grove: Ứng dụng iOS hoãn sang quý hai vì thiếu kỹ sư. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Minh nhận nhiệm vụ viết tài liệu onboarding cho dự án Grove, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Grove-review",
+      "title": "Grove review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Grove: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Grove: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Harbor-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Harbor: the early proposal was 500 concurrent calls without failover. This was not approved.",
+        "Dự án Harbor: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Harbor-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Alex",
+      "texts": [
+        "Dự án Harbor: Dịch vụ phải hỗ trợ 2000 cuộc gọi đồng thời và regional failover. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Alex nhận nhiệm vụ viết tài liệu onboarding cho dự án Harbor, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Harbor-review",
+      "title": "Harbor review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Harbor: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Harbor: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Iris-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Iris: the early proposal was HubSpot as the first CRM integration. This was not approved.",
+        "Dự án Iris: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Iris-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Sam",
+      "texts": [
+        "Dự án Iris: CRM tích hợp Salesforce trước; HubSpot hoãn sang quý sau. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Sam nhận nhiệm vụ viết tài liệu onboarding cho dự án Iris, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Iris-review",
+      "title": "Iris review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Iris: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Iris: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    },
+    {
+      "id": "Juniper-discovery",
+      "title": "Product planning",
+      "language": "en",
+      "speaker": "Alex",
+      "texts": [
+        "Project Juniper: the early proposal was shipping desktop before accessibility work. This was not approved.",
+        "Dự án Juniper: nhóm vẫn đang xem xét đề xuất, chưa quyết định launch date."
+      ]
+    },
+    {
+      "id": "Juniper-decision",
+      "title": "Product planning",
+      "language": "vi",
+      "speaker": "Hà",
+      "texts": [
+        "Dự án Juniper: Keyboard navigation và screen-reader labels bắt buộc trước desktop release. Đây là quyết định cuối cùng, thay thế đề xuất ban đầu.",
+        "Hà nhận nhiệm vụ viết tài liệu onboarding cho dự án Juniper, hạn chót ngày 4 tháng 12 năm 2026."
+      ]
+    },
+    {
+      "id": "Juniper-review",
+      "title": "Juniper review",
+      "language": "en",
+      "speaker": "Sam",
+      "texts": [
+        "Project Juniper: Morgan says the review is due Friday, but Casey says Monday. Nobody resolved the disagreement.",
+        "Project Juniper: the audio was unclear when someone mentioned the storage vendor. We cannot identify that vendor reliably. No annual licensing cost was discussed."
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "Atlas-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Atlas, rather than its early proposal?",
+      "expected_facts": [
+        "40 dollars per user per month"
+      ],
+      "support": [
+        {
+          "meeting_id": "Atlas-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "30 dollars per user per month presented as the final decision"
+      ]
+    },
+    {
+      "id": "Atlas-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Atlas-discovery",
+        "Atlas-decision",
+        "Atlas-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Atlas, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Lan",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Atlas-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Atlas-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Atlas-discovery"
+      ],
+      "question": "What was proposed in the early Atlas discussion, and was it already approved?",
+      "expected_facts": [
+        "30 dollars per user per month",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Atlas-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Atlas-negative",
+      "kind": "conflicting",
+      "scope": "selected",
+      "meeting_ids": [
+        "Atlas-discovery",
+        "Atlas-decision",
+        "Atlas-review"
+      ],
+      "question": "What is the settled review deadline for project Atlas?",
+      "expected_facts": [
+        "Friday versus Monday, unresolved; no settled deadline"
+      ],
+      "support": [
+        {
+          "meeting_id": "Atlas-review",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "A definitive unsupported deadline"
+      ]
+    },
+    {
+      "id": "Beacon-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Beacon, rather than its early proposal?",
+      "expected_facts": [
+        "30-day audio retention",
+        "archive exception"
+      ],
+      "support": [
+        {
+          "meeting_id": "Beacon-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "14-day audio retention presented as the final decision"
+      ]
+    },
+    {
+      "id": "Beacon-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Beacon-discovery",
+        "Beacon-decision",
+        "Beacon-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Beacon, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Minh",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Beacon-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Beacon-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Beacon-discovery"
+      ],
+      "question": "What was proposed in the early Beacon discussion, and was it already approved?",
+      "expected_facts": [
+        "14-day audio retention",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Beacon-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Beacon-negative",
+      "kind": "conflicting",
+      "scope": "selected",
+      "meeting_ids": [
+        "Beacon-discovery",
+        "Beacon-decision",
+        "Beacon-review"
+      ],
+      "question": "What is the settled review deadline for project Beacon?",
+      "expected_facts": [
+        "Friday versus Monday, unresolved; no settled deadline"
+      ],
+      "support": [
+        {
+          "meeting_id": "Beacon-review",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "A definitive unsupported deadline"
+      ]
+    },
+    {
+      "id": "Cedar-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Cedar, rather than its early proposal?",
+      "expected_facts": [
+        "2026-12-15 beta launch",
+        "security review prerequisite"
+      ],
+      "support": [
+        {
+          "meeting_id": "Cedar-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "2026-12-01 beta launch presented as the final decision"
+      ]
+    },
+    {
+      "id": "Cedar-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Cedar-discovery",
+        "Cedar-decision",
+        "Cedar-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Cedar, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Alex",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Cedar-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Cedar-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Cedar-discovery"
+      ],
+      "question": "What was proposed in the early Cedar discussion, and was it already approved?",
+      "expected_facts": [
+        "2026-12-01 beta launch",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Cedar-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Cedar-negative",
+      "kind": "conflicting",
+      "scope": "selected",
+      "meeting_ids": [
+        "Cedar-discovery",
+        "Cedar-decision",
+        "Cedar-review"
+      ],
+      "question": "What is the settled review deadline for project Cedar?",
+      "expected_facts": [
+        "Friday versus Monday, unresolved; no settled deadline"
+      ],
+      "support": [
+        {
+          "meeting_id": "Cedar-review",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "A definitive unsupported deadline"
+      ]
+    },
+    {
+      "id": "Delta-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Delta, rather than its early proposal?",
+      "expected_facts": [
+        "nightly backups",
+        "four-hour database recovery"
+      ],
+      "support": [
+        {
+          "meeting_id": "Delta-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "weekly backups and twelve-hour recovery presented as the final decision"
+      ]
+    },
+    {
+      "id": "Delta-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Delta-discovery",
+        "Delta-decision",
+        "Delta-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Delta, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Sam",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Delta-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Delta-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Delta-discovery"
+      ],
+      "question": "What was proposed in the early Delta discussion, and was it already approved?",
+      "expected_facts": [
+        "weekly backups and twelve-hour recovery",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Delta-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Delta-negative",
+      "kind": "conflicting",
+      "scope": "selected",
+      "meeting_ids": [
+        "Delta-discovery",
+        "Delta-decision",
+        "Delta-review"
+      ],
+      "question": "What is the settled review deadline for project Delta?",
+      "expected_facts": [
+        "Friday versus Monday, unresolved; no settled deadline"
+      ],
+      "support": [
+        {
+          "meeting_id": "Delta-review",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "A definitive unsupported deadline"
+      ]
+    },
+    {
+      "id": "Ember-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Ember, rather than its early proposal?",
+      "expected_facts": [
+        "Atlas over Beacon",
+        "lower latency"
+      ],
+      "support": [
+        {
+          "meeting_id": "Ember-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Beacon as the vendor presented as the final decision"
+      ]
+    },
+    {
+      "id": "Ember-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Ember-discovery",
+        "Ember-decision",
+        "Ember-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Ember, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Hà",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Ember-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Ember-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Ember-discovery"
+      ],
+      "question": "What was proposed in the early Ember discussion, and was it already approved?",
+      "expected_facts": [
+        "Beacon as the vendor",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Ember-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Ember-negative",
+      "kind": "conflicting",
+      "scope": "selected",
+      "meeting_ids": [
+        "Ember-discovery",
+        "Ember-decision",
+        "Ember-review"
+      ],
+      "question": "What is the settled review deadline for project Ember?",
+      "expected_facts": [
+        "Friday versus Monday, unresolved; no settled deadline"
+      ],
+      "support": [
+        {
+          "meeting_id": "Ember-review",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "A definitive unsupported deadline"
+      ]
+    },
+    {
+      "id": "Falcon-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Falcon, rather than its early proposal?",
+      "expected_facts": [
+        "SAML SSO for enterprise customers"
+      ],
+      "support": [
+        {
+          "meeting_id": "Falcon-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "password-only enterprise authentication presented as the final decision"
+      ]
+    },
+    {
+      "id": "Falcon-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Falcon-discovery",
+        "Falcon-decision",
+        "Falcon-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Falcon, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Lan",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Falcon-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Falcon-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Falcon-discovery"
+      ],
+      "question": "What was proposed in the early Falcon discussion, and was it already approved?",
+      "expected_facts": [
+        "password-only enterprise authentication",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Falcon-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Falcon-negative",
+      "kind": "unanswerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Falcon-discovery",
+        "Falcon-decision",
+        "Falcon-review"
+      ],
+      "question": "What is the annual licensing cost for project Falcon?",
+      "expected_facts": [
+        "Annual licensing cost was not discussed; cannot determine it"
+      ],
+      "support": [
+        {
+          "meeting_id": "Falcon-review",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented annual cost or monthly-price extrapolation"
+      ]
+    },
+    {
+      "id": "Grove-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Grove, rather than its early proposal?",
+      "expected_facts": [
+        "iOS delayed to Q2",
+        "engineering shortage"
+      ],
+      "support": [
+        {
+          "meeting_id": "Grove-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "iOS release in Q1 presented as the final decision"
+      ]
+    },
+    {
+      "id": "Grove-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Grove-discovery",
+        "Grove-decision",
+        "Grove-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Grove, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Minh",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Grove-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Grove-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Grove-discovery"
+      ],
+      "question": "What was proposed in the early Grove discussion, and was it already approved?",
+      "expected_facts": [
+        "iOS release in Q1",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Grove-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Grove-negative",
+      "kind": "unanswerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Grove-discovery",
+        "Grove-decision",
+        "Grove-review"
+      ],
+      "question": "What is the annual licensing cost for project Grove?",
+      "expected_facts": [
+        "Annual licensing cost was not discussed; cannot determine it"
+      ],
+      "support": [
+        {
+          "meeting_id": "Grove-review",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented annual cost or monthly-price extrapolation"
+      ]
+    },
+    {
+      "id": "Harbor-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Harbor, rather than its early proposal?",
+      "expected_facts": [
+        "2000 concurrent calls",
+        "regional failover"
+      ],
+      "support": [
+        {
+          "meeting_id": "Harbor-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "500 concurrent calls without failover presented as the final decision"
+      ]
+    },
+    {
+      "id": "Harbor-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Harbor-discovery",
+        "Harbor-decision",
+        "Harbor-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Harbor, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Alex",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Harbor-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Harbor-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Harbor-discovery"
+      ],
+      "question": "What was proposed in the early Harbor discussion, and was it already approved?",
+      "expected_facts": [
+        "500 concurrent calls without failover",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Harbor-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Harbor-negative",
+      "kind": "unanswerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Harbor-discovery",
+        "Harbor-decision",
+        "Harbor-review"
+      ],
+      "question": "What is the annual licensing cost for project Harbor?",
+      "expected_facts": [
+        "Annual licensing cost was not discussed; cannot determine it"
+      ],
+      "support": [
+        {
+          "meeting_id": "Harbor-review",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented annual cost or monthly-price extrapolation"
+      ]
+    },
+    {
+      "id": "Iris-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Iris, rather than its early proposal?",
+      "expected_facts": [
+        "Salesforce first",
+        "HubSpot deferred to next quarter"
+      ],
+      "support": [
+        {
+          "meeting_id": "Iris-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "HubSpot as the first CRM integration presented as the final decision"
+      ]
+    },
+    {
+      "id": "Iris-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Iris-discovery",
+        "Iris-decision",
+        "Iris-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Iris, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Sam",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Iris-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Iris-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Iris-discovery"
+      ],
+      "question": "What was proposed in the early Iris discussion, and was it already approved?",
+      "expected_facts": [
+        "HubSpot as the first CRM integration",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Iris-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Iris-negative",
+      "kind": "unanswerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Iris-discovery",
+        "Iris-decision",
+        "Iris-review"
+      ],
+      "question": "What is the annual licensing cost for project Iris?",
+      "expected_facts": [
+        "Annual licensing cost was not discussed; cannot determine it"
+      ],
+      "support": [
+        {
+          "meeting_id": "Iris-review",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented annual cost or monthly-price extrapolation"
+      ]
+    },
+    {
+      "id": "Juniper-decision",
+      "kind": "answerable",
+      "scope": "all",
+      "meeting_ids": [],
+      "question": "Which final decision was recorded for project Juniper, rather than its early proposal?",
+      "expected_facts": [
+        "keyboard navigation",
+        "screen-reader labels",
+        "required before desktop release"
+      ],
+      "support": [
+        {
+          "meeting_id": "Juniper-decision",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "shipping desktop before accessibility work presented as the final decision"
+      ]
+    },
+    {
+      "id": "Juniper-owner",
+      "kind": "answerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Juniper-discovery",
+        "Juniper-decision",
+        "Juniper-review"
+      ],
+      "question": "Ai phụ trách tài liệu onboarding cho dự án Juniper, và hạn chót là khi nào?",
+      "expected_facts": [
+        "Hà",
+        "2026-12-04",
+        "onboarding documentation"
+      ],
+      "support": [
+        {
+          "meeting_id": "Juniper-decision",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented owner or date"
+      ]
+    },
+    {
+      "id": "Juniper-proposal",
+      "kind": "answerable",
+      "scope": "current",
+      "meeting_ids": [
+        "Juniper-discovery"
+      ],
+      "question": "What was proposed in the early Juniper discussion, and was it already approved?",
+      "expected_facts": [
+        "shipping desktop before accessibility work",
+        "proposal only, not approved"
+      ],
+      "support": [
+        {
+          "meeting_id": "Juniper-discovery",
+          "segment": 0
+        }
+      ],
+      "forbidden_facts": [
+        "Proposal presented as a final decision"
+      ]
+    },
+    {
+      "id": "Juniper-negative",
+      "kind": "unanswerable",
+      "scope": "selected",
+      "meeting_ids": [
+        "Juniper-discovery",
+        "Juniper-decision",
+        "Juniper-review"
+      ],
+      "question": "What is the annual licensing cost for project Juniper?",
+      "expected_facts": [
+        "Annual licensing cost was not discussed; cannot determine it"
+      ],
+      "support": [
+        {
+          "meeting_id": "Juniper-review",
+          "segment": 1
+        }
+      ],
+      "forbidden_facts": [
+        "Invented annual cost or monthly-price extrapolation"
+      ]
+    }
+  ],
+  "recurring_topics": [
+    "Pricing",
+    "Retention",
+    "Launch",
+    "Reliability",
+    "Vendor selection",
+    "Identity",
+    "Mobile",
+    "Capacity",
+    "CRM",
+    "Accessibility"
+  ]
+}
