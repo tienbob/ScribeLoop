@@ -1,8 +1,13 @@
 # F2 Ask meetings — implementation closeout
 
-Status: Ask implementation complete; release acceptance evaluation remains open.
+Status: **Closed by explicit user approval on 2026-11-16.**
 Updated 2026-11-16. See `HYBRID_SEARCH_VALIDATION.md`, `SEARCH_CLOSEOUT.md` and
 the acceptance artifacts below. Earlier test counts in this document are historical.
+
+The user approved closing F1/F2 after reviewing the HTTP 429 interruption and
+remaining review/UX gates. Those items remain accepted validation follow-ups and
+do not block F3. This decision does not turn the partial attempt into a completed
+three-run evaluation or human-grounding score.
 
 ## Delivered flow
 
@@ -69,7 +74,7 @@ Settings chooses local or remote embeddings independently from the notes provide
 - Each successful answer records one request, provider/model, elapsed milliseconds,
   input bytes, output bytes and the 2,000-token output ceiling.
 
-## Open release gates
+## Accepted limitations and validation follow-ups
 
 Implementation completion is not the same as F2 release acceptance. The versioned
 30-meeting/40-question corpus and independent human review still need to be run
@@ -122,5 +127,5 @@ Use a new output directory so previous attempts are preserved. The resulting
 `human-review.csv` pairs answers and citations with the frozen expected facts.
 A reviewer must independently score semantic support and all negative/conflicting
 cases. Citation-ID validity is reported separately and is not a grounding score.
-Do not mark F2 release accepted until all three passes and the native recovery/
-status-timing checks satisfy the delivery plan.
+The original evaluation criteria above remain useful for follow-up validation.
+The user has explicitly accepted milestone closure with these limits documented.

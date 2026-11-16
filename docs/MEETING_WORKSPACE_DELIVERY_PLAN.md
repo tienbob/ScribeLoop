@@ -2,8 +2,14 @@
 
 # ScribeLoop meeting workspace — delivery plan
 
-Status: F1 and F2 implemented; release acceptance remains open. Updated 2026-11-16.
-See `SEARCH_CLOSEOUT.md` and `MEETING_CHAT_CLOSEOUT.md` for the evidence and remaining gates.
+Status: **F1 and F2 closed by explicit user approval on 2026-11-16.**
+See `SEARCH_CLOSEOUT.md` and `MEETING_CHAT_CLOSEOUT.md` for delivered work and accepted limitations.
+
+Closeout decision: the user stated “i approve close F1 and F2” after reviewing the
+measurements, HTTP 429 interruption and remaining human/native validation.
+Unchecked F1/F2 criteria below are accepted limitations and follow-up validation,
+not passed tests and not blockers to starting F3. Existing evidence is unchanged;
+no completed three-run evaluation or human-grounding score is claimed.
 
 Goal: turn saved conversations into a searchable, cited workspace that helps users
 remember decisions and follow through. Deliver six independently usable increments
@@ -192,7 +198,7 @@ flowchart TD
     K -- No --> M[Keep passage readable; explain audio expired]
 ```
 
-**Finished only when:**
+**Original F1 acceptance checklist:** unchecked items were accepted as closeout limitations on 2026-11-16.
 
 - [x] All currently selected saved revisions are indexed; old revisions do not leak
   into default results. Interrupted backfill resumes without duplicated hits.
@@ -332,7 +338,7 @@ flowchart TD
     G --> L[Cancel or provider error: preserve prior answers]
 ```
 
-**Finished only when:**
+**Original F2 acceptance checklist:** unchecked items were accepted as closeout limitations on 2026-11-16.
 
 - [x] Scope is visible and enforced server-side for retrieval, generation, follow-up
   history and every citation. No answer draws from a meeting outside the scope.
@@ -601,17 +607,15 @@ JSON state that makes those dependencies invisible.
 
 | Increment         | Status                                     | Depends on                            | Closeout artifact               |
 | ----------------- | ------------------------------------------ | ------------------------------------- | ------------------------------- |
-| F1 Search         | Implemented; independent acceptance pending | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
-| F2 Ask            | Implemented; acceptance evaluation pending | F1                                    | `MEETING_CHAT_CLOSEOUT.md`    |
+| F1 Search         | Closed — user approved 2026-11-16           | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
+| F2 Ask            | Closed — user approved 2026-11-16           | F1                                    | `MEETING_CHAT_CLOSEOUT.md`    |
 | F3 Templates      | Not started                                | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
 | F4 Tasks          | Not started                                | Existing action extraction            | `ACTION_TRACKING_CLOSEOUT.md` |
 | F5 Personal notes | Not started                                | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md`  |
 | F6a Drafts        | Not started                                | F3/F4 and evidence contract           | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
 | F6b Integrations  | Not started                                | F6a + connector credentials           | `INTEGRATIONS_CLOSEOUT.md`    |
 
-Next delivery task: finish F1/F2 release acceptance, not reimplement their APIs/UI.
-The responsiveness fixes merged in PR #27 (`3bd4fba`) with all hosted checks green.
-Review the fixture labels independently,
-resolve Gemini quota, then explicitly run three production-model passes and human
-grounding/abstention review. Finish the remaining installed-app keyboard, playback,
-expired-audio and recovery/status-timing matrix before declaring either release accepted.
+Next delivery task: **F3 — Meeting templates**, following its scope and finish
+conditions above. F1/F2 validation follow-ups remain recorded but do not block F3
+under the user's explicit closeout decision. Fixes and evidence merged in PRs
+#27/#28 with all required hosted checks green.
