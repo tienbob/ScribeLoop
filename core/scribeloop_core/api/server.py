@@ -198,6 +198,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     closing = False
     automatic_scheduled = set()
     automatic_summary_lock = asyncio.Lock()
+    retrieval_lock = asyncio.Lock()
+
+    async def cancel_searches():
+        from .search_jobs import cancel_search
+        for task in list(app.state.search_tasks):
+            cancel_search(task)
     rolling_signatures = {}
     fixtures = {name: Path(path).resolve() for name, path in (fixtures or {}).items()}
     fixture_rows = []
@@ -489,6 +495,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                 yield
             finally:
                 closing = True
+                await cancel_searches()
                 pending_settings = getattr(app.state,'settings_task',None)
                 if pending_settings is not None:
                     with contextlib.suppress(Exception):
@@ -546,6 +553,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
     app.state.settings_task = None
     app.state.email_exports = email_exports
     app.state.ask_tasks = set()
+    app.state.search_tasks = set()
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', '[::1]'])
 
     @app.middleware('http')
@@ -605,6 +613,19 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         sender = reader = None
         playback_pending = False
         ask_task = None
+        search_task = None
+
+        def current_summary_id():
+            return getattr(summary_task,'session_id',None)
+
+        def search_finished(task):
+            app.state.search_tasks.discard(task)
+            # Cancellation can happen before the coroutine's first instruction.
+            identity=task.search_request_id
+            if task.cancelled() and desktop.receipts.get(identity,{}).get('status')=='dispatching':
+                desktop.receipt(identity,'cancelled')
+                if not queue.full():
+                    queue.put_nowait({'type':'search_cancelled','response_to':identity})
 
         async def text_frame(limit):
             frame = await ws.receive()
@@ -717,7 +738,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                         return
 
             async def receive_commands():
-                nonlocal summary_task,playback_pending,summary_provider,ask_task
+                nonlocal summary_task,playback_pending,summary_provider,ask_task,search_task
                 while True:
                     command = None
                     owns_playback = False
@@ -733,6 +754,32 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipts[dispatch_id])
                                 continue
                             action = command.get('action')
+                            if action in {'search_meetings','ask_evidence','cancel_search'}:
+                                if action == 'cancel_search' and set(command)!={'action'}:
+                                    raise ValueError('Invalid search cancellation')
+                                if search_task and not search_task.done():
+                                    from .search_jobs import cancel_search
+                                    cancel_search(search_task)
+                                if action == 'cancel_search':
+                                    await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                    continue
+                                from .search_jobs import run_search
+                                desktop.receipt(dispatch_id,'dispatching')
+                                cancelled=asyncio.Event()
+                                search_task=asyncio.create_task(run_search(app=app,desktop=desktop,
+                                    command=command,provider=summary_provider,request_id=dispatch_id,
+                                    queue=queue,lock=retrieval_lock,
+                                    summary_id=current_summary_id,cancelled=cancelled))
+                                search_task.search_cancelled=cancelled
+                                search_task.search_request_id=dispatch_id
+                                app.state.search_tasks.add(search_task)
+                                search_task.add_done_callback(search_finished)
+                                continue
+                            if action in {'record','accept_call','reprocess','resume','recover','delete',
+                                          'revoke_agreement','save_settings','summarize',
+                                          'name_speaker','rename_speaker','merge_speaker',
+                                          'rename_conversation','link_person','forget_person'}:
+                                await cancel_searches()
                             response = await desktop.read(app,command,summary_provider,
                                 app.state.recording.active_id if app.state.recording else None,
                                 getattr(summary_task,'session_id',None))
@@ -784,9 +831,10 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     try:
                                         await publish({'type':'ask_started','request_id':request_id,
                                             'scope':{'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)}})
-                                        result=await MeetingAsk(store,ask_provider,
-                                            embedding_config=ask_embedding_config,work=ask_work).answer(
-                                            question,scope,previous_answer_id=previous_answer_id)
+                                        async with retrieval_lock:
+                                            result=await MeetingAsk(store,ask_provider,
+                                                embedding_config=ask_embedding_config,work=ask_work).answer(
+                                                question,scope,previous_answer_id=previous_answer_id)
                                         ask_work.check()
                                         await publish({'type':'ask_answer','request_id':request_id,**result})
                                     except asyncio.CancelledError:
@@ -1421,6 +1469,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             pass
         finally:
             clients.discard(queue)
+            if search_task and not search_task.done():
+                from .search_jobs import cancel_search
+                cancel_search(search_task)
             if ask_task and not ask_task.done():
                 ask_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

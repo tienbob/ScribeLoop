@@ -30,8 +30,10 @@ def test_export_is_corrected_dated_and_citation_complete(saved):
     citations = set(re.findall(r'\[source\]\(#([a-z0-9-]+)\)',md))
     assert citations <= anchors and citation_anchor(row['id']) in citations
     # An incorrectly cached freshness flag cannot attach unrelated notes to export.
-    wrong = {**result,'input_hash':'another-transcript','stale':False}
+    wrong = {**result,'content_hash':'another-transcript','stale':False}
     assert '## Summary draft' not in export_markdown(store.get(sid),rows,store.revisions(sid),wrong)
+    legacy = {**result,'content_hash':None,'input_hash':'another-transcript','stale':False}
+    assert '## Summary draft' not in export_markdown(store.get(sid),rows,store.revisions(sid),legacy)
 
 
 def test_summary_storage_failure_keeps_previous_notes_and_title(saved):

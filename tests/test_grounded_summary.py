@@ -148,6 +148,8 @@ def test_display_name_changes_preserve_saved_summary_and_reopen(saved,legacy,mod
     current=store.grounded_summary(sid)
     assert not current['stale'] and current['content_hash']
     assert current['summary']==original['summary'] and current['input_hash']==fingerprint
+    exported=export_markdown(store.get(sid),store.segments(sid),store.revisions(sid),current)
+    assert '## Summary draft' in exported and 'outdated' not in exported
     assert store.segments(sid)[0]['speaker_label']=='Minh'
     reopened=migrate(connect(path))
     try:

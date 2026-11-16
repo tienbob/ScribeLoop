@@ -12,6 +12,7 @@ class SearchAuthorizationError(ValueError):
 @dataclass
 class SearchWork:
     authorize: object = None
+    progress: object = None
     started: float = field(default_factory=time.monotonic)
     embedding_requests: int = 0
     embedding_input_bytes: int = 0
@@ -25,6 +26,12 @@ class SearchWork:
     def check(self):
         if self.authorize is not None:
             self.authorize()
+
+    async def report(self, stage, completed=0, total=0):
+        self.check()
+        if self.progress is not None:
+            await self.progress(stage, completed, total)
+        self.check()
 
     async def embed(self, provider, texts, *, query=False):
         self.check()

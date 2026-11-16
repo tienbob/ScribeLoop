@@ -15,6 +15,35 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..async_compat import timeout
+
+MAX_EMBEDDING_RESPONSE_BYTES = 16_000_000
+EMBEDDING_DEADLINE_S = 60
+
+
+def embedding_failure(error):
+    if isinstance(error,(TimeoutError,httpx.TimeoutException)):
+        return 'Semantic search timed out. Keyword results are shown. Retry or narrow the filters.'
+    if isinstance(error,httpx.HTTPStatusError):
+        if error.response.status_code==429:
+            return 'Embedding quota or rate limit reached. Keyword results are shown. Check your quota before retrying.'
+        if error.response.status_code in {401,403}:
+            return 'Embedding access was rejected. Keyword results are shown. Check the key and model in Settings.'
+    return 'Semantic search is unavailable. Keyword results are shown. Check the provider and vector dimensions, then retry.'
+
+
+async def _embedding_response(client, target, **kwargs):
+    """Bound decoded bytes and elapsed time, including slowly arriving bodies."""
+    async with timeout(EMBEDDING_DEADLINE_S):
+        async with client.stream('POST', target, **kwargs) as response:
+            response.raise_for_status()
+            data = bytearray()
+            async for block in response.aiter_bytes():
+                if len(data) + len(block) > MAX_EMBEDDING_RESPONSE_BYTES:
+                    raise ValueError('Embedding response too large')
+                data.extend(block)
+        return json.loads(data)
+
 
 @dataclass(frozen=True)
 class EmbeddingConfig:
@@ -108,11 +137,8 @@ class CompatibleEmbeddingProvider:
             headers={'Authorization':'Bearer '+self.config.api_key} if self.config.api_key else {}
             async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10),trust_env=False,
                                          follow_redirects=False) as client:
-                response=await client.post(self.config.endpoint.rstrip('/')+'/embeddings',json=body,headers=headers)
-                response.raise_for_status()
-                if len(response.content)>16_000_000:
-                    raise ValueError('Embedding response too large')
-                payload=response.json()
+                payload=await _embedding_response(client,self.config.endpoint.rstrip('/')+'/embeddings',
+                                                  json=body,headers=headers)
         rows=payload.get('data') if isinstance(payload,dict) else None
         if not isinstance(rows,list) or len(rows)!=len(texts):
             raise ValueError('Embedding provider returned an invalid batch')
@@ -150,12 +176,8 @@ class GeminiEmbeddingProvider:
         else:
             async with httpx.AsyncClient(timeout=httpx.Timeout(60,connect=10),trust_env=False,
                                          follow_redirects=False) as client:
-                response=await client.post(self.config.endpoint.rstrip('/')+'/'+model+':batchEmbedContents',
+                payload=await _embedding_response(client,self.config.endpoint.rstrip('/')+'/'+model+':batchEmbedContents',
                     headers={'x-goog-api-key':self.config.api_key},json=body)
-                response.raise_for_status()
-                if len(response.content)>16_000_000:
-                    raise ValueError('Embedding response too large')
-                payload=response.json()
         rows=payload.get('embeddings') if isinstance(payload,dict) else None
         if not isinstance(rows,list) or len(rows)!=len(texts) or any(not isinstance(row,dict) for row in rows):
             raise ValueError('Gemini returned an incomplete embedding batch')

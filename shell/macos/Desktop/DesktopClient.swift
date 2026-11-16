@@ -101,6 +101,11 @@ struct PreferencesSaveProgress {
     @Published var searchIndex: Object = [:]
     @Published var searchUsage: Object = [:]
     @Published var searchLoading = false
+    @Published var searchError = ""
+    @Published var searchPhase = ""
+    @Published var searchCompleted = 0
+    @Published var searchTotal = 0
+    @Published var searchCancelled = false
     private var searchRequest: String?
     private var discardSearchResponse=false
     @Published var askResult: Object = [:]
@@ -399,9 +404,9 @@ struct PreferencesSaveProgress {
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence"]
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence","search_meetings"]
         let isRead = reads.contains(action)
-        let emergency = ["stop","stop_recording","revoke_agreement","cancel_ask"].contains(action)
+        let emergency = ["stop","stop_recording","revoke_agreement","cancel_ask","cancel_search"].contains(action)
         if !isRead && !emergency && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
             message = "An earlier action is uncertain. Reconnect and review current state before making another change."; return nil
         }
@@ -424,6 +429,10 @@ struct PreferencesSaveProgress {
             Task { [weak self] in
                 do { try await ws.send(.string(String(decoding:bytes,as:UTF8.self))) }
                 catch {
+                    if action == "search_meetings", self?.searchRequest == id {
+                        self?.searchLoading=false
+                        self?.searchError="Search could not connect. Your query is kept. Reconnect and retry."
+                    }
                     if !isRead { self?.requests[id] = "unknown" }
                     self?.message = isRead ? "Could not load data. Reconnect and try again." : "Action delivery is uncertain. Reconnect to check status before trying again."
                     if action == "check_ollama" { self?.localModelStatus = ["state":"unavailable","status":"The Ollama check could not be sent. Reconnect and try again."] }
@@ -481,6 +490,16 @@ struct PreferencesSaveProgress {
             let page = objects(v["sessions"])
             for row in page { if !sessions.contains(where: { $0.id == row.id }) { sessions.append(row) } }
             nextCursor = v["next_cursor"] as? [Any]
+        case "search_progress":
+            guard text(v["response_to"]) == searchRequest else { return }
+            searchPhase=text(v["stage"])
+            searchCompleted=(v["completed"] as? Int) ?? 0
+            searchTotal=(v["total"] as? Int) ?? 0
+        case "search_error", "search_cancelled":
+            guard text(v["response_to"]) == searchRequest else { return }
+            searchError=kind == "search_error" ? text(v["message"]) : ""
+            searchCancelled=kind == "search_cancelled"
+            searchLoading=false
         case "search_results":
             guard text(v["response_to"]) == searchRequest else { return }
             if !discardSearchResponse {
@@ -665,15 +684,25 @@ struct PreferencesSaveProgress {
         else { sessions.insert(row,at:0) }
     }
     func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1) }
+    func cancelSearch(clear:Bool = false) {
+        let wasLoading=searchLoading
+        searchRequest=nil; discardSearchResponse=true; searchLoading=false
+        searchError=""; searchPhase=""; searchCompleted=0; searchTotal=0
+        searchCancelled = !clear
+        if clear { searchResults=[]; searchUsage=[:]; searchIndex=[:] }
+        if wasLoading { send(["action":"cancel_search"]) }
+    }
     func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
                 dateFrom:Int? = nil, dateTo:Int? = nil) {
         let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
         guard !value.isEmpty else {
-            discardSearchResponse=true; searchResults=[]; searchUsage=[:]; searchIndex=[:]
+            cancelSearch(clear:true)
             return
         }
-        guard !searchLoading else { return }
+        if searchLoading { cancelSearch() }
         discardSearchResponse=false
+        searchError=""; searchCancelled=false; searchPhase="waiting"
+        searchCompleted=0; searchTotal=0
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }
@@ -681,7 +710,9 @@ struct PreferencesSaveProgress {
         if let dateTo { command["date_to"]=dateTo }
         searchLoading=true
         searchRequest=send(command)
-        if searchRequest == nil { searchLoading=false }
+        if searchRequest == nil {
+            searchLoading=false; searchError="Search is unavailable. Reconnect and retry; your query is kept."
+        }
     }
     var askHybridEnabled:Bool { text(settings["search_mode"]) == "hybrid" }
     func ask(_ question:String,scope:String,currentID:String?,selectedIDs:[String],previousAnswerID:String? = nil) {
