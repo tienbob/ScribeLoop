@@ -74,6 +74,9 @@ recording and Stop. Browser capture can include audio from other tabs in that br
 
 **Search** finds passages. **Ask** uses retrieved evidence to answer a question.
 
+Search updates automatically when you pause typing for half a second. With cloud
+Hybrid Search enabled, those searches use your configured embedding provider.
+
 | Mode | What it does |
 | --- | --- |
 | **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed. |

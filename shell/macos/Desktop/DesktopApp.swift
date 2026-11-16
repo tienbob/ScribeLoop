@@ -608,11 +608,14 @@ struct MeetingSearchView: View {
     @State private var personID=""
     @State private var dateRange=0
     @State private var debounce:Task<Void,Never>?
+    @State private var searchDue=false
+    @State private var waitingForSearch=false
     private var hybrid:Bool { text(core.settings["search_mode"]) == "hybrid" }
     private var remoteEmbeddings:Bool { hybrid && ["OpenAI","Gemini","Custom"].contains(text(core.settings["embedding_provider"])) }
 
     private func runSearch() {
         guard !core.searchLoading else { return }
+        searchDue=false; waitingForSearch=false
         let now=Int(Date().timeIntervalSince1970*1000)
         let from=dateRange == 0 ? nil : now-dateRange*86_400_000
         core.search(query,meetingID:meetingID.isEmpty ? nil : meetingID,
@@ -620,10 +623,16 @@ struct MeetingSearchView: View {
     }
     private func scheduleSearch() {
         debounce?.cancel()
-        guard !hybrid else { return }
+        searchDue=false
+        core.search("")
+        guard !query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {
+            waitingForSearch=false; return
+        }
+        waitingForSearch=true
         debounce=Task { @MainActor in
-            try? await Task.sleep(nanoseconds:250_000_000)
+            try? await Task.sleep(nanoseconds:500_000_000)
             guard !Task.isCancelled else { return }
+            searchDue=true
             runSearch()
         }
     }
@@ -643,13 +652,8 @@ struct MeetingSearchView: View {
                     Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search decisions, names or phrases",text:$query)
                         .textFieldStyle(.plain).font(.title3)
-                        .onSubmit { runSearch() }
                         .onChange(of:query) { _ in scheduleSearch() }
-                    if hybrid {
-                        Button("Search") { runSearch() }.buttonStyle(.borderedProminent)
-                            .disabled(core.searchLoading || query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
-                    }
-                    if core.searchLoading { ProgressView().controlSize(.small) }
+                    if core.searchLoading || waitingForSearch { ProgressView().controlSize(.small) }
                     if !query.isEmpty {
                         Button { query=""; core.search("") } label: { Image(systemName:"xmark.circle.fill") }
                             .buttonStyle(.borderless).accessibilityLabel("Clear search")
@@ -668,16 +672,18 @@ struct MeetingSearchView: View {
                         Text("Anyone").tag("")
                         ForEach(core.people) { row in Text(row.text("canonical_name")).tag(row.id) }
                     }.frame(maxWidth:220)
-                }.onChange(of:meetingID) { _ in if !hybrid { runSearch() } }
-                    .onChange(of:dateRange) { _ in if !hybrid { runSearch() } }
-                    .onChange(of:personID) { _ in if !hybrid { runSearch() } }
+                }.onChange(of:meetingID) { _ in scheduleSearch() }
+                    .onChange(of:dateRange) { _ in scheduleSearch() }
+                    .onChange(of:personID) { _ in scheduleSearch() }
             }.padding(18)
             Divider()
             Group {
                 if query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
                     searchEmpty("Find a conversation","text.magnifyingglass",
                                 "Try a project name, a decision, or words someone used.")
-                } else if !core.searchLoading && core.searchResults.isEmpty {
+                } else if waitingForSearch || core.searchLoading {
+                    searchEmpty("Searching…","magnifyingglass","Results update after you pause typing.")
+                } else if core.searchResults.isEmpty {
                     searchEmpty("No matches","magnifyingglass",
                                 "Try fewer words or broaden the meeting, date or person filters.")
                 } else {
@@ -719,7 +725,11 @@ struct MeetingSearchView: View {
             }
         }.background(ScribeTheme.canvas)
         .onAppear { core.send(["action":"people_page"]) }
-        .onDisappear { debounce?.cancel(); core.search("") }
+        .onChange(of:core.searchLoading) { loading in
+            if !loading && searchDue { runSearch() }
+        }
+        .onChange(of:hybrid) { _ in scheduleSearch() }
+        .onDisappear { debounce?.cancel(); searchDue=false; core.search("") }
     }
     private func searchEmpty(_ title:String,_ icon:String,_ detail:String)->some View {
         VStack(spacing:10) {

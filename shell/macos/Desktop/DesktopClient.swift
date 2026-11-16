@@ -102,6 +102,7 @@ struct PreferencesSaveProgress {
     @Published var searchUsage: Object = [:]
     @Published var searchLoading = false
     private var searchRequest: String?
+    private var discardSearchResponse=false
     @Published var askResult: Object = [:]
     @Published var askHistory: [Record] = []
     @Published var askThreads: [Record] = []
@@ -474,9 +475,11 @@ struct PreferencesSaveProgress {
             nextCursor = v["next_cursor"] as? [Any]
         case "search_results":
             guard text(v["response_to"]) == searchRequest else { return }
-            searchResults = objects(v["results"])
-            searchIndex = v["index"] as? Object ?? [:]
-            searchUsage = v["usage"] as? Object ?? [:]
+            if !discardSearchResponse {
+                searchResults = objects(v["results"])
+                searchIndex = v["index"] as? Object ?? [:]
+                searchUsage = v["usage"] as? Object ?? [:]
+            }
             searchLoading = false
         case "ask_history":
             if text(v["response_to"]) == askThreadRequest {
@@ -642,7 +645,12 @@ struct PreferencesSaveProgress {
     func search(_ query:String, meetingID:String? = nil, personID:String? = nil,
                 dateFrom:Int? = nil, dateTo:Int? = nil) {
         let value=query.trimmingCharacters(in:.whitespacesAndNewlines)
-        guard !value.isEmpty else { searchRequest=nil; searchResults=[]; searchUsage=[:]; searchIndex=[:]; searchLoading=false; return }
+        guard !value.isEmpty else {
+            discardSearchResponse=true; searchResults=[]; searchUsage=[:]; searchIndex=[:]
+            return
+        }
+        guard !searchLoading else { return }
+        discardSearchResponse=false
         var command:Object=["action":"search_meetings","query":value,"limit":100,"offset":0]
         if let meetingID { command["meeting_id"]=meetingID }
         if let personID { command["person_id"]=personID }
@@ -821,7 +829,10 @@ struct PreferencesSaveProgress {
             if !Task.isCancelled && child.isRunning { Darwin.kill(child.processIdentifier,SIGKILL) }
         }
     }
-    private func clearConnection() { connection = UUID(); reader?.cancel(); reader = nil; socket?.cancel(with:.goingAway,reason:nil); socket = nil }
+    private func clearConnection() {
+        connection = UUID(); reader?.cancel(); reader = nil; socket?.cancel(with:.goingAway,reason:nil); socket = nil
+        searchRequest=nil; discardSearchResponse=true; searchLoading=false
+    }
     private func finishStop() {
         shutdown?.cancel(); deadline?.cancel(); clearConnection(); port = nil; token = ""
         output?.fileHandleForReading.readabilityHandler = nil; diagnostics?.fileHandleForReading.readabilityHandler = nil
@@ -838,6 +849,7 @@ struct PreferencesSaveProgress {
 // Test-only access to the real reducer and send guards, without launching the core.
 extension DesktopClient {
     var auditPageRequest: String? { pageRequest }
+    var auditSearchRequest: String? { searchRequest }
     func auditConnect(_ socket: URLSessionWebSocketTask) { self.socket = socket; state = "Connected" }
     func auditReceive(_ value: Object) { receive(value) }
 }

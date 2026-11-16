@@ -266,9 +266,14 @@ Keyword Search is local. Hybrid can upload source excerpts and queries to the
 chosen embedding service. Local embeddings avoid cloud embedding uploads; Ask may
 still send evidence to a cloud notes provider.
 
+Native Search runs automatically 500 ms after the last query/filter edit, in both
+Keyword and Hybrid modes. There is no Search submit button. Pending edits coalesce
+behind an in-flight request; obsolete results are hidden/discarded. Clearing the
+field or closing Search clears its display without starting another provider call.
+
 ```mermaid
 flowchart TD
-  Q["Explicit Search / Ask submit"] --> Guard["Capture authorization epoch and scope"]
+  Q["Search typing pause / Ask send"] --> Guard["Capture authorization epoch and scope"]
   Guard --> Sync["Reconcile current transcript, titles and fresh notes"]
   Sync --> Lex["Keyword retrieval"]
   Sync --> Mode{"Hybrid enabled?"}
