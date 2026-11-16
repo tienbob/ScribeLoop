@@ -2,7 +2,17 @@
 
 Date: 16 November 2026. Code reviewed: main `71b6f59`.
 Branch: `investigation/transcript-scroll-performance`.
-Status: **investigation complete enough to plan a fix; no production fix applied**.
+Status: **rendering trial implemented and rebuilt; user assessment pending**.
+
+## Approved implementation trial
+
+The user approved trying the changes and will assess the rebuilt app. Start with
+an equatable transcript-content boundary and cached render blocks. For small saved
+pages (≤40 segments and ≤20,000 UTF-8 bytes), use a regular stack to avoid lazy
+height estimation while scrolling the reported 27-segment conversation. Retain
+lazy bounded blocks for larger/live pages. This is a bounded rendering trial,
+not a claim that the exact reported hitch is already fixed. Keep source IDs,
+selection, copy, disclosure and citation behavior. Animate only jump controls.
 
 ## Reported case and what was actually verified
 
@@ -137,3 +147,39 @@ not inherit follow-state animations. Following live remains a separate mode.
 The exact sustained hitch is not yet conclusively attributed. The confirmed
 unbounded-layout weakness and explicit render boundary are the first fix targets;
 the before/after display trace decides whether they resolve this particular case.
+
+## Trial implementation
+
+Branch `fix/transcript-scroll-rendering` adds an equatable `TranscriptContent`
+boundary with explicit page version, source/revision, citation, partial-text,
+busy and live-state inputs. The client only rebuilds logical/render turns when
+visible transcript fields or capture scope change; identical pages and notes-only
+updates retain their render identity. Speaker menu choices are cached per page.
+
+Small saved pages use a regular stack to avoid lazy estimated-height shifts. Larger
+and live pages use lazy render blocks, each bounded to eight segments or about
+4,000 UTF-8 bytes across multiple segments. A single oversized segment is retained
+whole; fragmenting individual sources remains follow-up work. No stored text or
+speaker identity changes, truncation, text-selection removal or provider work was
+introduced. Citations locate their containing render block before the original
+segment anchor. Whole-scroll-container follow animations were removed.
+
+Local native TranscriptBubbleTests pass for render identity reuse, actual edit
+invalidation, bounded multi-segment blocks, source/order preservation and speaker
+alignment. Existing DesktopAuditTests pass for paging, citation navigation, follow
+mode and reading-position transitions. The production macOS app rebuilt successfully;
+the initial on-screen trial verified scrolling and an existing architecture citation
+opening its 3:12 source. The user's smoothness assessment is still required.
+The rendering regression suite is added to macOS CI. This is not a claimed FPS
+improvement or a completed native reusable-table migration.
+
+### Quick-scroll visibility finding
+
+During the initial trial the user observed that the hitch coincides with the two
+quick-scroll controls changing visibility. Previously these controls were inserted
+and removed from the overlay at follow/top thresholds. The trial now keeps both
+controls mounted with stable geometry and toggles opacity, hit testing and
+accessibility visibility, without animation. This removes that hierarchy change
+during a scroll gesture. The equatable transcript boundary also isolates text rows
+from follow-state updates. The revised build still needs the user's scrolling check;
+no measured frame-rate improvement is claimed.

@@ -824,11 +824,51 @@ struct PlaybackBar: View {
     }
 }
 
+struct TranscriptContent: View,Equatable {
+    let core:DesktopClient
+    let version:Int
+    let sessionID:String?
+    let revision:Int
+    let busy:Bool
+    let citationID:String?
+    let partials:[String:String]
+    let live:Bool
+    static func == (lhs:Self,rhs:Self)->Bool {
+        lhs.core === rhs.core && lhs.version==rhs.version && lhs.sessionID==rhs.sessionID &&
+        lhs.revision==rhs.revision && lhs.busy==rhs.busy && lhs.citationID==rhs.citationID &&
+        lhs.partials==rhs.partials && lhs.live==rhs.live
+    }
+    var body:some View {
+        Group {
+            if !live && core.rows.count<=40 && core.transcriptTextBytes<=20000 {
+                // Small saved pages need no estimated lazy heights while scrolling.
+                VStack(alignment:.leading,spacing:14) { content }
+            } else {
+                LazyVStack(alignment:.leading,spacing:14) { content }
+            }
+        }.padding(28)
+    }
+    @ViewBuilder private var content:some View {
+        ForEach(core.transcriptRenderBlocks) { turn in
+            TranscriptRow(core:core,busy:busy,citationID:citationID,turn:turn,speakers:core.transcriptSpeakers).id(turn.id)
+        }
+        ForEach(partials.keys.sorted(),id:\.self) { stream in
+            if let value=partials[stream], !value.isEmpty {
+                Text("Recognizing speaker… · \(value)").italic().foregroundStyle(.secondary)
+                    .frame(maxWidth:.infinity,alignment:["application","system"].contains(core.transcriptCaptureScope) && stream=="mic" ? .trailing : .leading)
+            }
+        }
+        if core.rows.isEmpty { Text("Confirmed speech appears here while recording. Speaker labels are anonymous until you name them.").foregroundStyle(.secondary) }
+        Color.clear.frame(height:1).id("transcript-bottom")
+    }
+}
+
 struct TranscriptRow: View {
     let core: DesktopClient
     let busy:Bool
     let citationID:String?
     let turn: TranscriptTurn
+    var speakers:[TranscriptSpeakerChoice]=[]
     private var row:Record { turn.rows[0] }
     private var personColor:Color {
         let colors:[Color] = [ScribeTheme.accent,.blue,.purple,.orange,.pink,.teal]
@@ -851,8 +891,8 @@ struct TranscriptRow: View {
                         Menu {
                             Button("Rename speaker…") { name = row.text("speaker_label"); rename = true }
                             Menu("Merge into") {
-                                ForEach(speakers.filter { $0.text("display_speaker_id") != row.text("display_speaker_id") }) { target in
-                                    Button(target.text("speaker_label")) { correction("merge_speaker",extra:["merge_target":target.text("display_speaker_id")]) }
+                                ForEach(speakers.filter { $0.id != row.text("display_speaker_id") }) { target in
+                                    Button(target.label) { correction("merge_speaker",extra:["merge_target":target.id]) }
                                 }
                             }
                             Button("Name this person…") { core.send(["action":"people_page"]); naming = true }
@@ -897,10 +937,6 @@ struct TranscriptRow: View {
             .font(.system(size:12,weight:.semibold)).foregroundStyle(personColor)
             .frame(width:32,height:32).background(personColor.opacity(0.14),in:Circle())
             .accessibilityLabel(row.personTitle)
-    }
-    var speakers: [Record] {
-        var seen = Set<String>()
-        return core.rows.filter { let id = $0.text("display_speaker_id"); return !id.isEmpty && seen.insert(id).inserted }
     }
     private func correction(_ action: String,extra: Object) {
         core.send(["action":action,"session_id":core.selectedID ?? "","revision":core.revision,"speaker_id":row.text("display_speaker_id")].merging(extra) { _, new in new })

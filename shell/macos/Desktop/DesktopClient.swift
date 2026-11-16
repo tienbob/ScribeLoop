@@ -49,6 +49,28 @@ struct TranscriptTurn:Identifiable {
         }
         return turns
     }
+    /// Render units are bounded independently of logical speaker identity.
+    static func renderBlocks(_ turns:[TranscriptTurn])->[TranscriptTurn] {
+        var blocks:[TranscriptTurn]=[]
+        for turn in turns {
+            var rows:[Record]=[]; var bytes=0
+            for row in turn.rows {
+                let size=row.text("text").utf8.count
+                if !rows.isEmpty && (rows.count>=8 || bytes+size>4000) {
+                    blocks.append(TranscriptTurn(rows:rows,alignsRight:turn.alignsRight))
+                    rows=[]; bytes=0
+                }
+                rows.append(row); bytes+=size
+            }
+            if !rows.isEmpty { blocks.append(TranscriptTurn(rows:rows,alignsRight:turn.alignsRight)) }
+        }
+        return blocks
+    }
+}
+
+struct TranscriptSpeakerChoice:Identifiable,Equatable {
+    let id:String
+    let label:String
 }
 
 struct TranscriptFollowState:Equatable {
@@ -131,8 +153,27 @@ struct PreferencesSaveProgress {
             rows = objects(detail["segments"])
             let session = detail["session"] as? Object ?? [:]
             let capture = session["capture"] as? Object ?? [:]
-            transcriptCaptureScope = text(capture["scope"])
-            transcriptTurns = TranscriptTurn.grouped(rows,scope:transcriptCaptureScope)
+            let scope=text(capture["scope"])
+            let signature=rows.map { row in
+                [row.id,row.text("text"),row.text("stream"),row.text("speaker_label"),
+                 row.text("name"),row.text("person_id"),row.text("display_speaker_id"),
+                 row.text("local_speaker_id"),String(row.int("person_number")),
+                 String(row.int("start_ms")),String(row.int("end_ms")),
+                 row.text("cleanup_original_text"),String(row.raw["cleanup_needs_review"] as? Bool ?? false),
+                 String(row.raw["cleanup_original_truncated"] as? Bool ?? false)]
+            }
+            if signature != transcriptSignature || scope != transcriptCaptureScope {
+                transcriptSignature=signature; transcriptCaptureScope=scope
+                transcriptTurns=TranscriptTurn.grouped(rows,scope:scope)
+                transcriptRenderBlocks=TranscriptTurn.renderBlocks(transcriptTurns)
+                transcriptTextBytes=rows.reduce(0) { $0+$1.text("text").utf8.count }
+                var seen=Set<String>()
+                transcriptSpeakers=rows.compactMap { row in
+                    let id=row.text("display_speaker_id")
+                    return !id.isEmpty && seen.insert(id).inserted ? TranscriptSpeakerChoice(id:id,label:row.text("speaker_label")) : nil
+                }
+                transcriptRenderVersion += 1
+            }
         }
     }
     @Published var emailExport: Object = [:]
@@ -229,6 +270,11 @@ struct PreferencesSaveProgress {
     var speakerRoster: [Record] { objects(detail["speakers"]) }
     private(set) var rows:[Record] = []
     private(set) var transcriptTurns:[TranscriptTurn] = []
+    private(set) var transcriptRenderBlocks:[TranscriptTurn] = []
+    private(set) var transcriptSpeakers:[TranscriptSpeakerChoice] = []
+    private(set) var transcriptTextBytes=0
+    private(set) var transcriptRenderVersion=0
+    private var transcriptSignature:[[String]]=[]
     private(set) var transcriptCaptureScope = ""
     var revision: Int { (detail["revision"] as? NSNumber)?.intValue ?? 0 }
     var offset: Int { (detail["offset"] as? NSNumber)?.intValue ?? 0 }

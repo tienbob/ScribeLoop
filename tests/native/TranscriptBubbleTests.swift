@@ -26,6 +26,23 @@ import Foundation
         client.detail = ["segments":rows.map{$0.raw}]
         precondition(client.rows.map{$0.id} == rows.map{$0.id})
         precondition(client.transcriptTurns.map{$0.rows.map{$0.id}} == [["a","b"],["c"],["d"]])
+        let version=client.transcriptRenderVersion
+        client.detail["notes"]="Only notes changed"
+        precondition(client.transcriptRenderVersion==version,"Unchanged transcript must keep its render identity")
+        let large=(0..<100).map { i in
+            var value=row("long-\(i)","one","mic",i*1000,i*1000+900).raw
+            value["text"]=String(repeating:"Vietnamese tiếng Việt ",count:100)
+            return Record(raw:value)
+        }
+        let blocks=TranscriptTurn.renderBlocks(TranscriptTurn.grouped(large))
+        precondition(blocks.count>1 && blocks.allSatisfy{$0.rows.count<=8})
+        precondition(blocks.flatMap{$0.rows.map{$0.id}}==large.map{$0.id},"Render splitting preserves all source IDs and order")
+        precondition(Set(blocks.map{$0.id}).count==blocks.count,"Render block identities are unique")
+        precondition(blocks.allSatisfy{$0.alignsRight == TranscriptTurn.isRight(large[0],scope:"microphone")},"Render splitting keeps the speaker alignment")
+        var changed=rows.map{$0.raw};changed[0]["text"]="Corrected wording"
+        client.detail["segments"]=changed
+        precondition(client.transcriptRenderVersion==version+1,"Actual text edits invalidate rendering")
+        client.detail["segments"]=rows.map{$0.raw}
         var updates = 0
         let subscription = client.objectWillChange.sink { updates += 1 }
         client.transcriptUserScrolled(nearBottom:false)
