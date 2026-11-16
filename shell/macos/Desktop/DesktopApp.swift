@@ -145,8 +145,7 @@ struct ScribeLoopApp: App {
 
 struct SettingsDestination:Identifiable { let id:String }
 
-/// Chat-style floating jump buttons for the transcript box. Shown only while
-/// reading away from the live bottom; hidden again once following resumes.
+/// Floating transcript navigation controls; each direction has its own visibility.
 private struct TranscriptJumpButton: View {
     let icon:String
     let label:String
@@ -483,9 +482,9 @@ struct Notebook: View {
                 // thresholds makes SwiftUI rebuild the overlay during a gesture.
                 VStack(spacing:10) {
                     TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript") { core.loadPage(0) }
-                        .opacity(!core.transcriptFollow.following && !(core.offset == 0 && core.transcriptFollow.nearTop) ? 1 : 0)
-                        .allowsHitTesting(!core.transcriptFollow.following && !(core.offset == 0 && core.transcriptFollow.nearTop))
-                        .accessibilityHidden(core.transcriptFollow.following || (core.offset == 0 && core.transcriptFollow.nearTop))
+                        .opacity(core.offset == 0 && core.transcriptFollow.nearTop ? 0 : 1)
+                        .allowsHitTesting(!(core.offset == 0 && core.transcriptFollow.nearTop))
+                        .accessibilityHidden(core.offset == 0 && core.transcriptFollow.nearTop)
                     TranscriptJumpButton(icon:"chevron.down",
                         label:core.transcriptFollow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
                         badge:core.transcriptFollow.unread) { core.loadPage(-1) }

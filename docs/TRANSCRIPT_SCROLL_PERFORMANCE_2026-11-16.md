@@ -183,3 +183,7 @@ accessibility visibility, without animation. This removes that hierarchy change
 during a scroll gesture. The equatable transcript boundary also isolates text rows
 from follow-state updates. The revised build still needs the user's scrolling check;
 no measured frame-rate improvement is claimed.
+
+The up control is independent of bottom-follow mode: it remains available at the
+bottom and hides only near the top of the first page. Both controls retain stable
+mounted geometry.
