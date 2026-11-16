@@ -22,15 +22,17 @@ def make_app(request):
     from keyring.backends.SecretService import Keyring
 
     from ..capture.linux_pipewire import LinuxMeetingAudioSource, linux_capture_devices
+    from ..meetings.linux import LinuxActivityObserver, installed_apps
     from ..meetings.service import DiscoveryService
-    settings = DesktopSettings(backend=Keyring())
+    settings = DesktopSettings(backend=Keyring(), default_detection_enabled=False)
     return create_app(database=Path(request['database']), storage='encrypted',
         launch_token=request['token'], settings=settings,
         source_factory=LinuxMeetingAudioSource, cloud_config=settings.cloud(),
         summary_provider=settings.value.summary(),
         cleanup_provider=settings.value.cleanup(),
         discovery_factory=lambda publish: DiscoveryService(publish,
-            devices_provider=linux_capture_devices))[0]
+            observer=LinuxActivityObserver(), apps_provider=installed_apps,
+            devices_provider=linux_capture_devices, allow_application_capture=False))[0]
 
 
 async def serve(request):
@@ -77,6 +79,13 @@ def local_navigation(uri, port):
         return False
 
 
+def backend_command(installed):
+    installed = Path(installed).resolve()
+    if Path(sys.argv[0]).resolve() == installed:
+        return [sys.executable, '-I', str(installed)]
+    return [sys.executable, '-m', 'scribeloop_core.api.linux']
+
+
 def desktop():
     import secrets
 
@@ -89,8 +98,7 @@ def desktop():
     request = {'protocol':2, 'token':secrets.token_hex(32), 'launch_id':secrets.token_hex(16),
                'database':str((root/'meetings.sqlcipher').resolve())}
     installed = Path('/usr/lib/scribeloop/launch.py')
-    command = ([sys.executable, '-I', str(installed)] if installed.is_file() else
-               [sys.executable, '-m', 'scribeloop_core.api.linux'])
+    command = backend_command(installed)
     child = subprocess.Popen([*command, '--backend'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     try:

@@ -423,6 +423,32 @@ Developer ID signing/notarization and clean-machine/upgrade acceptance remain op
 See [desktop build instructions](packaging/macos/DESKTOP.md) and
 [Ubuntu preview](docs/LINUX_UBUNTU_PREVIEW.md).
 
+
+### Ubuntu preview runtime
+
+The GTK preview uses the same encrypted Python core with a separate Linux shell
+and bootstrap. Known-app discovery reads XDG desktop entries and PulseAudio or
+PipeWire-Pulse stream metadata; it does not inspect browser content or PCM.
+Monitoring is opt-in and off for a new Linux profile. Candidate suggestions and
+per-application capture remain unavailable; recording starts manually with
+microphone or all selected-output audio plus microphone.
+
+```mermaid
+flowchart LR
+  GTK["GTK notebook"] <-->|"Authenticated loopback"| Core["Shared Python core"]
+  Audio["Microphone / output monitor"] --> GST["GStreamer pull source"]
+  GST --> Core
+  Observer["Optional activity metadata"] --> Core
+  Core --> DB[("SQLCipher + encrypted audio")]
+  Core --> ASR["Configured cloud transcription"]
+```
+
+Provider settings use Secret Service. Playback uses unique private temporary
+directories/files, retired on replacement, end/error, meeting change and shutdown.
+Calendar, Email, Search/Ask UI and macOS feature parity are not claimed for this
+preview. See the [Ubuntu release plan](docs/LINUX_UBUNTU_APP_PLAN.md) and
+[preview validation](docs/LINUX_UBUNTU_PREVIEW.md).
+
 ## 10. Validation boundaries and historical plans
 
 The cleanup passed 882 automated tests without changing retrieval scores.

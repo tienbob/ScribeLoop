@@ -7,6 +7,7 @@ the real desktop window must authenticate, then close and reap its backend.
 from __future__ import annotations
 
 import os
+import runpy
 import subprocess
 import sys
 import time
@@ -73,7 +74,6 @@ def desktop():
     import gi
     gi.require_version('Gtk', '3.0')
     from gi.repository import GLib, Gtk
-    from scribeloop_core.api.linux import desktop as launch
     original_main = Gtk.main
     deadline = time.monotonic() + 40
     verified = []
@@ -95,7 +95,7 @@ def desktop():
         GLib.timeout_add(250, check)
         original_main()
     Gtk.main = test_main
-    launch()
+    runpy.run_path('/usr/lib/scribeloop/launch.py', run_name='__main__')
     assert verified and not failure, failure
     workspace = Path(os.environ['XDG_DATA_HOME'])/'ScribeLoop/meetings.sqlcipher'
     assert workspace.is_file()
@@ -106,4 +106,3 @@ def desktop():
 if __name__ == '__main__':
     capture()
     desktop()
-

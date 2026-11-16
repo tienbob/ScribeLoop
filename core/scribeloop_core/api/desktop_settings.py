@@ -1,4 +1,4 @@
-"""Desktop-only Keychain settings; no environment or repository .env discovery."""
+"""Desktop settings backed by the native secret store; no .env discovery."""
 from __future__ import annotations
 
 import contextlib
@@ -301,12 +301,13 @@ class Settings(BaseModel):
 
 
 class DesktopSettings:
-    def __init__(self, backend=None, *, transcription_key=""):
+    def __init__(self, backend=None, *, transcription_key="", default_detection_enabled=True):
         if backend is None:
             from keyring.backends.macOS import Keyring
             backend = Keyring()
         self._cloud = DeepgramConfig(api_key=transcription_key, budget_usd=.25, max_requests=160)
         self.backend = backend
+        self.default_detection_enabled = default_detection_enabled
         self.value = self.load()
 
     def load(self):
@@ -337,7 +338,7 @@ class DesktopSettings:
                 models = value.get('embedding_models')
                 value['embedding_models'] = {**models, value.get('embedding_provider') or 'Local': value['embedding_model']} \
                     if isinstance(models,dict) else {value.get('embedding_provider') or 'Local': value['embedding_model']}
-            return Settings.model_validate(value)
+            return Settings.model_validate({'detection_enabled': self.default_detection_enabled, **value})
         except Exception:  # noqa: BLE001 - native errors can include secret data
             raise KeyUnavailable('Provider settings could not be unlocked. No fallback was used.') from None
 
