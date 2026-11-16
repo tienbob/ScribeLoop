@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @main struct TranscriptBubbleTests {
     @MainActor static func main() {
@@ -26,6 +27,15 @@ import Foundation
         client.detail = ["segments":rows.map{$0.raw}]
         precondition(client.rows.map{$0.id} == rows.map{$0.id})
         precondition(client.transcriptTurns.map{$0.rows.map{$0.id}} == [["a","b"],["c"],["d"]])
+        var notebookUpdates=0
+        var navigationUpdates=0
+        let notebookObserver=client.objectWillChange.sink { notebookUpdates += 1 }
+        let navigationObserver=client.transcriptNavigation.objectWillChange.sink { navigationUpdates += 1 }
+        client.transcriptUserScrolled(nearBottom:false,nearTop:false)
+        client.transcriptUserScrolled(nearBottom:false,nearTop:true)
+        precondition(notebookUpdates==0,"Scroll thresholds must not invalidate the notebook")
+        precondition(navigationUpdates==2,"Navigation controls must receive threshold changes")
+        withExtendedLifetime((notebookObserver,navigationObserver)) {}
         let version=client.transcriptRenderVersion
         client.detail["notes"]="Only notes changed"
         precondition(client.transcriptRenderVersion==version,"Unchanged transcript must keep its render identity")

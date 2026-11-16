@@ -87,6 +87,10 @@ struct TranscriptFollowState:Equatable {
     mutating func receivedSpeech() { if !following { unread = true } }
 }
 
+final class TranscriptNavigationState:ObservableObject {
+    @Published var follow = TranscriptFollowState()
+}
+
 struct PreferencesSaveProgress {
     var initialValues = ""
     var initialDetection = true
@@ -179,7 +183,11 @@ struct PreferencesSaveProgress {
     @Published var emailExport: Object = [:]
     @Published var pageSerial = 0
     @Published var pageScrollToLatest = false
-    @Published var transcriptFollow = TranscriptFollowState()
+    let transcriptNavigation = TranscriptNavigationState()
+    var transcriptFollow:TranscriptFollowState {
+        get { transcriptNavigation.follow }
+        set { if newValue != transcriptNavigation.follow { transcriptNavigation.follow = newValue } }
+    }
     private var scrollOnPageResponse = true
     private var followsLatestPage = true
     private var navigationPending = false

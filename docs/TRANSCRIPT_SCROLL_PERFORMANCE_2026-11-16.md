@@ -187,3 +187,15 @@ no measured frame-rate improvement is claimed.
 The up control is independent of bottom-follow mode: it remains available at the
 bottom and hides only near the top of the first page. Both controls retain stable
 mounted geometry.
+
+### Follow-up: isolate navigation publication
+
+The user reported that the stable-control build still hitches. Visibility changes
+still mutated `DesktopClient`'s published follow state, notifying the notebook even
+with an equatable transcript child. Follow state now lives in a separate observable
+`TranscriptNavigationState`. Only the position label, quick-scroll controls and
+scroll-tracking bridge observe it; scrolling thresholds no longer publish notebook
+changes. Core paging/follow semantics retain their existing interface. A native
+regression asserts threshold changes notify navigation observers but do not notify
+notebook observers. This addresses a concrete invalidation path; subjective scrolling
+acceptance remains pending and the previous attempt did not resolve the reported lag.

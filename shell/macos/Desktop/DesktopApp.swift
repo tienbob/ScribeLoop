@@ -143,6 +143,43 @@ struct ScribeLoopApp: App {
     }
 }
 
+/// Scroll thresholds invalidate only these small views, not the notebook or text.
+private struct TranscriptFollowLabel:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let live:Bool
+    var body:some View {
+        Text(navigation.follow.following ? (live ? "Following live" : "At latest") : "Reading earlier")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+}
+private struct TranscriptTrackingBridge:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let onUserScroll:(Bool,Bool)->Void
+    var body:some View {
+        TranscriptScrollTracking(following:navigation.follow.following,onUserScroll:onUserScroll)
+    }
+}
+private struct TranscriptJumpControls:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let offset:Int
+    let top:()->Void
+    let bottom:()->Void
+    private var showTop:Bool { !(offset == 0 && navigation.follow.nearTop) }
+    var body:some View {
+        VStack(spacing:10) {
+            TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript",action:top)
+                .opacity(showTop ? 1 : 0).allowsHitTesting(showTop).accessibilityHidden(!showTop)
+            TranscriptJumpButton(icon:"chevron.down",
+                label:navigation.follow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
+                badge:navigation.follow.unread,action:bottom)
+                .opacity(navigation.follow.following ? 0 : 1)
+                .allowsHitTesting(!navigation.follow.following).accessibilityHidden(navigation.follow.following)
+        }
+        .padding(.trailing,28).padding(.bottom,20)
+        .transaction { $0.animation = nil }
+    }
+}
+
 struct SettingsDestination:Identifiable { let id:String }
 
 /// Floating transcript navigation controls; each direction has its own visibility.
@@ -462,8 +499,7 @@ struct Notebook: View {
                 Text("\(core.total == 0 ? 0 : core.offset+1)–\(min(core.offset+100,core.total)) of \(core.total)").font(.caption).monospacedDigit()
                 Button("Later") { core.loadPage(core.offset+100) }.disabled(core.offset+100 >= core.total)
                 Spacer()
-                Text(core.transcriptFollow.following ? (core.activeID == core.selectedID ? "Following live" : "At latest") : "Reading earlier")
-                    .font(.caption).foregroundStyle(.secondary)
+                TranscriptFollowLabel(navigation:core.transcriptNavigation,live:core.activeID == core.selectedID)
             }.padding(.horizontal,28).padding(.vertical,12)
             ScrollViewReader { proxy in
                 ScrollView {
@@ -471,29 +507,15 @@ struct Notebook: View {
                         sessionID:core.selectedID,revision:core.revision,busy:core.busy,
                         citationID:core.citationID,partials:core.partials,live:core.activeID==core.selectedID && core.activeID != nil)
                         .equatable()
-                        .background(TranscriptScrollTracking(following:core.transcriptFollow.following,
+                        .background(TranscriptTrackingBridge(navigation:core.transcriptNavigation,
                             onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
                 }
                 .onChange(of:core.pageSerial) { _ in scrollTranscript(proxy) }
                 .onAppear { scrollTranscript(proxy) }
             }
             .overlay(alignment:.bottomTrailing) {
-                // Keep both controls mounted: inserting/removing them at scroll
-                // thresholds makes SwiftUI rebuild the overlay during a gesture.
-                VStack(spacing:10) {
-                    TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript") { core.loadPage(0) }
-                        .opacity(core.offset == 0 && core.transcriptFollow.nearTop ? 0 : 1)
-                        .allowsHitTesting(!(core.offset == 0 && core.transcriptFollow.nearTop))
-                        .accessibilityHidden(core.offset == 0 && core.transcriptFollow.nearTop)
-                    TranscriptJumpButton(icon:"chevron.down",
-                        label:core.transcriptFollow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
-                        badge:core.transcriptFollow.unread) { core.loadPage(-1) }
-                        .opacity(core.transcriptFollow.following ? 0 : 1)
-                        .allowsHitTesting(!core.transcriptFollow.following)
-                        .accessibilityHidden(core.transcriptFollow.following)
-                }
-                .padding(.trailing,28).padding(.bottom,20)
-                .transaction { $0.animation = nil }
+                TranscriptJumpControls(navigation:core.transcriptNavigation,offset:core.offset,
+                    top:{ core.loadPage(0) },bottom:{ core.loadPage(-1) })
             }
         }
     }
