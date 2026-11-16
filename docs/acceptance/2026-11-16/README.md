@@ -1,5 +1,10 @@
 # F1/F2 acceptance evidence — 16 November 2026
 
+**Milestone decision:** the user explicitly approved closing F1 and F2 on
+16 November 2026 with the limits below accepted. F3 can proceed. The following
+review instructions are retained as validation follow-ups, not blockers to that
+approved milestone closure. Measurements and unreviewed fields are unchanged.
+
 These files contain synthetic data only. No private workspace, audio, API key or
 provider error body is included.
 

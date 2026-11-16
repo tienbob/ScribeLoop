@@ -1,7 +1,11 @@
 # F1 Search — implementation closeout
 
-Updated 2026-11-16. **Implementation complete; release acceptance open.**
+Updated 2026-11-16. **Closed by explicit user approval.**
 Delivery requirements: [meeting workspace plan](MEETING_WORKSPACE_DELIVERY_PLAN.md).
+
+The user approved closing F1/F2 after reviewing the recorded results and unrun
+gates. Remaining validation below is accepted follow-up work, not a blocker to
+F3. Unrun checks are not marked as passed.
 
 ## Delivered
 
@@ -48,7 +52,7 @@ PYTHONPATH=core .venv/bin/python scripts/check_search_quality.py \
   --output-dir data/validation/f1-f2/local-retrieval
 ```
 
-## Remaining release gates
+## Accepted limitations and validation follow-ups
 
 - Independently review the labels and confirm ≥36/40 relevant top-five results on
   the agreed corpus/configuration. Existing 38/40 development recall is promising

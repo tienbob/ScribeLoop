@@ -1,7 +1,8 @@
 # Current status and acceptance checklist
 
-**Meeting workspace, 16 November 2026:** F1 Search and F2 Ask are implemented;
-release acceptance is still open. The refreshed SQLCipher scale check passed
+**Meeting workspace, 16 November 2026:** F1 Search and F2 Ask are **closed by
+explicit user approval**, with the remaining validation accepted as follow-up.
+Next increment: **F3 — Meeting templates**. The refreshed SQLCipher scale check passed
 (1,000 meetings/100,000 segments; warm p95 233.168 ms, cold indexing/query 4.174 s).
 Local developer retrieval passed 38/40 at five and 39/40 at twenty passages.
 The production Gemini evaluation stopped on HTTP 429 after a harness error;
