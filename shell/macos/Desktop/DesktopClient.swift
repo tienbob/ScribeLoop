@@ -109,12 +109,17 @@ struct PreferencesSaveProgress {
     @Published var askThreadTurns: [Record] = []
     @Published var askThreadSerial = 0
     @Published var askThreadLoading = false
+    @Published var askHistoryDeleting = false
+    @Published var askHistoryDeleteError:String?
+    @Published var askHistoryDeleteSerial = 0
+    private(set) var askDeletedThread:String?
     var askResumeContext:Object = [:]
     @Published var askLoading = false
     @Published var askError: String?
     private var askRequest: String?
     private var askHistoryRequest: String?
     private var askThreadRequest: String?
+    private var askHistoryDeleteRequest:String?
     @Published var selectedID: String?
     @Published var detail: Object = [:] {
         didSet {
@@ -466,6 +471,9 @@ struct PreferencesSaveProgress {
             if id == askThreadRequest && ["rejected","unknown"].contains(status) {
                 askThreadLoading=false; askError="This chat could not open. Check that its meetings are still available."
             }
+            if id == askHistoryDeleteRequest && ["rejected","unknown"].contains(status) {
+                askHistoryDeleting=false; askHistoryDeleteError="Deletion could not be confirmed. Reopen History before retrying."
+            }
             if status == "accepted" || status == "rejected" { mutationIDs.remove(id) }
             if status == "rejected" { playback.reject(id,"Audio is unavailable. Check its retention status or recover interrupted audio.") }
             if status == "unknown" { message = "A previous action has no retained receipt. Review the current meeting state before repeating it." }
@@ -489,6 +497,21 @@ struct PreferencesSaveProgress {
             guard text(v["response_to"]) == askHistoryRequest else { return }
             askHistory = objects(v["answers"])
             askThreads = objects(v["threads"])
+        case "ask_history_deleted":
+            guard text(v["response_to"]) == askHistoryDeleteRequest else { return }
+            askDeletedThread=v["thread_id"] as? String
+            askHistoryDeleting=false; askHistoryDeleteError=nil
+            if v["all"] as? Bool == true {
+                askHistory=[]; askThreads=[]; askThreadTurns=[]; askResult=[:]; askResumeContext=[:]
+            } else if let id=askDeletedThread {
+                askThreads.removeAll { $0.id==id }
+                askHistory.removeAll { $0.text("thread_id")==id }
+                askThreadTurns.removeAll { $0.text("thread_id")==id }
+                if text(askResult["thread_id"])==id { askResult=[:] }
+                if text(askResumeContext["thread_id"])==id { askResumeContext=[:] }
+            }
+            askHistoryRequest=nil; askThreadRequest=nil; askThreadLoading=false
+            askHistoryDeleteSerial += 1
         case "ask_started":
             guard text(v["request_id"]) == askRequest else { return }
             askLoading = true; askError = nil
@@ -690,6 +713,16 @@ struct PreferencesSaveProgress {
         askThreadRequest=send(command)
         if askThreadRequest == nil { askThreadLoading=false; askError="Chat could not open. Reconnect and try again." }
     }
+    func deleteAskHistory(threadID:String? = nil) {
+        guard !askHistoryDeleting else { return }
+        var command:Object=["action":"delete_ask_history","confirmed":true]
+        if let threadID { command["thread_id"]=threadID } else { command["all"]=true }
+        askHistoryDeleteError=nil; askHistoryDeleting=true
+        askHistoryDeleteRequest=send(command)
+        if askHistoryDeleteRequest == nil {
+            askHistoryDeleting=false; askHistoryDeleteError="Chat deletion could not start. Reconnect and try again."
+        }
+    }
     func showAskHistory(_ row:Record) {
         guard row.raw["stale"] as? Bool != true else { return }
         askResult=askHistoryResult(row)
@@ -832,6 +865,9 @@ struct PreferencesSaveProgress {
     private func clearConnection() {
         connection = UUID(); reader?.cancel(); reader = nil; socket?.cancel(with:.goingAway,reason:nil); socket = nil
         searchRequest=nil; discardSearchResponse=true; searchLoading=false
+        if askHistoryDeleting {
+            askHistoryDeleting=false; askHistoryDeleteError="Deletion was interrupted. Reconnect and reopen History to check its status."
+        }
     }
     private func finishStop() {
         shutdown?.cancel(); deadline?.cancel(); clearConnection(); port = nil; token = ""
@@ -850,6 +886,8 @@ struct PreferencesSaveProgress {
 extension DesktopClient {
     var auditPageRequest: String? { pageRequest }
     var auditSearchRequest: String? { searchRequest }
+    var auditAskHistoryRequest:String? { askHistoryRequest }
+    var auditAskHistoryDeleteRequest:String? { askHistoryDeleteRequest }
     func auditConnect(_ socket: URLSessionWebSocketTask) { self.socket = socket; state = "Connected" }
     func auditReceive(_ value: Object) { receive(value) }
 }

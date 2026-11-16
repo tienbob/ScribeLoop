@@ -252,3 +252,15 @@ class DesktopContract:
     def check_size(event):
         if len(json.dumps(event).encode()) > 16_000_000:
             raise ValueError('Desktop response exceeds bounds')
+
+    @staticmethod
+    def delete_ask_history(store, command):
+        single=set(command)=={'action','thread_id','confirmed'}
+        all_chats=set(command)=={'action','all','confirmed'} and command.get('all') is True
+        if command.get('action')!='delete_ask_history' or command.get('confirmed') is not True or not (single or all_chats):
+            raise ValueError('Confirm which Ask history to delete')
+        thread=command.get('thread_id')
+        if single and (not isinstance(thread,str) or not ID.fullmatch(thread)):
+            raise ValueError('Invalid Ask thread')
+        count=store.delete_ask_history(thread if single else None)
+        return {'type':'ask_history_deleted','thread_id':thread,'all':all_chats,'deleted_answers':count}

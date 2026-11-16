@@ -254,7 +254,11 @@ The native Ask sheet has two entry points: Ask this meeting in a conversation an
 Ask across meetings in the sidebar. A compact expandable context bar and Change
 picker replace the scope tabs. Changing meetings starts a new chat; Cancel keeps
 the current chat. History restores complete saved threads and their original
-meeting context. Sources and usage details expand beneath each answer. Follow-ups
+meeting context. Sources expand beneath each answer; processing details are hidden.
+History supports confirmed deletion of a thread or all chats, cascading citations
+and checkpointing the database without deleting meetings. Cached answers and old
+history responses are invalidated. Deletion requires idle Ask jobs and makes no
+provider or per-record Keychain request. Follow-ups
 use the previous turn plus fresh evidence, not unlimited model memory.
 Schema v22 adds thread/parent links; legacy answers become single-turn threads.
 All-meeting membership freezes at the first question. Threads are capped at 100

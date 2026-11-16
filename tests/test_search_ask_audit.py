@@ -274,3 +274,36 @@ def test_authenticated_revocation_stops_same_and_cross_socket_work(monkeypatch,a
             receive(one,'ask_cancelled' if action=='ask_question' else 'error')
             assert calls==['embedding']
             assert not client.portal.call(lambda:list(app.state.store.conn.execute('SELECT id FROM meeting_answers')))
+
+
+def test_authenticated_history_deletion_dispatch_and_receipt_replay():
+    class Vault:
+        value=None
+        def get_password(self,*_): return self.value
+        def set_password(self,*args): self.value=args[-1]
+    desktop=DesktopContract(DesktopSettings(Vault()),Path('/fake/helper'))
+    app,token=create_app(desktop=desktop,summary_provider=provider(cited))
+    def receive(ws,kind):
+        while True:
+            value=ws.receive_json()
+            assert value['type']!='error',value
+            if value['type']==kind: return value
+    with TestClient(app) as client:
+        async def seed():
+            store=app.state.store
+            sid=meeting(store,['The pilot starts Thursday'])
+            result=await MeetingAsk(store,None).answer('unfindablezebra',AskScope.resolve(store,'current',current_id=sid))
+            return sid,result['thread_id']
+        sid,thread=client.portal.call(seed)
+        with client.websocket_connect('ws://127.0.0.1/ws') as ws:
+            ws.send_text(token); receive(ws,'snapshot')
+            rid=uuid4().hex
+            envelope={'protocol':2,'request_id':rid,'command':{'action':'delete_ask_history','thread_id':thread,'confirmed':True}}
+            ws.send_json(envelope)
+            result=receive(ws,'ask_history_deleted')
+            assert result['response_to']==rid and result['deleted_answers']==1
+            assert receive(ws,'receipt')['status']=='accepted'
+            ws.send_json(envelope)
+            assert receive(ws,'receipt')['status']=='accepted'
+            assert client.portal.call(lambda:app.state.store.get(sid))
+            assert not client.portal.call(lambda:list(app.state.store.conn.execute('SELECT id FROM meeting_answers')))

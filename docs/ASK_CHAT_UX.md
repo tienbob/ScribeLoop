@@ -7,8 +7,8 @@ Open Ask this meeting from a conversation, or Ask across meetings from the sideb
 continue with a follow-up, inspect a source, or start a new chat.
 
 Use the notebook palette, a chronological message timeline, an anchored multiline
-composer, starter questions and a separate saved-answer history panel. Keep sources
-and processing details collapsed beneath each answer. Never make provider calls on
+composer, starter questions and a separate chat-history panel. Keep sources
+collapsed beneath each answer. Never make provider calls on
 opening Ask, choosing a starter, changing scope or reopening a saved answer.
 
 One compact context bar replaces the three-way scope tabs. Click its title/count
@@ -104,6 +104,33 @@ Implemented on `feature/ask-meeting-context-and-threads`:
 - The final macOS app was rebuilt at `dist/macos/ScribeLoop.app` and passes bundle
   verification: 40 native binaries, no external dependencies, no bundled recordings
   or operator transcription key, macOS 13 minimum, internal ad-hoc signing.
+
+## History deletion and simpler answers
+
+History offers a trash button on each chat and Delete all. Both require a native
+confirmation; Cancel makes no mutation. The authenticated mutation requires exact
+single-thread/all-history fields and `confirmed: true`. It is idempotent and uses
+the dispatch receipt ledger. It does not require an AI provider, Hybrid settings,
+renewed processing agreement or a per-record Keychain read.
+
+Deletion removes saved turns and cascades their citations, then checkpoints the
+database. It preserves recordings, transcripts and notes. Deletion waits until
+registered Ask jobs are idle. The client removes cached answers/resume state and
+invalidates older history reads, preventing late responses from restoring deleted
+rows. A deleted active chat returns to the empty composer.
+
+The Answer details disclosure is removed. Sources, stale-state/fallback warnings
+and evidence-limit notices remain visible. Processing usage is still saved for
+diagnostics but is not shown beneath Ask answers.
+
+Verification: all 904 Python tests pass, including authenticated deletion/receipt
+replay, exact confirmation validation, individual/all deletion, citation cleanup
+and preservation of meetings. Native audit checks pass for cached-answer clearing,
+single pending deletion and rejecting late history responses. The rebuilt macOS
+bundle passes verification. Its final capture-permission reset initially failed
+because LaunchServices did not know the app; registering the completed bundle and
+retrying both app-specific resets succeeded. No live AI calls or private-history
+deletions were used for these checks.
 
 The final native UI walkthrough is **not verified**: desktop-control startup
 failed repeatedly with `Sky Computer Use native pipe startup failed`, including

@@ -759,6 +759,7 @@ struct MeetingAskView: View {
     @State private var showMeetings=false
     @State private var showHistory=false
     @State private var showContext=false
+    @State private var historyDeletionTarget:String?
     @State private var turns:[AskChatTurn]=[]
     @State private var pendingQuestion:String?
     @State private var threadStale=false
@@ -772,7 +773,7 @@ struct MeetingAskView: View {
     private var scopeReady:Bool { scope == "current" ? contextMeetingID != nil : scope != "selected" || !selected.isEmpty }
     private var canSend:Bool {
         let value=question.trimmingCharacters(in:.whitespacesAndNewlines)
-        return !core.askLoading && !core.askThreadLoading && !threadStale && turns.count < 100 && scopeReady && !value.isEmpty && value.count <= 500
+        return !core.askLoading && !core.askThreadLoading && !core.askHistoryDeleting && !threadStale && turns.count < 100 && scopeReady && !value.isEmpty && value.count <= 500
     }
     private var scopeLabel:String {
         if scope == "current" { return core.sessions.first(where:{$0.id==contextMeetingID})?.text("title") ?? "This meeting" }
@@ -920,6 +921,12 @@ struct MeetingAskView: View {
             if turns.isEmpty { core.askError="This chat is no longer available in these meetings." }
             question=""; composerFocused=true
         }
+        .onChange(of:core.askHistoryDeleteSerial) { _ in
+            if core.askDeletedThread == nil || turns.contains(where:{
+                text($0.result["thread_id"]) == core.askDeletedThread || $0.id == core.askDeletedThread
+            }) { newChat() }
+            refreshHistory()
+        }
         .onChange(of:core.askHybridEnabled) { enabled in
             if !enabled { if core.askLoading { core.cancelAsk() }; dismiss() }
         }
@@ -1005,13 +1012,21 @@ struct MeetingAskView: View {
                     Text("Chat history").font(.title2.weight(.semibold))
                     Text("Return to a saved chat. Its meeting context is restored.").font(.caption).foregroundStyle(.secondary)
                 }
-                Spacer(); Button("Done") { showHistory=false }
+                Spacer()
+                if core.askHistoryDeleting { ProgressView().controlSize(.small) }
+                Button("Delete all…",role:.destructive) { historyDeletionTarget="all" }
+                    .disabled(core.askThreads.isEmpty || core.askHistoryDeleting)
+                Button("Done") { showHistory=false }.disabled(core.askHistoryDeleting)
             }
             Divider()
+            if let error=core.askHistoryDeleteError {
+                Label(error,systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(ScribeTheme.warning)
+            }
             if core.askThreads.isEmpty { Text("Your chats will appear here after the first saved answer.").foregroundStyle(.secondary) }
             ScrollView {
                 LazyVStack(alignment:.leading,spacing:12) {
                     ForEach(core.askThreads) { row in
+                        HStack(alignment:.top,spacing:8) {
                         Button {
                             newChat()
                             if let saved=row.raw["scope"] as? Object {
@@ -1034,10 +1049,27 @@ struct MeetingAskView: View {
                             }.frame(maxWidth:.infinity,alignment:.leading).padding(14)
                                 .background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:12))
                         }.buttonStyle(.plain)
+                        Button(role:.destructive) { historyDeletionTarget=row.id } label: {
+                            Image(systemName:"trash").padding(10)
+                        }.buttonStyle(.borderless).help("Delete this chat")
+                            .accessibilityLabel("Delete chat: \(row.text("question"))")
+                        }.disabled(core.askHistoryDeleting || core.askThreadLoading)
                     }
                 }
             }
-        }.padding(22).frame(width:560,height:500).background(ScribeTheme.canvas)
+        }.padding(22).frame(width:600,height:500).background(ScribeTheme.canvas)
+            .interactiveDismissDisabled(core.askHistoryDeleting)
+            .alert(historyDeletionTarget == "all" ? "Delete all chat history?" : "Delete this chat?",
+                   isPresented:Binding(get:{historyDeletionTarget != nil},set:{if !$0 {historyDeletionTarget=nil}}),
+                   presenting:historyDeletionTarget) { target in
+                Button("Cancel",role:.cancel) { historyDeletionTarget=nil }
+                Button("Delete",role:.destructive) {
+                    core.deleteAskHistory(threadID:target == "all" ? nil : target)
+                    historyDeletionTarget=nil
+                }
+            } message: { _ in
+                Text("This permanently deletes saved questions and answers. Meeting recordings, transcripts and notes stay available.")
+            }
     }
 }
 
@@ -1089,21 +1121,10 @@ struct AskChatAnswer:View {
                     }.buttonStyle(.plain)
                 }
             }.font(.caption).foregroundStyle(.secondary)
-            DisclosureGroup("Answer details") {
-                VStack(alignment:.leading,spacing:8) {
-                    if packet["truncated"] as? Bool == true {
-                        Text("Evidence limited to 20 passages / 48 KB; this is not exhaustive.")
-                    }
-                    if let semantic=(packet["index"] as? Object)?["semantic"] as? Object {
-                        if semantic["enabled"] as? Bool == true {
-                            Text("Hybrid search · \(text(semantic["provider"]))")
-                        } else if !text(semantic["message"]).isEmpty {
-                            Text(text(semantic["message"])).foregroundStyle(ScribeTheme.warning)
-                        }
-                    }
-                    if let usage=result["usage"] as? Object { RetrievalUsage(usage:usage) }
-                }.padding(.top,6)
-            }.font(.caption).foregroundStyle(.secondary)
+            if packet["truncated"] as? Bool == true {
+                Label("Evidence was limited; this answer is not exhaustive.",systemImage:"info.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }.frame(maxWidth:.infinity,alignment:.leading)
     }
 }
