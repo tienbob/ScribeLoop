@@ -250,6 +250,14 @@ Search returns matching saved sources. Ask uses retrieved context to generate a
 structured cited answer. Ask requires configured Hybrid Search; weak retrieval
 does not trigger a full-transcript upload.
 
+The native Ask sheet presents a chronological chat timeline, automatic follow-ups,
+a multiline composer, starter questions and a separate saved-answer history panel.
+Sources and usage details expand beneath each answer. Changing scope or choosing
+New chat clears the visible conversation and follow-up context. History reopens
+individual saved answers rather than a durable full chat thread. Follow-ups use
+the previous saved answer plus newly retrieved evidence, not unlimited chat memory.
+See [Ask UX flow and validation](docs/ASK_CHAT_UX.md).
+
 Keyword Search is local. Hybrid can upload source excerpts and queries to the
 chosen embedding service. Local embeddings avoid cloud embedding uploads; Ask may
 still send evidence to a cloud notes provider.
