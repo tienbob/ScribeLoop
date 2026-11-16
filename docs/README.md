@@ -9,6 +9,10 @@ capture/release acceptance gates.
 
 ## Current development
 
+- [Meeting workspace delivery plan — F1/F2 acceptance status](MEETING_WORKSPACE_DELIVERY_PLAN.md)
+- [F1 Search implementation closeout and measured scale results](SEARCH_CLOSEOUT.md)
+- [F2 Ask closeout, blocked live attempt and human-review worksheet](MEETING_CHAT_CLOSEOUT.md)
+
 - [Changelog since the shared macOS beta](../CHANGELOG.md)
 - [Drive build comparison and artifact evidence](MACOS_DRIVE_COMPARISON_2026-11-12.md)
 

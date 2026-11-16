@@ -1,0 +1,139 @@
+{
+  "fixture_version": "workspace-acceptance-v1",
+  "fixture_sha256": "b7079da993457df8d8f31b9524dff3951fb30bbeee1febd3080098ec9cfd6774",
+  "platform": "macOS-27.2.1-arm64-arm-64bit",
+  "python": "3.12.16",
+  "runs_planned": 3,
+  "questions_per_run": 40,
+  "answer_provider": {
+    "provider": "Gemini",
+    "model": "gemini-3.5-flash-lite",
+    "cloud": true,
+    "configured": true,
+    "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "max_input_bytes": 100000
+  },
+  "embedding": {
+    "provider": "Gemini",
+    "model": "gemini-embedding-001",
+    "dimensions": 768
+  },
+  "storage": "temporary SQLCipher; random ephemeral key",
+  "human_grounding_review": "pending",
+  "label_review": "Human review of ground truth pending; labels frozen before model execution",
+  "limitations": "Developer-authored synthetic evaluation; not independent human acceptance. No real customer data or retained audio.",
+  "provider_max_calls": 420,
+  "provider_max_input_bytes": 5000000,
+  "provider_calls": 75,
+  "provider_input_bytes": 135879,
+  "completed_cases": 15,
+  "stopped_early": true,
+  "results": [
+    {
+      "run": 1,
+      "question_id": "Atlas-decision",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 17398
+    },
+    {
+      "run": 1,
+      "question_id": "Atlas-owner",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2187
+    },
+    {
+      "run": 1,
+      "question_id": "Atlas-proposal",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2793
+    },
+    {
+      "run": 1,
+      "question_id": "Atlas-negative",
+      "kind": "conflicting",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2692
+    },
+    {
+      "run": 1,
+      "question_id": "Beacon-decision",
+      "kind": "answerable",
+      "error": "ask_invalid_citation",
+      "elapsed_ms": 2830
+    },
+    {
+      "run": 1,
+      "question_id": "Beacon-owner",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2590
+    },
+    {
+      "run": 1,
+      "question_id": "Beacon-proposal",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2250
+    },
+    {
+      "run": 1,
+      "question_id": "Beacon-negative",
+      "kind": "conflicting",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2760
+    },
+    {
+      "run": 1,
+      "question_id": "Cedar-decision",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2789
+    },
+    {
+      "run": 1,
+      "question_id": "Cedar-owner",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2778
+    },
+    {
+      "run": 1,
+      "question_id": "Cedar-proposal",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2369
+    },
+    {
+      "run": 1,
+      "question_id": "Cedar-negative",
+      "kind": "conflicting",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2835
+    },
+    {
+      "run": 1,
+      "question_id": "Delta-decision",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2540
+    },
+    {
+      "run": 1,
+      "question_id": "Delta-owner",
+      "kind": "answerable",
+      "error": "ask_internal_error",
+      "elapsed_ms": 2300
+    },
+    {
+      "run": 1,
+      "question_id": "Delta-proposal",
+      "kind": "answerable",
+      "error": "ask_answer_http_429",
+      "elapsed_ms": 1095
+    }
+  ],
+  "attempt_classification": "INVALID HARNESS ATTEMPT; not a model-quality score; stopped on HTTP 429. Provider metadata wrapper repaired offline afterward; no live retry."
+}

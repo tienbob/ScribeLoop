@@ -1,8 +1,8 @@
 # F2 Ask meetings — implementation closeout
 
-Status: Ask implementation complete; multilingual hybrid retrieval added on
-`feature/f2-hybrid-search`. Release acceptance evaluation remains open.
-Updated 2026-11-11. See `HYBRID_SEARCH_VALIDATION.md` for current validation.
+Status: Ask implementation complete; release acceptance evaluation remains open.
+Updated 2026-11-16. See `HYBRID_SEARCH_VALIDATION.md`, `SEARCH_CLOSEOUT.md` and
+the acceptance artifacts below. Earlier test counts in this document are historical.
 
 ## Delivered flow
 
@@ -79,3 +79,48 @@ answerable questions, and confirm all ten unanswerable/conflicting cases avoid
 invented certainty. Installed-app keyboard, long Vietnamese text, physical
 citation navigation, cancellation timing, offline/quota recovery and first-status
 under one second also require final hands-on evidence.
+
+## Acceptance attempt — 2026-11-16
+
+The versioned fixture is `tests/fixtures/meeting_workspace_acceptance_v1.json`:
+30 synthetic meetings, 10 recurring topics, English/Vietnamese/code switching,
+repeated titles, amended proposals, conflicting deadlines, unclear speech and
+missing facts. It contains 30 answerable and 10 unanswerable/conflicting questions,
+with expected facts and forbidden conclusions frozen before model execution.
+The seeder applies speaker labels and a deleted-meeting canary; there is no audio.
+Its labels are developer-authored and still need independent human review.
+
+The runner uses a temporary SQLCipher workspace, the app's saved provider choices,
+no user conversations/audio, no automatic retries, at most 420 provider calls and
+5 MB aggregate counted input. The envelope sizes of answers are counted; embedding
+input accounting counts text bytes rather than complete HTTP envelope bytes.
+Results checkpoint after every case, and provider/quota failures stop the run.
+
+Saved destination: Gemini `gemini-3.5-flash-lite` answers with
+`gemini-embedding-001`, 768 dimensions. The first attempt stopped after 15 cases
+and 75 counted calls on **HTTP 429**. A harness metadata-wrapper error affected
+earlier cases; this wrapper was subsequently fixed and verified with a real Ask
+persistence path and fake providers. **This attempt is invalid for model quality.**
+There are no three completed passes and no human-grounding score. No live retry
+was made after the quota response.
+
+Artifacts:
+
+- [Partial attempt, failures and configuration](acceptance/2026-11-16/live-attempt-blocked.json)
+- [120-row human-review template](acceptance/2026-11-16/human-review-template.csv)
+- [Encrypted F1 performance results](acceptance/2026-11-16/encrypted-scale.json)
+- [Local retrieval summary](acceptance/2026-11-16/local-retrieval-summary.json)
+
+After quota is resolved and fixture labels reviewed, explicitly run:
+
+```sh
+PYTHONPATH=core .venv/bin/python scripts/evaluate_meeting_workspace.py \
+  --allow-cloud --runs 3 --output-dir data/validation/f1-f2/new-production-attempt
+```
+
+Use a new output directory so previous attempts are preserved. The resulting
+`human-review.csv` pairs answers and citations with the frozen expected facts.
+A reviewer must independently score semantic support and all negative/conflicting
+cases. Citation-ID validity is reported separately and is not a grounding score.
+Do not mark F2 release accepted until all three passes and the native recovery/
+status-timing checks satisfy the delivery plan.

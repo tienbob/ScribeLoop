@@ -2,7 +2,8 @@
 
 # ScribeLoop meeting workspace — delivery plan
 
-Status: implementation started; F1 slices 1–3 are in progress. Updated 2026-11-10.
+Status: F1 and F2 implemented; release acceptance remains open. Updated 2026-11-16.
+See `SEARCH_CLOSEOUT.md` and `MEETING_CHAT_CLOSEOUT.md` for the evidence and remaining gates.
 
 Goal: turn saved conversations into a searchable, cited workspace that helps users
 remember decisions and follow through. Deliver six independently usable increments
@@ -32,7 +33,8 @@ Delivery rules:
 - Native macOS UX first. Preserve saved workspaces and settings during migrations.
 - Keyword search and bundled local Hybrid search stay on this Mac. Remote Hybrid
   uses the explicitly selected embedding provider for transcript chunks and queries.
-  Hybrid searches run on Submit; no API request occurs on each keystroke. Search/Ask
+  Native Search runs after a 500 ms typing/filter pause; cloud Hybrid can therefore
+  send query/indexing requests automatically while searching. Ask remains explicit Submit. Search/Ask
   do not load an ASR model or upload audio.
 - Use the configured notes LLM for Ask and generated drafts. Show the destination
   and scope. No implicit fallback to another provider or automatic paid retry.
@@ -97,10 +99,10 @@ expired audio by offering transcript navigation without a broken Play action.
 
 Implementation slices:
 
-1. Revision-aware index and incremental, resumable backfill. **Implemented; acceptance measurement pending.**
-2. Bounded paged query API, ranking and filters. **Implemented; corpus ranking measurement pending.**
-3. Native search entry/results, keyboard navigation and source opening. **Implemented; installed-app UX validation pending.**
-4. Edit/delete/rename invalidation, measurement and acceptance report.
+1. Revision-aware index and incremental, resumable backfill. **Implemented and regression-tested.**
+2. Bounded paged query API, ranking and filters. **Implemented; independent ranking acceptance pending.**
+3. Native search entry/results and source opening. **Implemented; sampled installed-app checks pass; complete keyboard/playback matrix pending.**
+4. Edit/delete/rename invalidation and measured scale report. **Implemented; closeout recorded in SEARCH_CLOSEOUT.md.**
 
 Current implementation notes: search documents and state live inside the encrypted
 workspace; FTS5 is capability-checked with a disclosed basic-search fallback.
@@ -192,7 +194,7 @@ flowchart TD
 
 **Finished only when:**
 
-- [ ] All currently selected saved revisions are indexed; old revisions do not leak
+- [x] All currently selected saved revisions are indexed; old revisions do not leak
   into default results. Interrupted backfill resumes without duplicated hits.
 - [ ] Title, transcript and summary search plus all three filters work in the native
   app, including Vietnamese diacritics and documented accent-insensitive matching.
@@ -201,10 +203,16 @@ flowchart TD
   lands on its highlighted segment and available playback starts at that segment.
 - [ ] Edits and deletes are reflected before a new query can return stale content;
   backfill status is visible and incomplete indexing is disclosed.
-- [ ] On the recorded development Mac, a 1,000-meeting/100,000-segment fixture has
+- [x] On the recorded development Mac, a 1,000-meeting/100,000-segment fixture has
   p95 query response ≤500 ms over 100 warm queries; cold-start timing is reported.
 - [ ] No network request occurs during keyword search. Keyboard access, empty,
   loading, index-unavailable and audio-expired states are verified.
+
+2026-11-16 evidence: real SQLCipher fixture, 101,000 documents, 100 warm keyword
+queries: p95 **233.168 ms**, p50 **223.467 ms**, cold indexing/query **4,173.521 ms**.
+This excludes native transport and cloud latency. Local developer-authored
+retrieval remains 38/40 top-five and 39/40 top-twenty; independent label review is
+not complete. Do not check the ranking or full native-UX gates based on these samples.
 
 ## F2 — Ask your meetings
 
@@ -326,9 +334,9 @@ flowchart TD
 
 **Finished only when:**
 
-- [ ] Scope is visible and enforced server-side for retrieval, generation, follow-up
+- [x] Scope is visible and enforced server-side for retrieval, generation, follow-up
   history and every citation. No answer draws from a meeting outside the scope.
-- [ ] All rendered citation IDs resolve to the correct permitted meeting/revision;
+- [x] All rendered citation IDs resolve to the correct permitted meeting/revision;
   invalid IDs are rejected rather than displayed as working citations.
 - [ ] On the 40-question set, ≥90% of answerable questions pass human grounding
   review, and all 10 unanswerable/conflicting cases avoid invented certainty.
@@ -336,13 +344,20 @@ flowchart TD
   the other. Record the configured model and repeat the evaluation three times.
 - [ ] Unsupported factual claims are withheld or explicitly marked uncertain;
   answers can say “not found in the retrieved evidence.”
-- [ ] Changes to transcript selection/text or deleted sources invalidate affected
+- [x] Changes to transcript selection/text or deleted sources invalidate affected
   saved answers. Source deletion purges dependent answer text/evidence caches.
 - [ ] Cancellation, offline/quota errors and ambiguous dispatch have usable recovery
   with no automatic paid retry. First useful status appears within 1 second;
   end-to-end provider timing and request usage are recorded, not guaranteed.
 - [ ] Prompt-injection fixtures cannot widen scope, invoke tools, reveal keys or
   trigger outbound messages. No audio is uploaded by Ask.
+
+2026-11-16 acceptance attempt: a versioned synthetic 30-meeting/40-question fixture
+and 120-row human-review template now exist. Production Gemini was attempted with
+strict request/input caps. The first harness had a provider-metadata wrapper bug
+(repaired and tested offline), then encountered HTTP 429 and stopped after 15
+cases. That attempt is invalid for model quality; no three-run or human-grounding
+gate is passed. It was not automatically retried. See the closeout for artifacts.
 
 ## F3 — Meeting templates
 
@@ -586,7 +601,7 @@ JSON state that makes those dependencies invisible.
 
 | Increment         | Status                                     | Depends on                            | Closeout artifact               |
 | ----------------- | ------------------------------------------ | ------------------------------------- | ------------------------------- |
-| F1 Search         | Not started                                | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
+| F1 Search         | Implemented; independent acceptance pending | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
 | F2 Ask            | Implemented; acceptance evaluation pending | F1                                    | `MEETING_CHAT_CLOSEOUT.md`    |
 | F3 Templates      | Not started                                | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
 | F4 Tasks          | Not started                                | Existing action extraction            | `ACTION_TRACKING_CLOSEOUT.md` |
@@ -594,5 +609,8 @@ JSON state that makes those dependencies invisible.
 | F6a Drafts        | Not started                                | F3/F4 and evidence contract           | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
 | F6b Integrations  | Not started                                | F6a + connector credentials           | `INTEGRATIONS_CLOSEOUT.md`    |
 
-The next implementation task is F1 slice 1: encrypted, revision-aware local search
-index and its update/delete contracts, followed by the native search surface.
+Next delivery task: finish F1/F2 release acceptance, not reimplement their APIs/UI.
+Merge the tested responsiveness fixes, review the fixture labels independently,
+resolve Gemini quota, then explicitly run three production-model passes and human
+grounding/abstention review. Finish the remaining installed-app keyboard, playback,
+expired-audio and recovery/status-timing matrix before declaring either release accepted.

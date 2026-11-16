@@ -1,5 +1,15 @@
 # Current status and acceptance checklist
 
+**Meeting workspace, 16 November 2026:** F1 Search and F2 Ask are implemented;
+release acceptance is still open. The refreshed SQLCipher scale check passed
+(1,000 meetings/100,000 segments; warm p95 233.168 ms, cold indexing/query 4.174 s).
+Local developer retrieval passed 38/40 at five and 39/40 at twenty passages.
+The production Gemini evaluation stopped on HTTP 429 after a harness error;
+neither three completed passes nor independent human grounding review is claimed.
+See [delivery plan](MEETING_WORKSPACE_DELIVERY_PLAN.md),
+[F1 closeout](SEARCH_CLOSEOUT.md) and [F2 closeout](MEETING_CHAT_CLOSEOUT.md).
+The older build-specific notes below remain historical evidence.
+
 **API-key input update:** build 0.1.5 (6) clears password AutoFill content hints
 on the Deepgram and summary-provider secure fields and disables autocorrection.
 Keys remain masked, and their Keychain persistence is unchanged. This is an
