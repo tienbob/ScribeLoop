@@ -5,6 +5,8 @@ and Bandit 1.9.4 against `core/` at medium severity or higher. An advisory failu
 requires investigation and a dependency update or an explicitly reviewed exception.
 These checks complement tests and code review; they do not certify the app secure
 or cover optional research environments and native dependencies.
+CI upgrades setuptools to at least 84.1.0 before auditing; the build-system
+minimum matches this floor instead of retaining the runner's vulnerable copy.
 
 ## Reviewed static-analysis baseline
 
