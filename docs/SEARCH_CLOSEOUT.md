@@ -20,8 +20,8 @@ displays the 200-character limit. Filtered searches index eligible meetings only
 provider responses are streamed with size and elapsed-time limits. Keyword
 fallback remains explicit; no automatic provider change or paid retry is added.
 
-These fixes are tracked in [PR #27](https://github.com/tienbob/ScribeLoop/pull/27);
-its merge/check status must be consulted before treating them as main behavior.
+These fixes merged in [PR #27](https://github.com/tienbob/ScribeLoop/pull/27),
+main commit `3bd4fba`, after core CI, macOS and all four Ubuntu packaging jobs passed.
 
 ## Measured evidence
 

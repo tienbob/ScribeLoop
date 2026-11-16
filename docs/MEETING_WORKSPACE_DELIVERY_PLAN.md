@@ -610,7 +610,8 @@ JSON state that makes those dependencies invisible.
 | F6b Integrations  | Not started                                | F6a + connector credentials           | `INTEGRATIONS_CLOSEOUT.md`    |
 
 Next delivery task: finish F1/F2 release acceptance, not reimplement their APIs/UI.
-Merge the tested responsiveness fixes, review the fixture labels independently,
+The responsiveness fixes merged in PR #27 (`3bd4fba`) with all hosted checks green.
+Review the fixture labels independently,
 resolve Gemini quota, then explicitly run three production-model passes and human
 grounding/abstention review. Finish the remaining installed-app keyboard, playback,
 expired-audio and recovery/status-timing matrix before declaring either release accepted.
