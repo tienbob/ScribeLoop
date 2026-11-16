@@ -41,7 +41,8 @@ async def test_whole_response_deadline_and_cancellation_close_stream(monkeypatch
             await asyncio.Event().wait()
         async def aclose(self):observed.append('closed')
     async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r:httpx.Response(200,stream=Body()))) as client:
-        with pytest.raises(TimeoutError):await embeddings._embedding_response(client,'https://fake.example')
+        with pytest.raises((TimeoutError,asyncio.TimeoutError)):
+            await embeddings._embedding_response(client,'https://fake.example')
         monkeypatch.setattr(embeddings,'EMBEDDING_DEADLINE_S',60)
         task=asyncio.create_task(embeddings._embedding_response(client,'https://fake.example'))
         await asyncio.sleep(.01);task.cancel()
