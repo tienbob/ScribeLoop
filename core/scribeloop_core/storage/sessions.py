@@ -402,6 +402,8 @@ class SessionStore:
             self.conn.execute('INSERT INTO sessions '
                 '(id,started_at,source,title,status,consent_confirmed) VALUES (?,?,?,?,?,1)',
                 (session_id, now, 'meeting', title, 'preparing'))
+            from .note_templates import NoteTemplateStore
+            NoteTemplateStore(self.conn).attach_new_session(session_id)
             for stream in ('mic', 'loopback'):
                 self.conn.execute('INSERT INTO session_streams '
                     '(id,session_id,stream,sample_rate,started_at) VALUES (?,?,?,?,?)',
@@ -449,17 +451,25 @@ class SessionStore:
         rows = self.segments(session_id)
         return rows,transcript_hash(rows),summary_messages(rows) if build_messages else None
 
-    def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model):
+    def save_grounded_summary(self, session_id, revision, input_hash, value, *, provider, model,generation_id=None):
         from ..llm.grounded import summary_content_hash, validate_summary
         rows,current_hash,_ = self.summary_input(session_id,revision,build_messages=False)
         if current_hash != input_hash:
             raise ValueError('Transcript changed during summary generation')
         summary = validate_summary(value,rows)
+        if generation_id is not None:
+            from .note_templates import NoteTemplateStore
+            policy=NoteTemplateStore(self.conn).generation(generation_id)
+            if ((policy['session_id'],policy['provider'],policy['model']) != (session_id,provider,model) or
+                    not NoteTemplateStore(self.conn).generation_allows_revision(generation_id,revision)):
+                raise ValueError('Notes generation provenance does not match the summary')
         with self.conn:
             self.conn.execute('INSERT INTO grounded_summaries '
-                '(id,session_id,revision,input_hash,provider,model,summary_json,created_at,content_hash) '
-                'VALUES (?,?,?,?,?,?,?,?,?)',
-                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now(),summary_content_hash(rows)))
+                '(id,session_id,revision,input_hash,provider,model,summary_json,created_at,content_hash,generation_id) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now(),summary_content_hash(rows),generation_id))
+            if generation_id is not None:
+                self.conn.execute("UPDATE note_generation_runs SET state='completed' WHERE id=?",(generation_id,))
             selection = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
                 "AND type='recording_selection' ORDER BY id LIMIT 1",(session_id,)).fetchone()
             manual_title = self.conn.execute("SELECT 1 FROM events WHERE session_id=? "
@@ -479,6 +489,9 @@ class SessionStore:
             return None
         result = dict(row)
         result['summary'] = json.loads(result.pop('summary_json'))
+        if result.get('generation_id'):
+            from .note_templates import NoteTemplateStore
+            result['generation']=NoteTemplateStore(self.conn).generation(result['generation_id'])
         versions = tuple(tuple(r) for r in self.conn.execute(
             'SELECT bucket,generation FROM summary_source_versions WHERE session_id=? ORDER BY bucket',(session_id,)))
         cache = getattr(self,'_transcript_hash_cache',None)

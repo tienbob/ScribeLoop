@@ -49,6 +49,28 @@ struct TranscriptTurn:Identifiable {
         }
         return turns
     }
+    /// Render units are bounded independently of logical speaker identity.
+    static func renderBlocks(_ turns:[TranscriptTurn])->[TranscriptTurn] {
+        var blocks:[TranscriptTurn]=[]
+        for turn in turns {
+            var rows:[Record]=[]; var bytes=0
+            for row in turn.rows {
+                let size=row.text("text").utf8.count
+                if !rows.isEmpty && (rows.count>=8 || bytes+size>4000) {
+                    blocks.append(TranscriptTurn(rows:rows,alignsRight:turn.alignsRight))
+                    rows=[]; bytes=0
+                }
+                rows.append(row); bytes+=size
+            }
+            if !rows.isEmpty { blocks.append(TranscriptTurn(rows:rows,alignsRight:turn.alignsRight)) }
+        }
+        return blocks
+    }
+}
+
+struct TranscriptSpeakerChoice:Identifiable,Equatable {
+    let id:String
+    let label:String
 }
 
 struct TranscriptFollowState:Equatable {
@@ -63,6 +85,74 @@ struct TranscriptFollowState:Equatable {
         if following { unread = false }
     }
     mutating func receivedSpeech() { if !following { unread = true } }
+}
+
+/// Merge contiguous page ranges and bound the resident window independently of total size.
+enum TranscriptWindow {
+    static func merge(_ current:Object,_ incoming:Object)->Object? {
+        guard text((current["session"] as? Object)?["id"]) == text((incoming["session"] as? Object)?["id"]),
+              (current["revision"] as? NSNumber)?.intValue == (incoming["revision"] as? NSNumber)?.intValue else { return nil }
+        let old=objects(current["segments"]), new=objects(incoming["segments"])
+        let start=(current["offset"] as? NSNumber)?.intValue ?? 0
+        let next=(incoming["offset"] as? NSNumber)?.intValue ?? 0
+        guard !old.isEmpty, !new.isEmpty, next <= start+old.count, next+new.count >= start else { return nil }
+        var indexed=Dictionary(uniqueKeysWithValues:old.enumerated().map { (start+$0.offset,$0.element.raw) })
+        for (index,row) in new.enumerated() { indexed[next+index]=row.raw }
+        var keys=indexed.keys.sorted()
+        if keys.count>500 { keys = next<start ? Array(keys.prefix(500)) : Array(keys.suffix(500)) }
+        let values=keys.compactMap { indexed[$0] }
+        guard Set(values.map { text($0["id"]) }).count == values.count else { return nil }
+        var result=incoming; result["offset"]=keys.first ?? next; result["segments"]=values
+        return result
+    }
+}
+
+/// Native block markers capture the visible source and its pixel offset only when
+/// a page arrives. No per-frame geometry or notebook publication is needed.
+final class TranscriptViewport {
+    private class WeakMarker { weak var view:NSView?; init(_ view:NSView) { self.view=view } }
+    private var markers:[String:WeakMarker]=[:]
+    private(set) var pending:(id:String,y:CGFloat)?
+    func register(_ id:String,_ view:NSView) { markers[id]=WeakMarker(view) }
+    func unregister(_ id:String,_ view:NSView) { if markers[id]?.view === view { markers.removeValue(forKey:id) } }
+    func capture() {
+        markers=markers.filter { $0.value.view?.window != nil }
+        let visible=markers.compactMap { id,marker -> (String,CGFloat)? in
+            guard let view=marker.view, let scroll=view.enclosingScrollView else { return nil }
+            let frame=view.convert(view.bounds,to:scroll.contentView)
+            let clip=scroll.contentView.bounds
+            guard frame.intersects(clip) else { return nil }
+            return (id,frame.minY-clip.minY)
+        }.sorted { $0.1 < $1.1 }
+        pending=visible.first.map { (id:$0.0,y:$0.1) }
+    }
+    func restore() -> Bool {
+        guard let pending else { return true }
+        guard let view=markers[pending.id]?.view, let scroll=view.enclosingScrollView else { return false }
+        scroll.layoutSubtreeIfNeeded()
+        let frame=view.convert(view.bounds,to:scroll.contentView)
+        let clip=scroll.contentView
+        let delta=frame.minY-clip.bounds.minY-pending.y
+        clip.scroll(to:NSPoint(x:clip.bounds.minX,y:clip.bounds.minY+delta))
+        scroll.reflectScrolledClipView(clip)
+        self.pending=nil
+        return true
+    }
+    func position()->(bottom:Bool,top:Bool)? {
+        guard let scroll=markers.values.compactMap({ $0.view?.enclosingScrollView }).first,
+              let document=scroll.documentView else { return nil }
+        let visible=scroll.documentVisibleRect
+        let bottom=document.isFlipped ? document.bounds.maxY-visible.maxY : visible.minY-document.bounds.minY
+        let top=document.isFlipped ? visible.minY-document.bounds.minY : document.bounds.maxY-visible.maxY
+        return (bottom<=56,top<=56)
+    }
+    func cancel() { pending=nil }
+}
+
+final class TranscriptNavigationState:ObservableObject {
+    @Published var follow = TranscriptFollowState()
+    @Published var loading:Int? = nil
+    @Published var loadingError:String? = nil
 }
 
 struct PreferencesSaveProgress {
@@ -131,17 +221,46 @@ struct PreferencesSaveProgress {
             rows = objects(detail["segments"])
             let session = detail["session"] as? Object ?? [:]
             let capture = session["capture"] as? Object ?? [:]
-            transcriptCaptureScope = text(capture["scope"])
-            transcriptTurns = TranscriptTurn.grouped(rows,scope:transcriptCaptureScope)
+            let scope=text(capture["scope"])
+            let signature=rows.map { row in
+                [row.id,row.text("text"),row.text("stream"),row.text("speaker_label"),
+                 row.text("name"),row.text("person_id"),row.text("display_speaker_id"),
+                 row.text("local_speaker_id"),String(row.int("person_number")),
+                 String(row.int("start_ms")),String(row.int("end_ms")),
+                 row.text("cleanup_original_text"),String(row.raw["cleanup_needs_review"] as? Bool ?? false),
+                 String(row.raw["cleanup_original_truncated"] as? Bool ?? false)]
+            }
+            if signature != transcriptSignature || scope != transcriptCaptureScope {
+                transcriptSignature=signature; transcriptCaptureScope=scope
+                transcriptTurns=TranscriptTurn.grouped(rows,scope:scope)
+                transcriptRenderBlocks=TranscriptTurn.renderBlocks(transcriptTurns)
+                transcriptTextBytes=rows.reduce(0) { $0+$1.text("text").utf8.count }
+                var seen=Set<String>()
+                transcriptSpeakers=rows.compactMap { row in
+                    let id=row.text("display_speaker_id")
+                    return !id.isEmpty && seen.insert(id).inserted ? TranscriptSpeakerChoice(id:id,label:row.text("speaker_label")) : nil
+                }
+                transcriptRenderVersion += 1
+            }
         }
     }
     @Published var emailExport: Object = [:]
     @Published var pageSerial = 0
     @Published var pageScrollToLatest = false
-    @Published var transcriptFollow = TranscriptFollowState()
+    let transcriptNavigation = TranscriptNavigationState()
+    var transcriptFollow:TranscriptFollowState {
+        get { transcriptNavigation.follow }
+        set { if newValue != transcriptNavigation.follow { transcriptNavigation.follow = newValue } }
+    }
     private var scrollOnPageResponse = true
     private var followsLatestPage = true
     private var navigationPending = false
+    private var adjacentOffset:Int?
+    private var adjacentRetryOffset:Int?
+    private var adjacentRevisionChanged=false
+    private var adjacentTimeout:Task<Void,Never>?
+    let transcriptViewport = TranscriptViewport()
+    var transcriptRestoring = false
     private var refreshAfterPage = false
     @Published var citationID: String?
     @Published var settings: Object = [:]
@@ -203,6 +322,7 @@ struct PreferencesSaveProgress {
     private var completion: (() -> Void)?
     let playback = MeetingPlayback()
     private var player: AVAudioPlayer?
+    private var exportPanel: NSSavePanel?
     private var reconnectAttempts = 0
     private var lastSequence = 0
     var connected: Bool { state == "Connected" }
@@ -229,6 +349,11 @@ struct PreferencesSaveProgress {
     var speakerRoster: [Record] { objects(detail["speakers"]) }
     private(set) var rows:[Record] = []
     private(set) var transcriptTurns:[TranscriptTurn] = []
+    private(set) var transcriptRenderBlocks:[TranscriptTurn] = []
+    private(set) var transcriptSpeakers:[TranscriptSpeakerChoice] = []
+    private(set) var transcriptTextBytes=0
+    private(set) var transcriptRenderVersion=0
+    private var transcriptSignature:[[String]]=[]
     private(set) var transcriptCaptureScope = ""
     var revision: Int { (detail["revision"] as? NSNumber)?.intValue ?? 0 }
     var offset: Int { (detail["offset"] as? NSNumber)?.intValue ?? 0 }
@@ -470,6 +595,7 @@ struct PreferencesSaveProgress {
             }
             if id == pageRequest && ["rejected","unknown"].contains(status) {
                 navigationPending = false; refreshAfterPage = false
+                finishAdjacentLoad(error:"More transcript could not load. Try again.")
             }
             if id == searchRequest && ["rejected","unknown"].contains(status) {
                 searchLoading = false
@@ -549,15 +675,42 @@ struct PreferencesSaveProgress {
             // A response requested while following may arrive after the user
             // scrolls up. Retain the visible page instead of replacing it.
             let nextOffset = (v["offset"] as? NSNumber)?.intValue ?? 0
-            if !scrollOnPageResponse && !transcriptFollow.following && nextOffset != offset {
+            let adjacent = adjacentOffset != nil
+            if adjacent && (nextOffset != adjacentOffset || ((v["revision"] as? NSNumber)?.intValue ?? 0) != revision) {
+                finishAdjacentLoad(error:"Transcript changed. Retry to load its latest version.")
+                adjacentRevisionChanged=true
+                navigationPending=false
+                return
+            }
+            if !adjacent && !scrollOnPageResponse && !transcriptFollow.following && nextOffset != offset {
                 loadPage(offset,scroll:false)
                 return
             }
             let nextTotal = (v["total"] as? NSNumber)?.intValue ?? 0
             if nextTotal > total { transcriptFollow.receivedSpeech() }
             navigationPending = false
-            detail = v
-            if scrollOnPageResponse { pageSerial += 1 }
+            var next=v
+            if adjacent || !scrollOnPageResponse {
+                if let merged=TranscriptWindow.merge(detail,v) {
+                    if adjacent {
+                        transcriptViewport.capture()
+                        if let anchor=transcriptViewport.pending,
+                           !objects(merged["segments"]).contains(where:{$0.id==anchor.id}) {
+                            // The user crossed the window while the request was in flight.
+                            // Do not evict the passage they are now reading.
+                            transcriptViewport.cancel(); finishAdjacentLoad(); return
+                        }
+                        transcriptRestoring=true
+                    }
+                    next=merged
+                } else if adjacent {
+                    finishAdjacentLoad(error:"More transcript could not load. Try again.")
+                    return
+                }
+            }
+            detail = next
+            finishAdjacentLoad()
+            if scrollOnPageResponse || adjacent { pageSerial += 1 }
             upsert(v["session"] as? Object ?? [:])
             if refreshAfterPage { refreshAfterPage = false; reloadSoon() }
         case "account_state": account = v
@@ -778,6 +931,7 @@ struct PreferencesSaveProgress {
     func cancelAsk() { guard askLoading else { return }; send(["action":"cancel_ask"]) }
     func loadPage(_ offset: Int, anchor: String? = nil, scroll: Bool = true) {
         guard let selectedID else { return }
+        if scroll { finishAdjacentLoad(); transcriptRestoring=false; transcriptViewport.cancel() }
         if !scroll && navigationPending { refreshAfterPage = true; return }
         if scroll {
             refreshTask?.cancel(); refreshTask = nil; refreshAfterPage = false
@@ -800,8 +954,9 @@ struct PreferencesSaveProgress {
         followsLatestPage && transcriptFollow.following ? -1 : offset
     }
     func transcriptUserScrolled(nearBottom: Bool, nearTop: Bool = false) {
+        guard !transcriptRestoring else { return }
         // Reaching the bottom of an older page is not the latest conversation.
-        let latest = offset + 100 >= total
+        let latest = offset + max(100,rows.count) >= total
         var next = transcriptFollow
         next.userScrolled(nearBottom:nearBottom,latestPage:latest,nearTop:nearTop)
         if next != transcriptFollow { transcriptFollow = next }
@@ -809,6 +964,47 @@ struct PreferencesSaveProgress {
             if !followsLatestPage { followsLatestPage = true }
             if citationID != nil { citationID = nil }
         }
+    }
+    func completeTranscriptRestore() {
+        transcriptRestoring=false
+        if let position=transcriptViewport.position() {
+            transcriptUserScrolled(nearBottom:position.bottom,nearTop:position.top)
+        }
+    }
+    func loadTranscriptEdge(nearBottom:Bool,nearTop:Bool) {
+        guard !transcriptRestoring, !navigationPending, adjacentOffset == nil, !rows.isEmpty,
+              transcriptNavigation.loadingError == nil else { return }
+        if nearTop && offset > 0 { loadAdjacent(max(0,offset-100)) }
+        else if nearBottom && offset+rows.count < total { loadAdjacent(offset+rows.count) }
+    }
+    func retryTranscriptEdge() {
+        transcriptNavigation.loadingError=nil
+        if adjacentRevisionChanged { adjacentRevisionChanged=false; loadPage(-1); return }
+        if let target=adjacentRetryOffset { loadAdjacent(target) }
+        else { loadTranscriptEdge(nearBottom:!transcriptFollow.nearTop,nearTop:transcriptFollow.nearTop) }
+    }
+    private func loadAdjacent(_ target:Int) {
+        guard let selectedID, !navigationPending, adjacentOffset == nil else { return }
+        refreshTask?.cancel(); refreshTask=nil
+        let command:Object=["action":"meeting_page","session_id":selectedID,"offset":target,"revision":revision]
+        guard let request=send(command) else {
+            adjacentRetryOffset=target
+            transcriptNavigation.loadingError="More transcript could not load. Reconnect and try again."; return
+        }
+        pageRequest=request; adjacentOffset=target; navigationPending=true
+        transcriptNavigation.loading=target < offset ? -1 : 1
+        adjacentTimeout=Task { [weak self] in
+            try? await Task.sleep(nanoseconds:15_000_000_000)
+            guard !Task.isCancelled, let self, self.pageRequest==request, self.adjacentOffset != nil else { return }
+            self.pageRequest=nil; self.navigationPending=false
+            self.finishAdjacentLoad(error:"Loading more transcript timed out. Try again.")
+        }
+    }
+    private func finishAdjacentLoad(error:String? = nil) {
+        adjacentRetryOffset = error == nil ? nil : adjacentOffset
+        if error == nil { adjacentRevisionChanged=false }
+        adjacentTimeout?.cancel(); adjacentTimeout=nil; adjacentOffset=nil
+        transcriptNavigation.loading=nil; transcriptNavigation.loadingError=error
     }
     private func reloadSoon() {
         guard refreshTask == nil else { return }
@@ -869,9 +1065,23 @@ struct PreferencesSaveProgress {
     }
     func stopAudio() { playback.close(); player?.stop(); player = nil; playing = false }
     func saveExport(_ content: String) {
+        guard exportPanel == nil else { exportPanel?.makeKeyAndOrderFront(nil); return }
         let panel = NSSavePanel(); panel.nameFieldStringValue = "Meeting notes.md"
         panel.message = "This export is readable plaintext outside encrypted app storage."
-        if panel.runModal() == .OK, let url = panel.url { do { try content.write(to:url,atomically:true,encoding:.utf8) } catch { message = "Export could not be saved." } }
+        exportPanel = panel
+        let finish:(NSApplication.ModalResponse)->Void = { [weak self] response in
+            defer { self?.exportPanel = nil }
+            guard response == .OK, let url = panel.url else { return }
+            do { try content.write(to:url,atomically:true,encoding:.utf8) }
+            catch { self?.message = "Export could not be saved." }
+        }
+        // Called by the WebSocket reader: never suspend that reader inside a
+        // synchronous modal loop while the user chooses where to save.
+        NSApp.activate(ignoringOtherApps:true)
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "notebook" || $0.title == "ScribeLoop" }) {
+            window.makeKeyAndOrderFront(nil)
+            panel.beginSheetModal(for:window,completionHandler:finish)
+        } else { panel.begin(completionHandler:finish) }
     }
     func chooseDatabase() {
         guard !busy else { return }

@@ -190,8 +190,8 @@ import Foundation
         page(0,(1...100).map { "line-\($0)" },total:100)
         client.loadPage(-1,scroll:false)
         page(100,["line-101"],total:101)
-        precondition(client.transcriptFollow.following && client.offset == 100,
-            "Following crosses the first 100-row boundary")
+        precondition(client.transcriptFollow.following && client.offset == 0 && client.rows.count == 101,
+            "Following retains the contiguous window across the first 100-row boundary")
         client.loadPage(0,anchor:"line-1")
         let navigationRequest = client.auditPageRequest
         client.loadPage(100,scroll:false)
@@ -205,6 +205,54 @@ import Foundation
         precondition(!client.recordingPaused)
         client.auditReceive(["type":"recording_state","paused":false])
         precondition(client.activeID == nil && !client.recordingPaused)
+        // Automatic adjacent loading merges, deduplicates and bounds the window.
+        client.loadPage(100)
+        page(100,(101...200).map { "line-\($0)" },total:1000)
+        client.loadTranscriptEdge(nearBottom:false,nearTop:true)
+        let adjacentRequest=client.auditPageRequest
+        precondition(client.transcriptNavigation.loading == -1)
+        client.loadTranscriptEdge(nearBottom:false,nearTop:true)
+        precondition(client.auditPageRequest==adjacentRequest,"Only one adjacent request may be in flight")
+        page(0,(1...100).map { "line-\($0)" },total:1000)
+        precondition(client.offset==0 && client.rows.count==200 && client.rows.first?.id=="line-1")
+        precondition(client.transcriptNavigation.loading == nil && client.transcriptRestoring)
+        client.transcriptRestoring=false // No UI is attached to this reducer test.
+        for start in stride(from:200,through:700,by:100) {
+            client.loadTranscriptEdge(nearBottom:true,nearTop:false)
+            page(start,((start+1)...(start+100)).map { "line-\($0)" },total:1000)
+            client.transcriptRestoring=false
+        }
+        precondition(client.offset==300 && client.rows.count==500 && client.rows.last?.id=="line-800")
+        precondition(Set(client.rows.map(\.id)).count==500,"Loaded source IDs must remain unique")
+        client.loadTranscriptEdge(nearBottom:false,nearTop:true)
+        page(200,(201...300).map { "line-\($0)" },total:1000)
+        client.transcriptRestoring=false
+        precondition(client.offset==200 && client.rows.count==500 && client.rows.last?.id=="line-700")
+        client.loadTranscriptEdge(nearBottom:false,nearTop:true)
+        let rejected=client.auditPageRequest!
+        client.auditReceive(["type":"receipt","request_id":rejected,"status":"rejected"])
+        precondition(client.transcriptNavigation.loading==nil && client.transcriptNavigation.loadingError != nil)
+        precondition(client.rows.count==500,"Loading failure retains visible text")
+        client.retryTranscriptEdge()
+        precondition(client.transcriptNavigation.loading == -1,"Retry must retain the failed direction")
+        // Explicit citation navigation supersedes a pending automatic request.
+        let superseded=client.auditPageRequest!
+        client.loadPage(0,anchor:"line-1")
+        client.auditReceive(["type":"meeting_page","response_to":superseded,"session":["id":"scroll-test"],
+            "offset":100,"total":1000,"segments":[["id":"stale"]]])
+        precondition(client.rows.first?.id=="line-201","Superseded response cannot replace the window")
+        page(0,["line-1"],total:1000)
+        precondition(client.citationID=="line-1" && client.rows.count==1)
+        client.loadPage(100)
+        page(100,(101...200).map { "line-\($0)" },total:300)
+        client.loadTranscriptEdge(nearBottom:false,nearTop:true)
+        client.auditReceive(["type":"meeting_page","response_to":client.auditPageRequest!,
+            "session":["id":"scroll-test"],"revision":2,"offset":0,"total":300,"segments":[["id":"new-revision"]]])
+        precondition(client.rows.first?.id=="line-101" && client.transcriptNavigation.loadingError != nil,
+            "A new revision cannot be mixed into the existing window")
+        client.retryTranscriptEdge()
+        precondition(client.transcriptFollow.following && client.transcriptNavigation.loadingError==nil,
+            "Revision mismatch retries with a fresh latest-page navigation")
         print("Desktop audit regressions passed: ledger, Stop, history, transcript scroll navigation")
     }
 }

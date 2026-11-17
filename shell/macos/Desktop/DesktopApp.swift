@@ -143,10 +143,61 @@ struct ScribeLoopApp: App {
     }
 }
 
+/// Scroll thresholds invalidate only these small views, not the notebook or text.
+private struct TranscriptFollowLabel:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let live:Bool
+    var body:some View {
+        Text(navigation.follow.following ? (live ? "Following live" : "At latest") : "Reading earlier")
+            .font(.caption).foregroundStyle(.secondary)
+    }
+}
+private struct TranscriptLoadingStatus:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let retry:()->Void
+    var body:some View {
+        HStack(spacing:6) {
+            if let direction=navigation.loading {
+                ProgressView().controlSize(.small)
+                Text(direction<0 ? "Loading earlier speech…" : "Loading later speech…").font(.caption).foregroundStyle(.secondary)
+            } else if let error=navigation.loadingError {
+                Text(error).font(.caption).foregroundStyle(ScribeTheme.warning)
+                Button("Retry",action:retry).font(.caption).buttonStyle(.plain).foregroundStyle(ScribeTheme.accent)
+            }
+        }
+    }
+}
+private struct TranscriptTrackingBridge:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let onUserScroll:(Bool,Bool)->Void
+    var body:some View {
+        TranscriptScrollTracking(following:navigation.follow.following,onUserScroll:onUserScroll)
+    }
+}
+private struct TranscriptJumpControls:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let offset:Int
+    let top:()->Void
+    let bottom:()->Void
+    private var showTop:Bool { !(offset == 0 && navigation.follow.nearTop) }
+    var body:some View {
+        VStack(spacing:10) {
+            TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript",action:top)
+                .opacity(showTop ? 1 : 0).allowsHitTesting(showTop).accessibilityHidden(!showTop)
+            TranscriptJumpButton(icon:"chevron.down",
+                label:navigation.follow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
+                badge:navigation.follow.unread,action:bottom)
+                .opacity(navigation.follow.following ? 0 : 1)
+                .allowsHitTesting(!navigation.follow.following).accessibilityHidden(navigation.follow.following)
+        }
+        .padding(.trailing,28).padding(.bottom,20)
+        .transaction { $0.animation = nil }
+    }
+}
+
 struct SettingsDestination:Identifiable { let id:String }
 
-/// Chat-style floating jump buttons for the transcript box. Shown only while
-/// reading away from the live bottom; hidden again once following resumes.
+/// Floating transcript navigation controls; each direction has its own visibility.
 private struct TranscriptJumpButton: View {
     let icon:String
     let label:String
@@ -459,50 +510,53 @@ struct Notebook: View {
     private var transcript: some View {
         VStack(spacing:0) {
             HStack {
-                Button("Earlier") { core.loadPage(max(0,core.offset-100)) }.disabled(core.offset == 0)
-                Text("\(core.total == 0 ? 0 : core.offset+1)–\(min(core.offset+100,core.total)) of \(core.total)").font(.caption).monospacedDigit()
-                Button("Later") { core.loadPage(core.offset+100) }.disabled(core.offset+100 >= core.total)
+                Text("\(core.total) segments").font(.caption).monospacedDigit()
+                TranscriptLoadingStatus(navigation:core.transcriptNavigation,retry:{ core.retryTranscriptEdge() })
                 Spacer()
-                Text(core.transcriptFollow.following ? (core.activeID == core.selectedID ? "Following live" : "At latest") : "Reading earlier")
-                    .font(.caption).foregroundStyle(.secondary)
+                TranscriptFollowLabel(navigation:core.transcriptNavigation,live:core.activeID == core.selectedID)
             }.padding(.horizontal,28).padding(.vertical,12)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment:.leading,spacing:14) {
-                        ForEach(core.transcriptTurns) { turn in TranscriptRow(core:core,busy:core.busy,citationID:core.citationID,turn:turn).id(turn.id) }
-                        ForEach(core.partials.keys.sorted(),id:\.self) { stream in
-                            if let value = core.partials[stream], !value.isEmpty { Text("Recognizing speaker… · \(value)").italic().foregroundStyle(.secondary)
-                                .frame(maxWidth:.infinity,alignment:["application","system"].contains(core.transcriptCaptureScope) && stream == "mic" ? .trailing : .leading) }
-                        }
-                        if core.rows.isEmpty { Text("Confirmed speech appears here while recording. Speaker labels are anonymous until you name them.").foregroundStyle(.secondary) }
-                        Color.clear.frame(height:1).id("transcript-bottom")
-                    }.padding(28)
-                        .background(TranscriptScrollTracking(following:core.transcriptFollow.following,
-                            onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
+                    TranscriptContent(core:core,version:core.transcriptRenderVersion,
+                        sessionID:core.selectedID,revision:core.revision,busy:core.busy,
+                        citationID:core.citationID,partials:core.partials,live:core.activeID==core.selectedID && core.activeID != nil)
+                        .equatable()
+                        .background(TranscriptTrackingBridge(navigation:core.transcriptNavigation,
+                            onUserScroll:{ bottom,top in
+                                core.transcriptUserScrolled(nearBottom:bottom,nearTop:top)
+                                core.loadTranscriptEdge(nearBottom:bottom,nearTop:top)
+                            }).frame(width:0,height:0).allowsHitTesting(false))
                 }
                 .onChange(of:core.pageSerial) { _ in scrollTranscript(proxy) }
                 .onAppear { scrollTranscript(proxy) }
             }
             .overlay(alignment:.bottomTrailing) {
-                if !core.transcriptFollow.following {
-                    VStack(spacing:10) {
-                        if !(core.offset == 0 && core.transcriptFollow.nearTop) {
-                            TranscriptJumpButton(icon:"chevron.up",label:"Return to the top of the transcript") { core.loadPage(0) }
-                        }
-                        TranscriptJumpButton(icon:"chevron.down",
-                            label:core.transcriptFollow.unread ? "New speech · Jump to latest" : "Jump to the latest speech",
-                            badge:core.transcriptFollow.unread) { core.loadPage(-1) }
-                    }
-                    .padding(.trailing,28).padding(.bottom,20)
-                    .transition(.opacity)
-                }
+                TranscriptJumpControls(navigation:core.transcriptNavigation,offset:core.offset,
+                    top:{ core.loadPage(0) },bottom:{ core.loadPage(-1) })
             }
-            .animation(.easeOut(duration:0.15),value:core.transcriptFollow)
         }
     }
     private func scrollTranscript(_ proxy:ScrollViewProxy) {
+        if core.transcriptRestoring {
+            guard let anchor=core.transcriptViewport.pending,
+                  let turn=core.transcriptRenderBlocks.first(where:{$0.rows.contains(where:{$0.id==anchor.id})}) else {
+                core.transcriptRestoring=false; return
+            }
+            let serial=core.pageSerial
+            proxy.scrollTo(turn.id,anchor:.top)
+            DispatchQueue.main.async {
+                guard core.pageSerial==serial, core.transcriptRestoring else { return }
+                proxy.scrollTo(anchor.id,anchor:.top)
+                DispatchQueue.main.async {
+                    guard core.pageSerial==serial, core.transcriptRestoring else { return }
+                    _ = core.transcriptViewport.restore()
+                    core.completeTranscriptRestore()
+                }
+            }
+            return
+        }
         if let citation=core.citationID,
-           let turn=core.transcriptTurns.first(where:{$0.rows.contains(where:{$0.id==citation})}) {
+           let turn=core.transcriptRenderBlocks.first(where:{$0.rows.contains(where:{$0.id==citation})}) {
             // Lazy rows expose the outer turn before their nested segment anchors.
             proxy.scrollTo(turn.id,anchor:.center)
             DispatchQueue.main.async {

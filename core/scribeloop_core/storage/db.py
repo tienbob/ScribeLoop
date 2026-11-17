@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 25
 
 DDL = """
 CREATE TABLE sessions (
@@ -399,6 +399,45 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
             if 'content_hash' not in columns:
                 conn.execute('ALTER TABLE grounded_summaries ADD COLUMN content_hash TEXT')
             conn.execute('PRAGMA user_version=23')
+    if version < 24:
+        from ..llm.note_templates import BUILTINS, canonical_json
+        with conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS note_templates ('
+                         'id TEXT PRIMARY KEY,name TEXT NOT NULL,version INTEGER NOT NULL CHECK(version>=1),'
+                         'builtin INTEGER NOT NULL CHECK(builtin IN (0,1)),definition_json TEXT NOT NULL,updated_at INTEGER NOT NULL)')
+            for template_id, template in BUILTINS.items():
+                conn.execute('INSERT OR IGNORE INTO note_templates VALUES (?,?,1,1,?,0)',
+                             (template_id, template.name, canonical_json(template.model_dump())))
+            conn.execute("CREATE TRIGGER IF NOT EXISTS note_template_capacity BEFORE INSERT ON note_templates "
+                         "WHEN NEW.builtin=0 AND (SELECT COUNT(*) FROM note_templates WHERE builtin=0)>=50 "
+                         "BEGIN SELECT RAISE(ABORT,'Custom note template limit reached'); END")
+            conn.execute('CREATE TABLE IF NOT EXISTS note_template_preferences ('
+                         'id INTEGER PRIMARY KEY CHECK(id=1),default_id TEXT NOT NULL REFERENCES note_templates(id))')
+            conn.execute("INSERT OR IGNORE INTO note_template_preferences VALUES (1,'general')")
+            conn.execute('CREATE TABLE IF NOT EXISTS session_note_templates ('
+                         'session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,'
+                         'template_id TEXT NOT NULL REFERENCES note_templates(id))')
+            conn.execute("INSERT OR IGNORE INTO session_note_templates SELECT id,'general' FROM sessions")
+            conn.execute('CREATE TABLE IF NOT EXISTS note_generations ('
+                         'id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,'
+                         'source_revision INTEGER NOT NULL CHECK(source_revision>=1),snapshot_json TEXT NOT NULL,'
+                         'snapshot_hash TEXT NOT NULL,created_at INTEGER NOT NULL)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_note_generations_session ON note_generations(session_id,created_at)')
+            conn.execute("CREATE TRIGGER IF NOT EXISTS immutable_note_generation BEFORE UPDATE ON note_generations "
+                         "BEGIN SELECT RAISE(ABORT,'Notes generation snapshots are immutable'); END")
+            conn.execute('PRAGMA user_version=24')
+    if version < 25:
+        with conn:
+            for table in ('summary_jobs', 'grounded_summaries'):
+                columns = {row[1] for row in conn.execute(f'PRAGMA table_info({table})')}
+                if 'generation_id' not in columns:
+                    conn.execute(f'ALTER TABLE {table} ADD COLUMN generation_id TEXT REFERENCES note_generations(id)')
+            conn.execute('CREATE TABLE IF NOT EXISTS note_generation_runs ('
+                         'id TEXT PRIMARY KEY REFERENCES note_generations(id) ON DELETE CASCADE,'
+                         "kind TEXT NOT NULL CHECK(kind IN ('manual','automatic','rolling')),"
+                         "state TEXT NOT NULL CHECK(state IN ('active','failed','completed')),"
+                         'final_revision INTEGER CHECK(final_revision>=1))')
+            conn.execute('PRAGMA user_version=25')
     return conn
 
 

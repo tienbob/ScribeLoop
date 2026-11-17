@@ -49,6 +49,11 @@ struct TranscriptScrollTracking: NSViewRepresentable {
                     guard scroll.bounds.contains(point) else { return event }
                 }
                 self.userUntil = ProcessInfo.processInfo.systemUptime + 0.3
+                // A short final page may have no scrollbar, but a wheel gesture
+                // must still be able to request the preceding page.
+                if event.type == .scrollWheel {
+                    DispatchQueue.main.async { [weak self] in self?.reportUserPosition() }
+                }
                 return event
             }
             scheduleBottom()

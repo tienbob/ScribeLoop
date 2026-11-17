@@ -1,4 +1,6 @@
 import Foundation
+import Combine
+import AppKit
 
 @main struct TranscriptBubbleTests {
     @MainActor static func main() {
@@ -26,6 +28,32 @@ import Foundation
         client.detail = ["segments":rows.map{$0.raw}]
         precondition(client.rows.map{$0.id} == rows.map{$0.id})
         precondition(client.transcriptTurns.map{$0.rows.map{$0.id}} == [["a","b"],["c"],["d"]])
+        var notebookUpdates=0
+        var navigationUpdates=0
+        let notebookObserver=client.objectWillChange.sink { notebookUpdates += 1 }
+        let navigationObserver=client.transcriptNavigation.objectWillChange.sink { navigationUpdates += 1 }
+        client.transcriptUserScrolled(nearBottom:false,nearTop:false)
+        client.transcriptUserScrolled(nearBottom:false,nearTop:true)
+        precondition(notebookUpdates==0,"Scroll thresholds must not invalidate the notebook")
+        precondition(navigationUpdates==2,"Navigation controls must receive threshold changes")
+        withExtendedLifetime((notebookObserver,navigationObserver)) {}
+        let version=client.transcriptRenderVersion
+        client.detail["notes"]="Only notes changed"
+        precondition(client.transcriptRenderVersion==version,"Unchanged transcript must keep its render identity")
+        let large=(0..<100).map { i in
+            var value=row("long-\(i)","one","mic",i*1000,i*1000+900).raw
+            value["text"]=String(repeating:"Vietnamese tiếng Việt ",count:100)
+            return Record(raw:value)
+        }
+        let blocks=TranscriptTurn.renderBlocks(TranscriptTurn.grouped(large))
+        precondition(blocks.count>1 && blocks.allSatisfy{$0.rows.count<=8})
+        precondition(blocks.flatMap{$0.rows.map{$0.id}}==large.map{$0.id},"Render splitting preserves all source IDs and order")
+        precondition(Set(blocks.map{$0.id}).count==blocks.count,"Render block identities are unique")
+        precondition(blocks.allSatisfy{$0.alignsRight == TranscriptTurn.isRight(large[0],scope:"microphone")},"Render splitting keeps the speaker alignment")
+        var changed=rows.map{$0.raw};changed[0]["text"]="Corrected wording"
+        client.detail["segments"]=changed
+        precondition(client.transcriptRenderVersion==version+1,"Actual text edits invalidate rendering")
+        client.detail["segments"]=rows.map{$0.raw}
         var updates = 0
         let subscription = client.objectWillChange.sink { updates += 1 }
         client.transcriptUserScrolled(nearBottom:false)
@@ -37,6 +65,23 @@ import Foundation
         client.detail = [:]
         precondition(client.rows.isEmpty && client.transcriptTurns.isEmpty,"Switching/clearing a conversation invalidates the cache")
         withExtendedLifetime(subscription) {}
+        // Native pixel anchor restoration after prepending variable-height content.
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:400,height:300),styleMask:[],backing:.buffered,defer:false)
+        let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:400,height:300))
+        let document=NSView(frame:NSRect(x:0,y:0,width:400,height:2000))
+        let marker=NSView(frame:NSRect(x:0,y:800,width:400,height:200))
+        document.addSubview(marker); scroll.documentView=document; window.contentView=scroll
+        scroll.contentView.scroll(to:NSPoint(x:0,y:700))
+        let viewport=TranscriptViewport(); viewport.register("visible-source",marker); viewport.capture()
+        precondition(viewport.pending?.id=="visible-source")
+        let before=marker.convert(marker.bounds,to:scroll.contentView).minY-scroll.contentView.bounds.minY
+        document.setFrameSize(NSSize(width:400,height:2600))
+        marker.setFrameOrigin(NSPoint(x:0,y:1400))
+        precondition(viewport.restore())
+        let after=marker.convert(marker.bounds,to:scroll.contentView).minY-scroll.contentView.bounds.minY
+        precondition(abs(before-after)<0.5,"Prepending must preserve the visible source's pixel offset")
+        viewport.unregister("visible-source",marker)
+        precondition(viewport.pending==nil)
         print("Transcript bubbles passed: speaker turns across sources, distinct speakers on one source, unknowns, silence, linked people and citation preservation.")
     }
 }

@@ -278,6 +278,51 @@ def test_failed_provider_preserves_summary_and_redacts_error(saved):
     assert store.grounded_summary(sid) == previous
 
 
+def test_manual_regeneration_saves_distinct_template_provenance_and_keeps_last_success(saved):
+    from scribeloop_core.storage.note_templates import NoteTemplateStore
+    store, sid, row, path = saved
+    templates = NoteTemplateStore(store.conn)
+    templates.select(sid, 'planning')
+    calls = []
+    fail = False
+
+    async def request(messages):
+        calls.append(messages)
+        if fail:
+            raise RuntimeError('private-test-key')
+        return summary(row)
+
+    provider = config(request)
+    provider.instructions = 'Keep the original personal guidance.'
+    app, token = create_app(storage='public-demo', database=path, fixtures={},
+                            backend_factory=lambda: None, summary_provider=provider)
+    command = {'action': 'summarize', 'session_id': sid, 'revision': 1,
+               'provider': provider.provider, 'model': provider.model, 'text_consent': True}
+    with TestClient(app) as client, client.websocket_connect('ws://127.0.0.1/ws', headers={'origin': 'http://127.0.0.1'}) as ws:
+        client.portal.call(app.state.store.accept_agreement, app.state.store.AGREEMENT_VERSION)
+        ws.send_text(token)
+        ws.receive_json()
+        saved_versions = []
+        for _ in range(2):
+            ws.send_json(command)
+            started, ready = ws.receive_json(), ws.receive_json()
+            assert started['type'] == 'summary_started' and ready['type'] == 'summary_ready'
+            assert started['generation'] == ready['summary']['generation']
+            assert ready['summary']['generation']['template']['id'] == 'planning'
+            assert ready['summary']['generation']['guidance'] == provider.instructions
+            assert 'private-test-key' not in json.dumps(ready)
+            saved_versions.append(ready['summary'])
+        assert saved_versions[0]['id'] != saved_versions[1]['id']
+        assert saved_versions[0]['generation_id'] != saved_versions[1]['generation_id']
+        assert len(calls) == 2, 'Explicit regeneration must dispatch, not silently return an older cached result'
+        fail = True
+        ws.send_json(command)
+        assert ws.receive_json()['type'] == 'summary_started'
+        assert ws.receive_json()['type'] == 'summary_error'
+        assert client.portal.call(app.state.store.grounded_summary, sid) == saved_versions[-1]
+    assert store.conn.execute('SELECT COUNT(*) FROM grounded_summaries WHERE session_id=?', (sid,)).fetchone()[0] == 2
+
+
 @pytest.mark.asyncio
 async def test_request_transport_is_bounded_and_has_no_retry(monkeypatch):
     import httpx

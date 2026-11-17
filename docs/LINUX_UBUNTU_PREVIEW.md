@@ -1,5 +1,8 @@
 # Ubuntu desktop preview validation
 
+See the [Ubuntu desktop release plan](LINUX_UBUNTU_APP_PLAN.md) for the roadmap
+from this preview to a supported release.
+
 Implemented on `feat/ubuntu-22-desktop`. Install/build instructions and primary
 research sources are in [Linux packaging](../packaging/linux/README.md).
 
