@@ -132,11 +132,20 @@ class NoteTemplateStore:
         return {**snapshot, 'snapshot_hash': digest}
 
     def rolling_generation(self, session_id, revision, *, final=False):
-        revision_check = '<=' if final else '='
-        row = self.conn.execute("SELECT g.id FROM note_generations g JOIN note_generation_runs r ON r.id=g.id "
-                                f"WHERE g.session_id=? AND g.source_revision{revision_check}? AND r.kind='rolling' "
-                                "AND r.state IN ('active','failed') ORDER BY g.rowid DESC LIMIT 1",
-                                (session_id, revision)).fetchone()
+        # Two static statements instead of interpolating the comparison operator:
+        # the snapshot lookup never builds SQL from values (bandit B608).
+        if final:
+            row = self.conn.execute(
+                "SELECT g.id FROM note_generations g JOIN note_generation_runs r ON r.id=g.id "
+                "WHERE g.session_id=? AND g.source_revision<=? AND r.kind='rolling' "
+                "AND r.state IN ('active','failed') ORDER BY g.rowid DESC LIMIT 1",
+                (session_id, revision)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT g.id FROM note_generations g JOIN note_generation_runs r ON r.id=g.id "
+                "WHERE g.session_id=? AND g.source_revision=? AND r.kind='rolling' "
+                "AND r.state IN ('active','failed') ORDER BY g.rowid DESC LIMIT 1",
+                (session_id, revision)).fetchone()
         return self.generation(row['id']) if row else None
 
     def rolling_run_state(self, session_id, revision):
