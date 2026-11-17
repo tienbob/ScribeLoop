@@ -824,6 +824,22 @@ struct PlaybackBar: View {
     }
 }
 
+struct TranscriptSourceMarker:NSViewRepresentable {
+    let id:String
+    let viewport:TranscriptViewport
+    final class Marker:NSView {
+        var id=""
+        var viewport:TranscriptViewport?
+        override func hitTest(_ point:NSPoint)->NSView? { nil }
+    }
+    func makeNSView(context:Context)->Marker { Marker() }
+    func updateNSView(_ view:Marker,context:Context) {
+        if view.id != id { view.viewport?.unregister(view.id,view) }
+        view.id=id; view.viewport=viewport; viewport.register(id,view)
+    }
+    static func dismantleNSView(_ view:Marker,coordinator:()) { view.viewport?.unregister(view.id,view) }
+}
+
 struct TranscriptContent: View,Equatable {
     let core:DesktopClient
     let version:Int
@@ -906,6 +922,7 @@ struct TranscriptRow: View {
                         .padding(segment.id == citationID ? 6 : 0)
                         .background(segment.id == citationID ? personColor.opacity(0.2) : Color.clear,in:RoundedRectangle(cornerRadius:6))
                         .help("\(segment.int("start_ms")/60000):\(String(format:"%02d",segment.int("start_ms")/1000%60)) · \(segment.text("stream") == "mic" ? "Microphone" : "Meeting audio")")
+                        .background(TranscriptSourceMarker(id:segment.id,viewport:core.transcriptViewport).allowsHitTesting(false))
                         .id(segment.id)
                     if !segment.text("cleanup_original_text").isEmpty {
                         DisclosureGroup(segment.raw["cleanup_original_truncated"] as? Bool == true ? "Original ASR · excerpt" : "Original ASR") {

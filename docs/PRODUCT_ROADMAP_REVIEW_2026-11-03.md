@@ -143,7 +143,9 @@ appended final segments and growing partial text only while following is enabled
 User scrolling upward or opening a citation disables following; Latest enables it.
 
 Preserve the visible segment and its intra-row offset during layout changes.
-Keep manual Earlier/Later pages stable. In follow mode, handle the 100-row page
+Use automatic adjacent-page loading with a bounded 500-segment window instead of
+manual Earlier/Later controls ([implementation](TRANSCRIPT_AUTO_LOADING.md)).
+In follow mode, handle the 100-row page
 boundary explicitly so a new page does not replace the visible content and jump
 to its top. Use a stable bottom anchor after partial speech. Coalesce updates
 instead of animating every token; bound the displayed transcript window.

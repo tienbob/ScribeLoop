@@ -152,6 +152,21 @@ private struct TranscriptFollowLabel:View {
             .font(.caption).foregroundStyle(.secondary)
     }
 }
+private struct TranscriptLoadingStatus:View {
+    @ObservedObject var navigation:TranscriptNavigationState
+    let retry:()->Void
+    var body:some View {
+        HStack(spacing:6) {
+            if let direction=navigation.loading {
+                ProgressView().controlSize(.small)
+                Text(direction<0 ? "Loading earlier speech…" : "Loading later speech…").font(.caption).foregroundStyle(.secondary)
+            } else if let error=navigation.loadingError {
+                Text(error).font(.caption).foregroundStyle(ScribeTheme.warning)
+                Button("Retry",action:retry).font(.caption).buttonStyle(.plain).foregroundStyle(ScribeTheme.accent)
+            }
+        }
+    }
+}
 private struct TranscriptTrackingBridge:View {
     @ObservedObject var navigation:TranscriptNavigationState
     let onUserScroll:(Bool,Bool)->Void
@@ -495,9 +510,8 @@ struct Notebook: View {
     private var transcript: some View {
         VStack(spacing:0) {
             HStack {
-                Button("Earlier") { core.loadPage(max(0,core.offset-100)) }.disabled(core.offset == 0)
-                Text("\(core.total == 0 ? 0 : core.offset+1)–\(min(core.offset+100,core.total)) of \(core.total)").font(.caption).monospacedDigit()
-                Button("Later") { core.loadPage(core.offset+100) }.disabled(core.offset+100 >= core.total)
+                Text("\(core.total) segments").font(.caption).monospacedDigit()
+                TranscriptLoadingStatus(navigation:core.transcriptNavigation,retry:{ core.retryTranscriptEdge() })
                 Spacer()
                 TranscriptFollowLabel(navigation:core.transcriptNavigation,live:core.activeID == core.selectedID)
             }.padding(.horizontal,28).padding(.vertical,12)
@@ -508,7 +522,10 @@ struct Notebook: View {
                         citationID:core.citationID,partials:core.partials,live:core.activeID==core.selectedID && core.activeID != nil)
                         .equatable()
                         .background(TranscriptTrackingBridge(navigation:core.transcriptNavigation,
-                            onUserScroll:{ core.transcriptUserScrolled(nearBottom:$0,nearTop:$1) }).frame(width:0,height:0).allowsHitTesting(false))
+                            onUserScroll:{ bottom,top in
+                                core.transcriptUserScrolled(nearBottom:bottom,nearTop:top)
+                                core.loadTranscriptEdge(nearBottom:bottom,nearTop:top)
+                            }).frame(width:0,height:0).allowsHitTesting(false))
                 }
                 .onChange(of:core.pageSerial) { _ in scrollTranscript(proxy) }
                 .onAppear { scrollTranscript(proxy) }
@@ -520,6 +537,24 @@ struct Notebook: View {
         }
     }
     private func scrollTranscript(_ proxy:ScrollViewProxy) {
+        if core.transcriptRestoring {
+            guard let anchor=core.transcriptViewport.pending,
+                  let turn=core.transcriptRenderBlocks.first(where:{$0.rows.contains(where:{$0.id==anchor.id})}) else {
+                core.transcriptRestoring=false; return
+            }
+            let serial=core.pageSerial
+            proxy.scrollTo(turn.id,anchor:.top)
+            DispatchQueue.main.async {
+                guard core.pageSerial==serial, core.transcriptRestoring else { return }
+                proxy.scrollTo(anchor.id,anchor:.top)
+                DispatchQueue.main.async {
+                    guard core.pageSerial==serial, core.transcriptRestoring else { return }
+                    _ = core.transcriptViewport.restore()
+                    core.completeTranscriptRestore()
+                }
+            }
+            return
+        }
         if let citation=core.citationID,
            let turn=core.transcriptRenderBlocks.first(where:{$0.rows.contains(where:{$0.id==citation})}) {
             // Lazy rows expose the outer turn before their nested segment anchors.

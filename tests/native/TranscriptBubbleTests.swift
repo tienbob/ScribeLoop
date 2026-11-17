@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 @main struct TranscriptBubbleTests {
     @MainActor static func main() {
@@ -64,6 +65,23 @@ import Combine
         client.detail = [:]
         precondition(client.rows.isEmpty && client.transcriptTurns.isEmpty,"Switching/clearing a conversation invalidates the cache")
         withExtendedLifetime(subscription) {}
+        // Native pixel anchor restoration after prepending variable-height content.
+        let window=NSWindow(contentRect:NSRect(x:0,y:0,width:400,height:300),styleMask:[],backing:.buffered,defer:false)
+        let scroll=NSScrollView(frame:NSRect(x:0,y:0,width:400,height:300))
+        let document=NSView(frame:NSRect(x:0,y:0,width:400,height:2000))
+        let marker=NSView(frame:NSRect(x:0,y:800,width:400,height:200))
+        document.addSubview(marker); scroll.documentView=document; window.contentView=scroll
+        scroll.contentView.scroll(to:NSPoint(x:0,y:700))
+        let viewport=TranscriptViewport(); viewport.register("visible-source",marker); viewport.capture()
+        precondition(viewport.pending?.id=="visible-source")
+        let before=marker.convert(marker.bounds,to:scroll.contentView).minY-scroll.contentView.bounds.minY
+        document.setFrameSize(NSSize(width:400,height:2600))
+        marker.setFrameOrigin(NSPoint(x:0,y:1400))
+        precondition(viewport.restore())
+        let after=marker.convert(marker.bounds,to:scroll.contentView).minY-scroll.contentView.bounds.minY
+        precondition(abs(before-after)<0.5,"Prepending must preserve the visible source's pixel offset")
+        viewport.unregister("visible-source",marker)
+        precondition(viewport.pending==nil)
         print("Transcript bubbles passed: speaker turns across sources, distinct speakers on one source, unknowns, silence, linked people and citation preservation.")
     }
 }

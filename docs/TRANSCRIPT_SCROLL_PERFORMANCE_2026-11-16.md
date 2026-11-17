@@ -27,7 +27,8 @@ peak 101.3 MB. Accessibility work is partly caused by the inspection tool itself
 it is not evidence that accessibility causes the user's lag. No continuous CPU
 stall, memory exhaustion or measured frame-rate result was established.
 
-Ordinary wheel scrolling does not request another transcript page or call an ASR,
+At the time of this investigation, ordinary wheel scrolling did not request another
+transcript page or call an ASR,
 notes or embedding model. The named record fits entirely in its 100-segment page.
 It therefore cannot be explained simply by loading thousands of transcript rows.
 No transcript was uploaded, changed, re-transcribed or played during this work.
@@ -199,3 +200,6 @@ changes. Core paging/follow semantics retain their existing interface. A native
 regression asserts threshold changes notify navigation observers but do not notify
 notebook observers. This addresses a concrete invalidation path; subjective scrolling
 acceptance remains pending and the previous attempt did not resolve the reported lag.
+
+The subsequent [automatic loading implementation](TRANSCRIPT_AUTO_LOADING.md)
+replaces manual Earlier/Later navigation with bounded adjacent-page loading.

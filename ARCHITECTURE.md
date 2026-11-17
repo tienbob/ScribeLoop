@@ -248,6 +248,13 @@ navigation, person naming, manual rename/delete, Markdown export, email handoff 
 optional Calendar links. Calendar uses EventKit. Email handoff requires user action,
 not an autonomous agent send.
 
+Transcript navigation loads adjacent 100-segment pages near user-scroll edges,
+retaining at most 500 segments. Source markers preserve the visible passage and
+pixel offset when the window changes. Explicit top/latest jumps and citations
+remain separate navigation requests; stale adjacent responses are ignored. Follow,
+loading and error state are observed by small navigation views rather than the
+whole notebook. See [automatic transcript loading](docs/TRANSCRIPT_AUTO_LOADING.md).
+
 Details: [summaries](docs/MEETING_SUMMARIES.md),
 [cleanup](docs/LOCAL_TRANSCRIPT_CLEANUP_2026-11-05.md),
 [Calendar](docs/MACOS_CALENDAR.md).
