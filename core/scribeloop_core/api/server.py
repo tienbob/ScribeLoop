@@ -26,7 +26,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from ..async_compat import timeout
 from ..llm.note_generation import NotesGeneration
 from ..llm.ollama_lifecycle import release_all, release_if_small, session_targets
-from ..llm.rolling import RollingNotes, summary_failure_code
+from ..llm.rolling import ExplicitRetryRequired, RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
 from ..meetings.service import DiscoveryService
 from ..pipeline.languages import LanguageChoice, LanguageHints
@@ -35,6 +35,7 @@ from ..pipeline.replay import ReplayRunner
 from ..speakers.registry import SpeakerRegistry
 from ..storage.db import DATABASE_ERRORS, connect, migrate
 from ..storage.keys import KeyUnavailable
+from ..storage.note_templates import NoteTemplateStore
 from ..storage.sessions import SessionStore
 from .auth import check_first_message, host_allowed, new_token, origin_allowed
 
@@ -385,6 +386,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             try:
                 if (rows[0]['start_ms']//900000+1)*900000>watermark:
                     continue
+                # A failed live draft is retained until the user retries explicitly from
+                # Meeting notes. Re-entering it on every transcript update would republish
+                # the failure (and rewrite the run state) after each confirmed segment.
+                if NoteTemplateStore(app.state.store.conn).rolling_run_state(sid,session['transcript_revision'])=='failed':
+                    rolling_signatures[sid]=signature
+                    continue
                 generation=NotesGeneration.prepare(app.state.store,summary_provider,sid,session['transcript_revision'],mode='rolling')
             except (ValueError,*DATABASE_ERRORS):
                 continue  # Do not dispatch with a changed destination or invalid policy.
@@ -403,6 +410,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
         except asyncio.CancelledError:
             generation.failed()
             raise
+        except ExplicitRetryRequired:
+            generation.failed()  # Retained on purpose; the user retries explicitly.
+            return
         except Exception:  # noqa: BLE001 - preserve prior draft, redact provider data
             generation.failed()
             await publish({'type':'rolling_notes_error','session_id':sid,

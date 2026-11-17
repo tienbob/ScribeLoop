@@ -18,6 +18,10 @@ class InvalidSummaryOutput(ValueError):
     """Provider returned a complete response that failed the grounding contract."""
 
 
+class ExplicitRetryRequired(ValueError):
+    """A failed dispatch is retained until the user explicitly retries it."""
+
+
 def summary_failure_code(exc):
     from .summary_provider import IncompleteSummaryOutput
     if isinstance(exc,IncompleteSummaryOutput):
@@ -190,7 +194,7 @@ class RollingNotes:
         if self.policy and not retry:
             state=self.store.conn.execute('SELECT state FROM note_generation_runs WHERE id=?',(self.generation_id,)).fetchone()
             if state and state['state']=='failed':
-                raise ValueError('Previous dispatch requires explicit retry')
+                raise ExplicitRetryRequired('Previous dispatch requires explicit retry')
         # Capture once for legacy callers too; never reread mutable instructions between nodes.
         instructions=self.policy['guidance'] if self.policy else getattr(self.provider,'instructions','')
         template=self.policy['template']['definition'] if self.policy else None

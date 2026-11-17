@@ -139,6 +139,15 @@ class NoteTemplateStore:
                                 (session_id, revision)).fetchone()
         return self.generation(row['id']) if row else None
 
+    def rolling_run_state(self, session_id, revision):
+        """State of the rolling run the monitor would reuse; None means a fresh generation would begin."""
+        row = self.conn.execute(
+            "SELECT r.state FROM note_generations g JOIN note_generation_runs r ON r.id=g.id "
+            "WHERE g.session_id=? AND g.source_revision=? AND r.kind='rolling' "
+            "AND r.state IN ('active','failed') ORDER BY g.rowid DESC LIMIT 1",
+            (session_id, revision)).fetchone()
+        return row['state'] if row else None
+
     def admit_final_revision(self, generation_id, revision):
         policy = self.generation(generation_id)
         if type(revision) is not int or revision < policy['source_revision']:

@@ -1,10 +1,11 @@
 """Immutable template policies across sections/reductions; fake providers only."""
 import asyncio
 import json
+import sqlite3
 
 import pytest
 from scribeloop_core.llm.note_generation import NotesGeneration
-from scribeloop_core.llm.rolling import RollingNotes
+from scribeloop_core.llm.rolling import ExplicitRetryRequired, RollingNotes
 from scribeloop_core.storage.db import connect, migrate
 from scribeloop_core.storage.note_templates import NoteTemplateStore
 from scribeloop_core.storage.sessions import SessionStore
@@ -244,4 +245,60 @@ async def test_destination_and_source_scope_mismatch_refuse_dispatch(workspace):
         NotesGeneration.prepare(store, provider, sid, 1, mode='automatic')
     with pytest.raises(ValueError, match='scope'):
         await context.engine().run('another-meeting', rows, revision=1)
+    assert not provider.calls
+
+
+@pytest.mark.asyncio
+async def test_failed_rolling_draft_is_skipped_not_redispatched(workspace):
+    """A failed live draft waits for explicit retry instead of re-failing on every update."""
+    store, sid, templates = workspace
+    rows = add_rows(store, sid, count=2)
+    provider = Provider(fail=True)
+    rolling = NotesGeneration.prepare(store, provider, sid, 1, mode='rolling')
+    with pytest.raises(RuntimeError):
+        await rolling.engine().run(sid, rows, revision=1)
+    rolling.failed()
+    # The monitor's skip condition mirrors the reuse query for this revision only.
+    assert templates.rolling_run_state(sid, 1) == 'failed'
+    assert templates.rolling_run_state(sid, 2) is None
+    provider.fail = False
+    reused = NotesGeneration.prepare(store, provider, sid, 1, mode='rolling')
+    assert reused.snapshot == rolling.snapshot
+    with pytest.raises(ExplicitRetryRequired):
+        await reused.engine().run(sid, rows, revision=1)
+    assert len(provider.calls) == 1, 'Reuse must refuse before any provider dispatch'
+    # A later revision (e.g., after cleanup) begins a fresh generation, so live drafts resume.
+    store.transition(sid, 'recording')
+    store.checkpoint(sid, 'mic', recorded_ms=950000)
+    store.commit_window(sid, 'mic', [], 900000)
+    chunks = [{'text': 'Corrected supported statement.', 'stream': 'mic', 'start_ms': 0,
+               'end_ms': 1000, 'is_final': True}]
+    store.revise_transcript(sid, chunks, provider='deepgram', model='nova-3')
+    store.transition(sid, 'completed')
+    fresh = NotesGeneration.prepare(store, provider, sid, 2, mode='rolling')
+    assert fresh.snapshot != rolling.snapshot
+    assert await fresh.engine().run(sid, store.segments(sid), revision=2, rolling=True)
+    assert len(provider.calls) == 2
+    assert templates.rolling_run_state(sid, 2) == 'active'
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_marking_survives_database_errors(workspace, monkeypatch):
+    """A workspace database failure inside failed() must not mask the original notes error."""
+    store, sid, _ = workspace
+    add_rows(store, sid, count=2)
+    provider = Provider()
+    generation = NotesGeneration.prepare(store, provider, sid, 1, mode='manual')
+
+    def broken_mark(self, generation_id, state):
+        raise sqlite3.OperationalError('database is locked')
+
+    monkeypatch.setattr(NoteTemplateStore, 'mark_generation', broken_mark)
+    generation.failed()  # Must not raise; the original notes error keeps propagating.
+    assert store.conn.execute('SELECT state FROM note_generation_runs WHERE id=?',
+                              (generation.snapshot['id'],)).fetchone()[0] == 'active'
+    monkeypatch.undo()
+    generation.failed()  # A later best-effort attempt marks the run failed.
+    assert store.conn.execute('SELECT state FROM note_generation_runs WHERE id=?',
+                              (generation.snapshot['id'],)).fetchone()[0] == 'failed'
     assert not provider.calls

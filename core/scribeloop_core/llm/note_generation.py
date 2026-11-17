@@ -1,8 +1,10 @@
 """Resolve immutable editorial policy before scheduling any notes dispatch."""
 from __future__ import annotations
 
+import contextlib
 from copy import copy
 
+from ..storage.db import DATABASE_ERRORS
 from ..storage.note_templates import NoteTemplateStore
 
 
@@ -38,4 +40,7 @@ class NotesGeneration:
         return RollingNotes(self.store, self.provider, authorized=self.authorized, generation_id=self.snapshot['id'])
 
     def failed(self):
-        NoteTemplateStore(self.store.conn).mark_generation(self.snapshot['id'], 'failed')
+        # Best-effort: a workspace database failure here must not mask the original
+        # notes error, skip the user-facing outcome, or interrupt cancellation.
+        with contextlib.suppress(*DATABASE_ERRORS):
+            NoteTemplateStore(self.store.conn).mark_generation(self.snapshot['id'], 'failed')
