@@ -22,17 +22,17 @@ def make_app(request):
     from keyring.backends.SecretService import Keyring
 
     from ..capture.linux_pipewire import LinuxMeetingAudioSource, linux_capture_devices
-    from ..meetings.linux import LinuxActivityObserver, installed_apps
+    from ..meetings.linux import LinuxActivityObserver, known_apps
     from ..meetings.service import DiscoveryService
-    settings = DesktopSettings(backend=Keyring(), default_detection_enabled=False)
+    settings = DesktopSettings(backend=Keyring())
     return create_app(database=Path(request['database']), storage='encrypted',
         launch_token=request['token'], settings=settings,
         source_factory=LinuxMeetingAudioSource, cloud_config=settings.cloud(),
         summary_provider=settings.value.summary(),
         cleanup_provider=settings.value.cleanup(),
         discovery_factory=lambda publish: DiscoveryService(publish,
-            observer=LinuxActivityObserver(), apps_provider=installed_apps,
-            devices_provider=linux_capture_devices, allow_application_capture=False))[0]
+            observer=LinuxActivityObserver(), apps_provider=known_apps,
+            devices_provider=linux_capture_devices))[0]
 
 
 async def serve(request):
@@ -80,8 +80,8 @@ def local_navigation(uri, port):
 
 
 def backend_command(installed):
-    installed = Path(installed).resolve()
-    if Path(sys.argv[0]).resolve() == installed:
+    installed_module = installed.parent/'scribeloop_core/api/linux.py'
+    if installed.is_file() and Path(__file__).resolve() == installed_module.resolve():
         return [sys.executable, '-I', str(installed)]
     return [sys.executable, '-m', 'scribeloop_core.api.linux']
 

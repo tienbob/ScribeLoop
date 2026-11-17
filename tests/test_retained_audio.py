@@ -214,6 +214,18 @@ def test_api_startup_expiry_archive_and_playback_do_not_call_cloud(tmp_path,requ
             assert wav.getnframes()==4800
         ws.send_json({'action':'play_audio','session_id':recent,'stream':'mic'})
         assert receive(ws,'audio_playback')['session_id']==recent, 'Delivery releases the per-client playback slot'
+        ws.send_json({'action':'audio_info','session_id':recent,'request_id':1})
+        info=receive(ws,'audio_info')
+        assert info['request_id']==1 and info['duration_ms']==300
+        ws.send_json({'action':'audio_window','session_id':recent,'stream':'conversation',
+            'start_ms':0,'request_id':2})
+        window=receive(ws,'audio_window')
+        assert window['request_id']==2 and window['stream']=='conversation'
+        with wave.open(io.BytesIO(base64.b64decode(window['wav_base64'])),'rb') as wav:
+            assert wav.getnframes()==4800
+        ws.send_json({'action':'audio_window','session_id':recent,'stream':'conversation',
+            'start_ms':300,'request_id':3})
+        assert receive(ws,'error')['request_id']==3
         ws.send_json({'action':'archive_audio','session_id':recent,'archived':True})
         assert receive(ws,'audio_state')['audio']['archived']
         ws.send_json({'action':'archive_audio','session_id':expired,'archived':True})
