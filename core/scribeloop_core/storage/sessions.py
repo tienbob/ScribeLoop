@@ -402,6 +402,8 @@ class SessionStore:
             self.conn.execute('INSERT INTO sessions '
                 '(id,started_at,source,title,status,consent_confirmed) VALUES (?,?,?,?,?,1)',
                 (session_id, now, 'meeting', title, 'preparing'))
+            from .note_templates import NoteTemplateStore
+            NoteTemplateStore(self.conn).attach_new_session(session_id)
             for stream in ('mic', 'loopback'):
                 self.conn.execute('INSERT INTO session_streams '
                     '(id,session_id,stream,sample_rate,started_at) VALUES (?,?,?,?,?)',

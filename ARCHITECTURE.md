@@ -391,9 +391,18 @@ and [Hybrid validation](docs/HYBRID_SEARCH_VALIDATION.md).
 
 Production uses one SQLCipher workspace for meetings, transcript revisions, people,
 summaries, jobs, FTS, vector metadata and Ask history. The authoritative schema is
-[db.py](core/scribeloop_core/storage/db.py), currently version 23; executable DDL
+[db.py](core/scribeloop_core/storage/db.py), currently version 24; executable DDL
 is not duplicated here. Vectors share the encrypted workspace rather than a
 plaintext external index.
+
+F3 storage foundations add six built-in note templates, up to 50 validated custom
+templates, a workspace default and a template choice attached to each new meeting.
+Existing meetings migrate to General. Immutable generation-policy records preserve
+the template definition/version, personal guidance and public provider destination;
+they never contain API-key fields. Deleting a custom template resets future choices
+in one transaction while retaining generation snapshots. These storage contracts
+are implemented; generation dispatch and native template controls are not yet wired.
+See [the F3 implementation plan](docs/F3_MEETING_TEMPLATES_PLAN.md).
 
 ```mermaid
 flowchart TD

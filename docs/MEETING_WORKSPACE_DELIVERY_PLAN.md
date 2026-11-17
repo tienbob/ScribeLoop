@@ -367,6 +367,10 @@ gate is passed. It was not automatically retried. See the closeout for artifacts
 
 ## F3 — Meeting templates
 
+Implementation began 17 November 2026. Slice 1 adds schema-24 template storage
+and immutable generation policy. Generation integration and native UX are still
+pending; see [implementation plan](F3_MEETING_TEMPLATES_PLAN.md).
+
 **User outcome:** choose a useful notes format without writing a large prompt.
 
 **Scope:** General, Stand-up, Customer call, Interview, Planning and One-to-one.
@@ -609,7 +613,7 @@ JSON state that makes those dependencies invisible.
 | ----------------- | ------------------------------------------ | ------------------------------------- | ------------------------------- |
 | F1 Search         | Closed — user approved 2026-11-16           | Existing selected revisions           | `SEARCH_CLOSEOUT.md`          |
 | F2 Ask            | Closed — user approved 2026-11-16           | F1                                    | `MEETING_CHAT_CLOSEOUT.md`    |
-| F3 Templates      | Not started                                | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
+| F3 Templates      | In progress: contracts/storage slice       | Existing summary schema               | `TEMPLATES_CLOSEOUT.md`       |
 | F4 Tasks          | Not started                                | Existing action extraction            | `ACTION_TRACKING_CLOSEOUT.md` |
 | F5 Personal notes | Not started                                | Recording timeline + source contracts | `PERSONAL_NOTES_CLOSEOUT.md`  |
 | F6a Drafts        | Not started                                | F3/F4 and evidence contract           | `FOLLOWUP_DRAFTS_CLOSEOUT.md` |
