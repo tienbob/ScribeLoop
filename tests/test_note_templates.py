@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 from pydantic import ValidationError
 from scribeloop_core.llm.note_templates import BUILTINS, NoteTemplate, definition_hash
-from scribeloop_core.storage.db import connect, migrate
+from scribeloop_core.storage.db import SCHEMA_VERSION, connect, migrate
 from scribeloop_core.storage.note_templates import NoteTemplateStore
 from scribeloop_core.storage.sessions import SessionStore
 
@@ -148,7 +148,7 @@ def test_populated_v23_migration_preserves_notes_and_does_not_invent_history(wor
     migrate(conn)
     migrate(conn)
     templates = NoteTemplateStore(conn)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 24
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
     assert sessions.notes(sid) == notes and sessions.segments(sid) == segments
     assert templates.selection(sid)['id'] == 'general'
     assert len(templates.list()) == 6

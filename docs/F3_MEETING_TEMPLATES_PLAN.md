@@ -1,7 +1,7 @@
 # F3 — Meeting templates: implementation preparation
 
 Prepared 16 November 2026 against main `71b6f59`.
-Status: **slice 1 complete on 17 November 2026; slices 2–5 pending**.
+Status: **slice 1 complete on 17 November 2026; slice 2 implemented; slices 3–5 pending**.
 F1/F2 are closed by user approval. Their accepted validation follow-ups do not
 block F3. Requirements remain in [the delivery plan](MEETING_WORKSPACE_DELIVERY_PLAN.md#f3--meeting-templates).
 
@@ -209,3 +209,55 @@ attempt needed the already-declared `defusedxml` dependency installed locally;
 a sandboxed run also blocked localhost OAuth callbacks and native audio conversion.
 The final run with local helper access passed. No live API validation or native
 F3 UI acceptance is claimed for this storage-only slice.
+
+### Slice 2 integration decisions
+
+Schema 25 adds generation references to jobs/final summaries and a separate mutable
+run-state table; immutable policy records are never updated. Explicit Generate
+starts a new generation. Rolling sections reuse one persisted generation through
+final reduction, including failed-dispatch state, so fresh audio cannot trigger a
+blind retry. The request captures provider configuration and personal guidance
+before task scheduling. Every node cache key includes the generation ID; all
+existing citation validation, cumulative budget and previous-summary preservation
+remain mandatory. Legacy callers without a generation retain their old read/cache
+contract; production notes dispatch always resolves a generation.
+
+## Slice 2 implementation record — 17 November 2026
+
+- All production notes entry points now resolve `NotesGeneration` before task
+  scheduling, capturing provider configuration in memory and policy in SQLCipher.
+  API keys remain solely in the in-memory provider. Personal guidance/template
+  edits after dispatch cannot change subsequent sections or reductions.
+- Schema 25 links jobs and saved summaries to generation IDs, with separate run
+  state. Cache recovery stays within a generation; explicit Generate always starts
+  a fresh generation, including when template/guidance are unchanged. Previously
+  failed rolling dispatches remain blocked until explicit regeneration.
+- No snapshot is created for live notes until a closed section can be dispatched.
+  The same live policy reaches final reduction. If cleanup creates a replacement
+  transcript revision, a separate, one-time final-revision admission binds final
+  jobs and saved content hashes to that source without mutating editorial policy.
+- Template focus/labels are lower-priority editorial preferences in every section
+  and reduction request. Canonical schema/citation validation remains mandatory;
+  unsupported sections cannot gain invented content merely to fill a layout.
+- Provider input accounting uses the actual serialized provider body where
+  available. Consent-epoch checks run at node boundaries and immediately before
+  real provider HTTP dispatch, including after local metadata awaits. Revoking and
+  reaccepting the agreement cannot restore an old run's authority.
+- Successful final notes persist provenance and mark the generation completed in
+  the same transaction. Failure preserves the last saved version. A late
+  cancellation after commit cannot relabel a completed generation as failed.
+- Legacy summaries retain no fabricated provenance. Legacy low-level rolling-note
+  callers keep their existing cache contract; production dispatch always uses a
+  generation. Current summary rendering and exports are still the legacy layout.
+
+Verification: focused fake-provider/API tests cover six built-ins, section and
+reduction propagation, mid-run edits, cache isolation/recovery, rolling-to-final
+reuse, cleanup revisions, changed destination/source refusal, hostile template
+output, byte budgets, revoked authorization, migration, two explicit API-generated
+versions and failure preserving the prior version. Complete suite: **1,023 passed,
+1 skipped** (40.25 s); follow-up focused checks cover final lifecycle/source guards.
+No live provider calls, native F3 UI acceptance or formatting-quality score claimed.
+
+Next: slice 3, backend template commands and the native Notes preferences page,
+meeting selection, static preview and custom-template draft editor. Slice 4 must
+then render/export saved presentation, followed by F3 acceptance in slice 5.

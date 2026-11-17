@@ -391,7 +391,7 @@ and [Hybrid validation](docs/HYBRID_SEARCH_VALIDATION.md).
 
 Production uses one SQLCipher workspace for meetings, transcript revisions, people,
 summaries, jobs, FTS, vector metadata and Ask history. The authoritative schema is
-[db.py](core/scribeloop_core/storage/db.py), currently version 24; executable DDL
+[db.py](core/scribeloop_core/storage/db.py), currently version 25; executable DDL
 is not duplicated here. Vectors share the encrypted workspace rather than a
 plaintext external index.
 
@@ -400,8 +400,13 @@ templates, a workspace default and a template choice attached to each new meetin
 Existing meetings migrate to General. Immutable generation-policy records preserve
 the template definition/version, personal guidance and public provider destination;
 they never contain API-key fields. Deleting a custom template resets future choices
-in one transaction while retaining generation snapshots. These storage contracts
-are implemented; generation dispatch and native template controls are not yet wired.
+in one transaction while retaining generation snapshots. Automatic, manual and live notes dispatch now resolve one immutable policy before
+scheduling. Sections and reductions use that policy, and their durable cache keys
+include its generation ID. Explicit regeneration creates a new generation; failed
+rolling dispatches are not automatically retried. Cleanup may publish a later
+transcript revision: a separately admitted final revision binds final citations
+and freshness without changing the original editorial snapshot. Saved summaries
+link to their generation. Native template selection/editor controls are still pending.
 See [the F3 implementation plan](docs/F3_MEETING_TEMPLATES_PLAN.md).
 
 ```mermaid

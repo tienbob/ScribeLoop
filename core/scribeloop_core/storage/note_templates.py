@@ -98,7 +98,7 @@ class NoteTemplateStore:
         return {'affected_meetings': meetings, 'default_reset': default}
 
     def begin_generation(self, session_id, revision, *, guidance='', provider, model, destination,
-                         language_policy='conversation'):
+                         language_policy='conversation', kind='manual'):
         """Create once before dispatch. Callers must carry this snapshot through all nodes."""
         if type(revision) is not int or revision < 1:
             raise ValueError('Invalid source revision')
@@ -112,6 +112,8 @@ class NoteTemplateStore:
             raise ValueError('Generation destination must be a public endpoint without credentials or query')
         if language_policy not in ('conversation', 'en', 'vi'):
             raise ValueError('Invalid generation language policy')
+        if kind not in ('manual', 'automatic', 'rolling'):
+            raise ValueError('Invalid notes generation kind')
         with self.conn:
             if not self.conn.execute('SELECT 1 FROM transcript_revisions WHERE session_id=? AND revision=?',
                                      (session_id, revision)).fetchone():
@@ -126,7 +128,44 @@ class NoteTemplateStore:
             digest = hashlib.sha256(payload.encode()).hexdigest()
             self.conn.execute('INSERT INTO note_generations(id,session_id,source_revision,snapshot_json,snapshot_hash,created_at) '
                               'VALUES (?,?,?,?,?,?)', (generation_id, session_id, revision, payload, digest, int(time.time())))
+            self.conn.execute("INSERT INTO note_generation_runs(id,kind,state) VALUES (?,?,'active')", (generation_id, kind))
         return {**snapshot, 'snapshot_hash': digest}
+
+    def rolling_generation(self, session_id, revision, *, final=False):
+        revision_check = '<=' if final else '='
+        row = self.conn.execute("SELECT g.id FROM note_generations g JOIN note_generation_runs r ON r.id=g.id "
+                                f"WHERE g.session_id=? AND g.source_revision{revision_check}? AND r.kind='rolling' "
+                                "AND r.state IN ('active','failed') ORDER BY g.rowid DESC LIMIT 1",
+                                (session_id, revision)).fetchone()
+        return self.generation(row['id']) if row else None
+
+    def admit_final_revision(self, generation_id, revision):
+        policy = self.generation(generation_id)
+        if type(revision) is not int or revision < policy['source_revision']:
+            raise ValueError('Invalid final notes source revision')
+        if not self.conn.execute('SELECT 1 FROM transcript_revisions WHERE session_id=? AND revision=?',
+                                 (policy['session_id'], revision)).fetchone():
+            raise ValueError('Final transcript revision no longer exists')
+        with self.conn:
+            changed = self.conn.execute("UPDATE note_generation_runs SET final_revision=? WHERE id=? AND kind='rolling' "
+                                        "AND state IN ('active','failed') AND (final_revision IS NULL OR final_revision=?)",
+                                        (revision, generation_id, revision)).rowcount
+            if changed != 1:
+                raise ValueError('Final notes source scope is already fixed')
+
+    def generation_allows_revision(self, generation_id, revision):
+        policy = self.generation(generation_id)
+        if policy['source_revision'] == revision:
+            return True
+        row = self.conn.execute('SELECT final_revision FROM note_generation_runs WHERE id=?', (generation_id,)).fetchone()
+        return bool(row and row['final_revision'] == revision)
+
+    def mark_generation(self, generation_id, state):
+        if state not in ('failed', 'completed'):
+            raise ValueError('Invalid notes generation state')
+        with self.conn:
+            # A late UI disconnect/cancellation must not relabel a committed success.
+            self.conn.execute("UPDATE note_generation_runs SET state=? WHERE id=? AND state!='completed'", (state, generation_id))
 
     def generation(self, generation_id):
         row = self.conn.execute('SELECT snapshot_json,snapshot_hash FROM note_generations WHERE id=?', (generation_id,)).fetchone()

@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..async_compat import timeout
+from ..llm.note_generation import NotesGeneration
 from ..llm.ollama_lifecycle import release_all, release_if_small, session_targets
 from ..llm.rolling import RollingNotes, summary_failure_code
 from ..meetings.autocall import AutoCallMonitor
@@ -295,14 +296,15 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             if (summary_task is not None or not summary_provider or not summary_provider.public()['configured'] or
                     grant != {key:summary_provider.public()[key] for key in ('provider','model','endpoint')}):
                 raise ValueError('Summary endpoint changed or busy')
-            _,fingerprint,messages = store.summary_input(session_id,session['transcript_revision'],build_messages=False)
+            rows,fingerprint,_ = store.summary_input(session_id,session['transcript_revision'],build_messages=False)
+            generation=NotesGeneration.prepare(store,summary_provider,session_id,session['transcript_revision'],mode='automatic')
             with store.conn:
                 store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) VALUES (?,?,?,?,?)',
                     (session_id,store._now(),'info',attempt,json.dumps({**grant,'input_hash':fingerprint,
                         'revision':session['transcript_revision']})))
-            summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,messages,automatic=True))
+            summary_task = asyncio.create_task(generate_summary(session_id,session['transcript_revision'],fingerprint,rows,generation=generation,automatic=True))
             summary_task.session_id = session_id
-            await publish({'type':'summary_started','session_id':session_id})
+            await publish({'type':'summary_started','session_id':session_id,'generation':generation.snapshot})
         except (ValueError,*DATABASE_ERRORS):
             with contextlib.suppress(*DATABASE_ERRORS):
                 store.record_summary_outcome(session_id,'summary_setup_invalid')
@@ -376,46 +378,61 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             signature=transcript_hash(rows)
             if not rows or signature==rolling_signatures.get(sid):
                 continue
+            # No policy is created before there is a closed section to dispatch.
+            checkpoints=app.state.store.checkpoints(sid)
+            streams=('mic',) if session.get('capture',{}).get('scope')=='microphone' else ('mic','loopback')
+            watermark=min((checkpoints.get(stream,{}).get('confirmed_ms',0) for stream in streams),default=0)
+            try:
+                if (rows[0]['start_ms']//900000+1)*900000>watermark:
+                    continue
+                generation=NotesGeneration.prepare(app.state.store,summary_provider,sid,session['transcript_revision'],mode='rolling')
+            except (ValueError,*DATABASE_ERRORS):
+                continue  # Do not dispatch with a changed destination or invalid policy.
             rolling_signatures[sid]=signature
-            summary_task=asyncio.create_task(generate_rolling(sid,rows,session['transcript_revision']))
+            summary_task=asyncio.create_task(generate_rolling(sid,rows,session['transcript_revision'],generation))
             summary_task.session_id=sid
             summary_task.rolling=True
 
-    async def generate_rolling(sid,rows,revision):
+    async def generate_rolling(sid,rows,revision,generation):
         nonlocal summary_task
         try:
-            engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
+            engine=generation.engine()
             notes=await engine.run(sid,rows,revision=revision,rolling=True)
             if notes:
-                await publish({'type':'rolling_notes','session_id':sid,'summary':notes[-1],'provider':summary_provider.provider,'model':summary_provider.model,'budget':engine.public(sid)})
+                await publish({'type':'rolling_notes','session_id':sid,'summary':notes[-1],'provider':generation.provider.provider,'model':generation.provider.model,'generation':generation.snapshot,'budget':engine.public(sid)})
         except asyncio.CancelledError:
+            generation.failed()
             raise
         except Exception:  # noqa: BLE001 - preserve prior draft, redact provider data
+            generation.failed()
             await publish({'type':'rolling_notes_error','session_id':sid,
                 'message':'Section notes paused. Saved transcript is safe; Generate summary can explicitly retry.'})
         finally:
             summary_task=None
 
-    async def generate_summary(session_id, revision, fingerprint, messages, *, retry=False, automatic=False):
+    async def generate_summary(session_id, revision, fingerprint, rows, *, generation, retry=False, automatic=False):
         nonlocal summary_task
         try:
             async with timeout(3600):
-                engine=RollingNotes(app.state.store,summary_provider,authorized=lambda:app.state.store.agreement()['accepted'])
-                value=await engine.run(session_id,app.state.store.segments(session_id),revision=revision,
+                engine=generation.engine()
+                value=await engine.run(session_id,rows,revision=revision,
                     retry=retry,repair_invalid=automatic)
+            generation.authorized()
             saved = app.state.store.save_grounded_summary(session_id,revision,fingerprint,value,
-                provider=summary_provider.provider,model=summary_provider.model)
+                provider=generation.provider.provider,model=generation.provider.model,generation_id=generation.snapshot['id'])
             app.state.store.record_summary_outcome(session_id)
             await publish({'type':'summary_ready','session_id':session_id,'summary':saved,
                 'session':app.state.store.get(session_id),'budget':engine.public(session_id)})
-            if summary_provider.provider == 'Ollama' and not summary_provider.cloud:
+            if generation.provider.provider == 'Ollama' and not generation.provider.cloud:
                 # The notes task is over: free small local models immediately.
                 with contextlib.suppress(Exception):
-                    await release_if_small(summary_provider.base_url,summary_provider.model)
+                    await release_if_small(generation.provider.base_url,generation.provider.model)
         except asyncio.CancelledError:
+            generation.failed()
             raise
         except Exception as exc:  # noqa: BLE001 - redact provider bodies and transcript
             # Never expose provider bodies, transcript snippets, keys or raw exceptions.
+            generation.failed()
             code=summary_failure_code(exc)
             with contextlib.suppress(*DATABASE_ERRORS):
                 app.state.store.record_summary_outcome(session_id,code)
@@ -1205,7 +1222,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             auto_monitor.keep_recording(command['session_id'])
                         elif command.get('action') in {'summarize','export_markdown'}:
                             request = SummaryRequest.model_validate(command)
-                            rows,fingerprint,messages = store.summary_input(request.session_id,request.revision,
+                            rows,fingerprint,_ = store.summary_input(request.session_id,request.revision,
                                 build_messages=False)
                             if request.action == 'export_markdown':
                                 from ..llm.grounded import export_markdown
@@ -1219,6 +1236,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                         request.model != summary_provider.model or
                                         (summary_provider.public()['cloud'] and not request.text_consent)):
                                     raise ValueError('Summary provider, consent or active request invalid')
+                                generation=NotesGeneration.prepare(store,summary_provider,request.session_id,request.revision,mode='manual')
                                 with store.conn:
                                     store.conn.execute('INSERT INTO events(session_id,ts,level,type,payload_json) '
                                         'VALUES (?,?,?,?,?)',(request.session_id,store._now(),'info','summary_request',
@@ -1226,9 +1244,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                             'provider':request.provider,'model':request.model,
                                             'text_consent':request.text_consent})))
                                 summary_task = asyncio.create_task(generate_summary(request.session_id,
-                                    request.revision,fingerprint,messages,retry=True))
+                                    request.revision,fingerprint,rows,generation=generation,retry=True))
                                 summary_task.session_id = request.session_id
-                                await publish({'type':'summary_started','session_id':request.session_id})
+                                await publish({'type':'summary_started','session_id':request.session_id,'generation':generation.snapshot})
                         elif action in {'create_person','link_person','set_person_learning','forget_person'}:
                             request=PersonRequest.model_validate(command)
                             fields={'create_person':{'action','name'},'link_person':{'action','person_id','session_id','revision','speaker_id'},
