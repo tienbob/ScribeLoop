@@ -9,8 +9,13 @@ was actually said.
 **Record → Transcribe → Take notes → Search → Ask**
 
 [Get started](#get-started) · [Features](#a-notebook-for-the-whole-conversation) ·
+<<<<<<< Updated upstream
 [Search & Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
 [What's new](CHANGELOG.md) · [Developer guides](#for-developers)
+=======
+[Search &amp; Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
+[Developer guides](#for-developers)
+>>>>>>> Stashed changes
 
 > **Internal preview:** Apple Silicon Macs, macOS 13 or later. Automatic call
 > detection requires macOS 14.2+. The app includes its runtime; no Python,
@@ -18,13 +23,13 @@ was actually said.
 
 ## A notebook for the whole conversation
 
-| During the meeting | After the meeting |
-| --- | --- |
-| Detect likely calls and offer **Record / Not now** | Get an overview, decisions, action items and open questions |
-| Capture your microphone, a meeting app/browser, or system audio | Follow note citations back to the transcript |
-| Follow live transcription with anonymous speaker labels | Name speakers and edit conversation titles |
-| Choose automatic or fixed-language recognition | Replay audio with seeking and playback-speed controls |
-| Stop manually or let detected-call monitoring help | Search meetings, ask questions and share what matters |
+| During the meeting                                              | After the meeting                                           |
+| --------------------------------------------------------------- | ----------------------------------------------------------- |
+| Detect likely calls and offer **Record / Not now**              | Get an overview, decisions, action items and open questions |
+| Capture your microphone, a meeting app/browser, or system audio | Follow note citations back to the transcript                |
+| Follow live transcription with anonymous speaker labels         | Name speakers and edit conversation titles                  |
+| Choose automatic or fixed-language recognition                  | Replay audio with seeking and playback-speed controls       |
+| Stop manually or let detected-call monitoring help              | Search meetings, ask questions and share what matters       |
 
 Keep each conversation's **Notes, Transcript and Audio** together. Optional Calendar
 integration shows upcoming events and lets you link them to saved conversations.
@@ -74,6 +79,7 @@ recording and Stop. Browser capture can include audio from other tabs in that br
 
 **Search** finds passages. **Ask** uses retrieved evidence to answer a question.
 
+<<<<<<< Updated upstream
 Search updates automatically when you pause typing for half a second. With cloud
 Hybrid Search enabled, those searches use your configured embedding provider.
 
@@ -82,6 +88,13 @@ Hybrid Search enabled, those searches use your configured embedding provider.
 | **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed. |
 | **Hybrid Search** | Combines keyword matches with semantic retrieval to find related ideas across wording and languages. Enable it in Preferences and configure an embedding provider. |
 | **Ask** | Answers questions about the current, chosen or all meetings using retrieved excerpts and source citations. Requires configured Hybrid Search and a notes provider. |
+=======
+| Mode               | What it does                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed.                                                                                      |
+| **Hybrid Search**  | Combines keyword matches with semantic retrieval to find related ideas across wording and languages. Enable it in Preferences and configure an embedding provider. |
+| **Ask**            | Answers questions about the current, chosen or all meetings using retrieved excerpts and source citations. Requires configured Hybrid Search and a notes provider. |
+>>>>>>> Stashed changes
 
 Try questions such as:
 
@@ -107,12 +120,12 @@ is correct. Review important conclusions against their sources.
 
 ## Choose how your AI runs
 
-| Task | Options | When it runs |
-| --- | --- | --- |
-| Live cloud transcription | Deepgram or AssemblyAI | While recording |
-| Optional local transcription | Ollama | After recording ends |
-| Notes and optional transcript cleanup | OpenAI, Gemini, Ollama, LM Studio or a compatible custom service | During supported notes flows and after recording |
-| Semantic embeddings | Cloud provider, local server or bundled Granite | When Hybrid Search indexes or retrieves saved content |
+| Task                                  | Options                                                          | When it runs                                          |
+| ------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------- |
+| Live cloud transcription              | Deepgram or AssemblyAI                                           | While recording                                       |
+| Optional local transcription          | Ollama                                                           | After recording ends                                  |
+| Notes and optional transcript cleanup | OpenAI, Gemini, Ollama, LM Studio or a compatible custom service | During supported notes flows and after recording      |
+| Semantic embeddings                   | Cloud provider, local server or bundled Granite                  | When Hybrid Search indexes or retrieves saved content |
 
 Optional local transcription needs a compatible Ollama setup and model; it does
 not provide the cloud engines' live transcript experience. See
@@ -143,13 +156,13 @@ See [audio retention](docs/RETAINED_AUDIO.md) and
 
 ## Requirements and preview limits
 
-| | |
-| --- | --- |
-| **Mac** | Apple Silicon, M1 or newer |
-| **Operating system** | macOS 13+; automatic detection needs macOS 14.2+ |
-| **Cloud AI** | Internet connection and your own provider credentials |
-| **Local AI** | Compatible local server/models where selected; bundled Granite needs no model server |
-| **Permissions** | Microphone; Screen Recording for app/system audio; Calendar only if enabled |
+|                      |                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| **Mac**              | Apple Silicon, M1 or newer                                                           |
+| **Operating system** | macOS 13+; automatic detection needs macOS 14.2+                                     |
+| **Cloud AI**         | Internet connection and your own provider credentials                                |
+| **Local AI**         | Compatible local server/models where selected; bundled Granite needs no model server |
+| **Permissions**      | Microphone; Screen Recording for app/system audio; Calendar only if enabled          |
 
 Intel Macs and macOS 11–12 are not supported by the current installer.
 An [Ubuntu 22.04+ GTK preview](packaging/linux/README.md) is available separately;
@@ -180,3 +193,5 @@ and steps to reproduce. Keep API keys, passwords and private recordings out of b
 reports.
 
 **License:** Proprietary.
+
+# Run: .venv-linux/bin/python -m scribeloop_core.api.linux

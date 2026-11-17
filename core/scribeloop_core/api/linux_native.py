@@ -4,8 +4,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import stat
-import tempfile
 import threading
 import time
 from contextlib import suppress
@@ -14,8 +12,8 @@ from pathlib import Path
 try:
     import gi
 
-    gi.require_version('Gdk','3.0')
     gi.require_version('Gtk','3.0')
+    gi.require_version('Gdk','3.0')
     from gi.repository import Gdk, GLib, Gtk
 except (ImportError,ValueError):
     # The shell reducer and packaging checks import this module without a GUI.
@@ -32,106 +30,75 @@ from .linux_state import (
 )
 
 CSS = b"""
-* { color:#202d29; font-family:"Cantarell"; }
-window { color:#202d29; background:#f2f4ef; }
-dialog { color:#202d29; background:#f2f4ef; }
-dialog label, label { color:#202d29; }
-entry, textview, textview text, spinbutton, combobox, combobox button {
-    color:#202d29; background-color:#ffffff; caret-color:#bb563b;
-}
-entry { border:1px solid #cbd5ce; border-radius:5px; padding:8px 10px; }
-entry:focus, textview:focus, spinbutton:focus { border-color:#34745d; }
-button { color:#26352f; background:#ffffff; border:1px solid #d1dbd4;
-    border-radius:6px; padding:7px 12px; font-weight:600; }
-button:hover { background:#e9efea; border-color:#9caf9f; }
-button:active { background:#dce7df; }
-button:disabled { color:#87918b; background:#edf0ec; border-color:#e0e5e0; }
-headerbar.header { color:#f8faf8; background:#1f3a32; border:0;
-    min-height:58px; box-shadow:none; }
-headerbar.header label { color:#f8faf8; }
-headerbar.header button { color:#f8faf8; background:#2b4b40; border-color:#3b5d50; }
-headerbar.header button:hover { background:#385b4d; }
-headerbar.header .accent-button { color:#ffffff; background:#bd563c; border-color:#bd563c; }
-headerbar.header .accent-button:hover { background:#a94630; }
-.brand { font-family:"Cantarell"; font-size:19px; font-weight:800; color:#ffffff; }
-.subtitle { font-size:9px; font-weight:700; color:#b9d1c4; }
-.sidebar { color:#26352f; background:#e8ede7; border-right:1px solid #d4ddd5; }
-.section-label { font-size:10px; font-weight:800; color:#65756b; }
-.library-count { color:#315b49; background:#d6e5d9; border-radius:12px; padding:2px 8px; }
-.workspace { background:#f2f4ef; }
-.eyebrow { color:#a34c35; font-size:10px; font-weight:800; }
-.page-title { color:#1e322b; font-size:24px; font-weight:800; }
-.detail-status, .status-label { color:#68776e; font-size:11px; }
-.connection-status { color:#51665a; font-size:10px; }
-.card { color:#202d29; background:#ffffff; border-radius:6px;
-    border:1px solid #dce3dd; padding:14px; }
-.section-heading { color:#20352c; font-size:15px; font-weight:800; }
-.section-caption { color:#748078; font-size:11px; }
-.view-tabs button { color:#66766d; background:transparent; border:0;
-    border-bottom:2px solid transparent; border-radius:0; padding:8px 18px; }
-.view-tabs button:hover { color:#203d31; background:#e5ebe5; }
-.view-tabs button:checked { color:#24513e; background:#e5ece5; border-bottom-color:#bd563c; }
-.accent-button { color:#ffffff; background:#2d684f; border-color:#2d684f; font-weight:800; }
-.accent-button:hover { color:#ffffff; background:#24563f; border-color:#24563f; }
-.danger-button { color:#9e432f; background:#fff3ee; border-color:#e8c8bc; }
-.history-row { background:transparent; border-radius:5px; padding:8px; }
-list row { color:#26352f; background:transparent; border-radius:5px; }
-list row:hover { background:#dde7de; }
-list row:selected { color:#1e392e; background:#d3e2d5; }
-.history-title { color:#24352e; font-size:13px; font-weight:700; }
-.history-meta { color:#748078; font-size:10px; }
-.notes-editor { color:#283630; background:#ffffff; font-size:13px; }
-.transcript-row { color:#26352f; background:#ffffff; border:1px solid #e0e6e1;
-    border-radius:5px; padding:9px 11px; }
-.partial-row { color:#4b4034; background:#fff5e8; border:1px dashed #e2c89f;
-    border-radius:5px; padding:9px 11px; }
-.speaker { font-size:10px; font-weight:800; color:#347258; }
-.text { font-size:13px; color:#26352f; }
-.dialog-panel { color:#202d29; background:#ffffff; border-radius:7px; padding:16px; }
-.form-grid { color:#25352e; }
-.dialog-help { color:#66766d; font-size:11px; }
-.dialog-status { color:#9b4934; font-size:11px; font-weight:700; }
-checkbutton, checkbutton label { color:#26352f; }
-separator { background:#dce3dd; }
+* { font-family:"Lato"; color:#283831; }
+window, .shell-root { background:#f2f4f1; }
+.header { background:#fbfcfa; border-bottom:1px solid #dce3dd; padding:2px 8px; }
+.brand { font-size:16px; font-weight:800; color:#20382c; }
+.subtitle { font-size:9px; font-weight:800; letter-spacing:1.3px; color:#76847b; }
+.sidebar { background:#fbfcfa; border-right:1px solid #dce3dd; }
+.section-heading { font-size:15px; font-weight:800; color:#26382f; }
+.count-pill { background:#edf1ed; border-radius:10px; padding:3px 8px; font-size:11px; font-weight:800; color:#66766d; }
+.history-list { background:transparent; }
+.history-list row { background:transparent; border-radius:5px; border-left:3px solid transparent; margin:2px 0; }
+.history-list row:hover { background:#f0f4f0; }
+.history-list row:selected { background:#e9f1eb; border-left-color:#bb654a; }
+.history-row { padding:8px 10px; }
+.history-title { font-size:13px; font-weight:700; color:#293a32; }
+.history-meta { font-size:11px; color:#78857d; }
+.workspace { background:#f2f4f1; }
+.eyebrow { font-size:10px; font-weight:800; letter-spacing:1.5px; color:#b15f47; }
+.page-title { font-size:27px; font-weight:800; color:#20332a; }
+.detail-status { font-size:12px; color:#718077; }
+.view-tabs { background:#e7ece7; border-radius:7px; padding:3px; }
+.view-tabs button { color:#617168; background:transparent; border:0; border-radius:5px; padding:7px 16px; font-weight:700; }
+.view-tabs button:hover { color:#273a30; background:#f6f8f6; }
+.view-tabs button:checked { color:#244b37; background:#fff; box-shadow:0 1px 3px rgba(27,48,36,.12); }
+button { color:#33433a; background:#fff; border:1px solid #d5ded6; border-radius:5px; padding:6px 11px; min-height:34px; font-weight:700; }
+button:hover { background:#f2f6f2; border-color:#b9c9bd; }
+button:active { background:#e6ede7; }
+entry, spinbutton { background:#fff; color:#2b3b33; border:1px solid #d5ded6; border-radius:4px; padding:7px; }
+entry:focus, spinbutton:focus { border-color:#6e9a7d; }
+checkbutton { color:#43534a; }
+menu { background:#fbfcfa; color:#2b3b33; border:1px solid #d5ded6; border-radius:4px; padding:4px; }
+menu menuitem { background:#fbfcfa; color:#2b3b33; padding:7px 10px; }
+menu menuitem:hover, menu menuitem:selected { background:#e9f1eb; color:#20382c; }
+.accent-button { background:#285b42; border-color:#285b42; color:#fff; }
+.accent-button label, .accent-button image { color:#fff; }
+.accent-button:hover { background:#204c37; border-color:#204c37; color:#fff; }
+.accent-button:hover label, .accent-button:hover image { color:#fff; }
+.danger-button { background:#fbf5f2; border-color:#ead6ce; color:#a04e3d; }
+.danger-button label, .danger-button image { color:#a04e3d; }
+.danger-button:hover { background:#f6e8e2; border-color:#dfb7a9; }
+.status-label { color:#728078; font-size:11px; }
+.connection-status { color:#65756b; font-size:11px; }
+.notes-view, .transcript-view, .audio-view { background:transparent; }
+textview.notes-editor, textview.notes-editor text { background-color:#fff; color:#2b3c33; }
+.notes-editor { border:1px solid #e0e6e0; border-radius:5px; padding:24px; font-size:14px; }
+.action-bar { padding-top:6px; }
+.transcript-list { background:#fff; border:1px solid #e0e6e0; border-radius:5px; }
+.transcript-item { background:#fff; border-bottom:1px solid #edf0ed; }
+.transcript-row { background:transparent; padding:12px 14px; }
+.partial-row { background:#f7f0e5; border-left:3px solid #c79551; padding:12px 14px; }
+.speaker { font-size:11px; font-weight:800; color:#b45f46; }
+.text { font-size:14px; color:#2a3a32; }
+.pager { padding:7px 2px; }
+.audio-status { color:#718077; font-size:12px; }
+.audio-toolbar { background:#fff; border:1px solid #e0e6e0; border-radius:5px; padding:12px; }
+.field-label { color:#718077; font-size:11px; font-weight:700; }
+.dialog-panel { background:#fbfcfa; padding:12px; }
+.dialog-panel label { color:#53645a; font-size:12px; }
+.dialog-copy { color:#394a40; font-size:13px; }
+.markdown-export { background:#f2f4f1; color:#283831; }
+.markdown-export filechooser { background:#fbfcfa; color:#283831; }
+.markdown-export placessidebar { background:#f2f4f1; color:#43534a; }
+.markdown-export placessidebar row { color:#43534a; }
+.markdown-export placessidebar row:selected { background:#e9f1eb; color:#20382c; }
+.markdown-export treeview.view { background:#fbfcfa; color:#283831; }
+.markdown-export treeview.view:selected { background:#dfece2; color:#20382c; }
+.markdown-export treeview.view:selected:focus { background:#d6e7da; color:#20382c; }
+.markdown-export treeview.view header button { background:#fff; color:#43534a; }
+.markdown-export label { color:#43534a; }
 """
-
-
-def private_playback_file(data):
-    runtime_dir = os.environ.get('XDG_RUNTIME_DIR')
-    if runtime_dir:
-        info = Path(runtime_dir).lstat()
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077):
-            raise PermissionError('Unsafe XDG runtime directory')
-    directory = tempfile.TemporaryDirectory(prefix='scribeloop-playback-', dir=runtime_dir)
-    try:
-        with tempfile.NamedTemporaryFile(mode='wb', prefix='audio-', suffix='.wav',
-                dir=directory.name, delete=False) as stream:
-            stream.write(data)
-            stream.flush()
-            path = Path(stream.name)
-        return directory, path
-    except BaseException:
-        directory.cleanup()
-        raise
-
-
-def session_status_text(session):
-    text = session_label(session)
-    capture = session.get('capture') or {}
-    if (session.get('status') in {'preparing', 'recording', 'stopping'}
-            and capture.get('scope') == 'system'):
-        return f'{text} · Capturing all selected-output audio'
-    return text
-
-
-def recording_provider_missing(state):
-    return (state.agreement.get('accepted') is True and not state.is_busy()
-            and state.transcription.get('configured') is not True)
-
-
-def provider_endpoint(provider, presets, current_endpoint):
-    return presets.get(provider, current_endpoint)
 
 
 def clear_box(box):
@@ -153,6 +120,13 @@ def make_label(text='',*,classes=(),wrap=False,selectable=False,xalign=0):
     for name in classes:
         label.get_style_context().add_class(name)
     return label
+
+
+def markdown_filename(title):
+    safe=''.join(character if character.isalnum() or character in ' ._-' else ' '
+                 for character in str(title or ''))
+    safe=' '.join(safe.split()).strip(' .')[:100].rstrip(' .')
+    return f'{safe or "ScribeLoop notes"}.md'
 
 
 class Client:
@@ -209,15 +183,21 @@ class NativeShell:
         self.selected_source=None
         self.pending_record=None
         self.audio_path=None
-        self.audio_directory=None
         self.audio_session=None
+        self.audio_tracks_key=None
+        self.audio_pending=None
+        self.audio_durations={}
+        self.audio_start=0
+        self.audio_playing=False
+        self.audio_paused=False
+        self.audio_seek_timer=None
+        self.audio_seek_resume=False
         self.updating_history=False
         self._history_rows={}
         self._history_positions={}
         self.agreement_shown=False
-        self.settings_dialog=None
-        self.settings_save_pending=False
-        self.settings_save_status=None
+        self.offered_calls=set()
+        self.call_dialog=None
         self.client=Client(port,token,self.on_backend_event)
 
         self.window=Gtk.Window(title='ScribeLoop')
@@ -241,29 +221,30 @@ class NativeShell:
         header.pack_start(self.new_button)
         header.pack_start(self.stop_button)
         header.pack_end(self.prefs_button)
+        self._icon_button(self.new_button,'document-new-symbolic','Start a new recording')
+        self._icon_button(self.stop_button,'media-playback-stop-symbolic','Stop the active recording')
+        self._icon_button(self.prefs_button,'preferences-system-symbolic','Open settings')
         self.window.set_titlebar(header)
 
         root=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=0)
+        add_class(root,'shell-root')
         self.window.add(root)
         root.pack_start(self._sidebar(),False,False,0)
         main=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12)
         add_class(main,'workspace')
-        main.set_margin_top(20);main.set_margin_bottom(14)
-        main.set_margin_start(22);main.set_margin_end(22)
+        main.set_margin_top(22);main.set_margin_bottom(18)
+        main.set_margin_start(24);main.set_margin_end(24)
         root.pack_start(main,True,True,0)
 
-        eyebrow=make_label('MEETING NOTEBOOK',classes=('eyebrow',))
-        eyebrow.set_halign(Gtk.Align.START)
+        self.page_kicker=make_label('MEETING NOTEBOOK',classes=('eyebrow',))
         self.detail_title=make_label('Ready when you are',classes=('page-title',))
-        self.detail_title.set_halign(Gtk.Align.START)
         self.detail_status=make_label('Connecting…',classes=('detail-status',))
-        self.detail_status.set_halign(Gtk.Align.START)
         self.stack=Gtk.Stack()
         self.stack.set_hexpand(True);self.stack.set_vexpand(True)
         switcher=Gtk.StackSwitcher();switcher.set_stack(self.stack)
         add_class(switcher,'view-tabs')
         switcher.set_halign(Gtk.Align.CENTER)
-        main.pack_start(eyebrow,False,False,0)
+        main.pack_start(self.page_kicker,False,False,0)
         main.pack_start(self.detail_title,False,False,0)
         main.pack_start(self.detail_status,False,False,0)
         main.pack_start(switcher,False,False,0)
@@ -277,8 +258,8 @@ class NativeShell:
         self.status.set_halign(Gtk.Align.START)
         main.pack_start(self.status,False,False,0)
 
-        self.window.show_all()
         self._load_css()
+        self.window.show_all()
         self.refresh()
         self.client.start()
 
@@ -290,24 +271,26 @@ class NativeShell:
         box.pack_start(subtitle,False,False,0)
         return box
 
+    @staticmethod
+    def _icon_button(button,icon_name,tooltip):
+        button.set_image(Gtk.Image.new_from_icon_name(icon_name,Gtk.IconSize.BUTTON))
+        button.set_always_show_image(True)
+        button.set_tooltip_text(tooltip)
+
     def _sidebar(self):
-        sidebar=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
-        sidebar.set_size_request(278,-1)
+        sidebar=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12)
+        sidebar.set_size_request(286,-1)
         sidebar.set_margin_top(20);sidebar.set_margin_bottom(14)
-        sidebar.set_margin_start(14);sidebar.set_margin_end(14)
+        sidebar.set_margin_start(14);sidebar.set_margin_end(12)
         add_class(sidebar,'sidebar')
-        label=make_label('LIBRARY',classes=('section-label',))
+        label=make_label('Conversations',classes=('section-heading',))
         label.set_halign(Gtk.Align.START)
-        self.history_count=make_label('0',classes=('section-label',))
-        add_class(self.history_count,'library-count')
+        self.history_count=make_label('0',classes=('count-pill',))
         count_box=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         count_box.pack_start(label,False,False,0)
         count_box.pack_end(self.history_count,False,False,0)
-        library_title=make_label('Recent conversations',classes=('section-heading',))
-        library_title.set_halign(Gtk.Align.START)
-        sidebar.pack_start(count_box,False,False,2)
-        sidebar.pack_start(library_title,False,False,4)
         self.history=Gtk.ListBox()
+        add_class(self.history,'history-list')
         self.history.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.history.set_sort_func(self._sort_history_rows)
         self.history.connect('row-selected',self.on_history_selected)
@@ -315,22 +298,18 @@ class NativeShell:
         scrolled.set_vexpand(True);scrolled.set_hexpand(True)
         scrolled.set_policy(Gtk.PolicyType.NEVER,Gtk.PolicyType.AUTOMATIC)
         scrolled.add(self.history)
+        sidebar.pack_start(count_box,False,False,0)
         sidebar.pack_start(scrolled,True,True,0)
         return sidebar
 
     def _notes_view(self):
-        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12)
-        add_class(view,'card')
-        heading=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=3)
-        heading.pack_start(make_label('Meeting notes',classes=('section-heading',)),False,False,0)
-        heading.pack_start(make_label('Summary and source references',classes=('section-caption',)),False,False,0)
-        view.pack_start(heading,False,False,0)
+        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
+        add_class(view,'notes-view')
         self.notes_text=Gtk.TextView()
         add_class(self.notes_text,'notes-editor')
         self.notes_text.set_editable(False);self.notes_text.set_cursor_visible(False)
         self.notes_text.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.notes_text.set_left_margin(12);self.notes_text.set_right_margin(12)
-        self.notes_text.set_top_margin(12);self.notes_text.set_bottom_margin(12)
+        self.notes_text.set_left_margin(4);self.notes_text.set_right_margin(4)
         notes_scroll=Gtk.ScrolledWindow()
         notes_scroll.set_vexpand(True);notes_scroll.set_hexpand(True)
         notes_scroll.set_policy(Gtk.PolicyType.NEVER,Gtk.PolicyType.AUTOMATIC)
@@ -339,7 +318,11 @@ class NativeShell:
         self.generate_button.connect('clicked',self.on_summarize)
         self.export_button=Gtk.Button(label='Download Markdown')
         self.export_button.connect('clicked',self.on_export)
+        self._icon_button(self.generate_button,'document-edit-symbolic','Generate notes')
+        self._icon_button(self.export_button,'document-save-symbolic','Export notes as Markdown')
         actions=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
+        add_class(actions,'action-bar')
+        actions.set_halign(Gtk.Align.END)
         actions.pack_start(self.generate_button,False,False,0)
         actions.pack_start(self.export_button,False,False,0)
         view.pack_start(notes_scroll,True,True,0)
@@ -347,7 +330,8 @@ class NativeShell:
         return view
 
     def _transcript_view(self):
-        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
+        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8)
+        add_class(view,'transcript-view')
         self.transcript_list=Gtk.ListBox()
         add_class(self.transcript_list,'transcript-list')
         self.transcript_list.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -360,9 +344,11 @@ class NativeShell:
         self.earlier_button.connect('clicked',self.on_earlier)
         self.later_button=Gtk.Button(label='Later')
         self.later_button.connect('clicked',self.on_later)
+        self._icon_button(self.earlier_button,'go-previous-symbolic','Show earlier transcript')
+        self._icon_button(self.later_button,'go-next-symbolic','Show later transcript')
         self.transcript_window=make_label('',classes=('status-label',))
         pager=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
-        add_class(pager,'transcript-toolbar')
+        add_class(pager,'pager')
         pager.pack_start(self.earlier_button,False,False,0)
         pager.pack_start(self.transcript_window,False,False,0)
         pager.pack_end(self.later_button,False,False,0)
@@ -371,34 +357,44 @@ class NativeShell:
         return view
 
     def _audio_view(self):
-        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12)
-        add_class(view,'card')
-        heading=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=3)
-        heading.pack_start(make_label('Audio archive',classes=('section-heading',)),False,False,0)
-        heading.pack_start(make_label('Listen to retained meeting audio',classes=('section-caption',)),False,False,0)
-        view.pack_start(heading,False,False,0)
-        self.audio_status=make_label('Audio is unavailable.',classes=('status-label',))
+        view=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10)
+        add_class(view,'audio-view')
+        self.audio_status=make_label('Audio is unavailable.',classes=('audio-status',))
         self.audio_status.set_halign(Gtk.Align.START)
         self.audio_status.set_line_wrap(True)
         self.track_combo=Gtk.ComboBoxText()
-        self.minute_spin=Gtk.SpinButton.new_with_range(0,180,1)
-        self.play_button=Gtk.Button(label='Play selected minute')
+        self.track_combo.connect('changed',self.on_audio_track_changed)
+        self.play_button=Gtk.Button(label='Play')
         self.play_button.connect('clicked',self.on_play_audio)
+        self.audio_stop_button=Gtk.Button(label='Stop')
+        self.audio_stop_button.connect('clicked',self.on_stop_audio)
         self.archive_button=Gtk.Button(label='Archive audio')
         self.archive_button.connect('clicked',self.on_archive_audio)
+        self._icon_button(self.play_button,'media-playback-start-symbolic','Play selected audio')
+        self._icon_button(self.audio_stop_button,'media-playback-stop-symbolic','Stop playback')
+        self._icon_button(self.archive_button,'folder-symbolic','Archive or restore audio')
         row=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
         add_class(row,'audio-toolbar')
         row.pack_start(Gtk.Label(label='Track'),False,False,0)
         row.pack_start(self.track_combo,False,False,0)
-        row.pack_start(Gtk.Label(label='Minute'),False,False,0)
-        row.pack_start(self.minute_spin,False,False,0)
         row.pack_start(self.play_button,False,False,0)
+        row.pack_start(self.audio_stop_button,False,False,0)
         row.pack_end(self.archive_button,False,False,0)
+        progress=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
+        self.audio_position=make_label('0:00 / 0:00',classes=('status-label',))
+        self.audio_scale=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,1,1)
+        self.audio_scale.set_draw_value(False)
+        self.audio_scale.set_hexpand(True)
+        self.audio_scale.connect('change-value',self.on_audio_seek)
+        progress.pack_start(self.audio_scale,True,True,0)
+        progress.pack_start(self.audio_position,False,False,0)
         self.gst_error=make_label('',classes=('status-label',))
         view.pack_start(self.audio_status,False,False,0)
         view.pack_start(row,False,False,0)
+        view.pack_start(progress,False,False,0)
         view.pack_start(self.gst_error,False,False,0)
         self._init_playback()
+        self.audio_timer=GLib.timeout_add(500,self._update_audio_position)
         return view
 
     def _load_css(self):
@@ -420,36 +416,43 @@ class NativeShell:
             if self.player is None:
                 self.gst_error.set_text('GStreamer playback is unavailable.')
             else:
-                self.playback_bus=self.player.get_bus()
-                self.playback_bus.add_signal_watch()
-                self.playback_bus.connect('message',self._on_playback_message)
+                bus=self.player.get_bus()
+                bus.add_signal_watch()
+                bus.connect('message',self._on_playback_message)
         except Exception as exc:  # noqa: BLE001 - show transport class, not system paths
             self.player=None
             self.gst_error.set_text(f'Audio playback unavailable ({type(exc).__name__}).')
 
-    def _cleanup_playback(self):
-        player=getattr(self,'player',None)
-        if player is not None:
-            with suppress(Exception):
-                player.set_state(self.gst.State.NULL)
-        directory=getattr(self,'audio_directory',None)
-        self.audio_directory=None
-        self.audio_path=None
-        self.audio_session=None
-        if directory is not None:
-            with suppress(OSError):
-                directory.cleanup()
+    def _stop_playback(self):
+        if self.player is not None:
+            self.player.set_state(self.gst.State.NULL)
+        if self.audio_path is not None:
+            self.audio_path.close()
+            self.audio_path=None
 
     def _on_playback_message(self,_bus,message):
-        if message.type==self.gst.MessageType.EOS:
-            self._cleanup_playback()
-        elif message.type==self.gst.MessageType.ERROR:
-            error,_debug=message.parse_error()
-            self.gst_error.set_text(f'Playback failed ({type(error).__name__}).')
-            self._cleanup_playback()
+        if message.type==self.gst.MessageType.ERROR:
+            self._reset_audio()
+            self.gst_error.set_text('Playback failed. Check your audio output and GStreamer installation.')
+        elif message.type==self.gst.MessageType.EOS:
+            self._stop_playback()
+            next_start=self.audio_start+60000
+            duration=self._audio_duration()
+            if self.audio_playing and next_start<duration:
+                self._request_audio_window(next_start)
+            else:
+                self.audio_playing=False
+                self.audio_paused=False
+                self._set_audio_play_button(False)
+                self.audio_scale.set_value(duration/1000)
+                self._update_audio_position()
+                self.gst_error.set_text('Playback finished.')
 
     def on_destroy(self,*_args):
-        self._cleanup_playback()
+        GLib.source_remove(self.audio_timer)
+        if self.player is not None:
+            with suppress(Exception):
+                self._reset_audio()
         if self.child.poll() is None:
             try:
                 self.child.stdin.write('STOP\n');self.child.stdin.flush()
@@ -459,29 +462,11 @@ class NativeShell:
 
     def on_backend_event(self,event):
         kind=event.get('type')
-        selected_before=self.state.selected_id
-        if kind=='snapshot':
-            self.status.set_text('Connected to the local backend.')
         if kind in {'snapshot','conversation_page','session','segment','partial','transcript_replaced',
                     'speakers_corrected','people_changed','agreement','settings','discovery',
                     'audio_state','cloud_usage','speaker_turns','language_locked','rolling_notes',
                     'summary_started','summary_ready','summary_error','session_deleted'}:
             self.state.apply(event)
-            if self.state.selected_id!=selected_before:
-                self._cleanup_playback()
-        if kind=='settings' and self.settings_save_pending:
-            self.settings_save_pending=False
-            self.status.set_text('Settings saved.')
-            if self.settings_dialog is not None:
-                self.settings_dialog.destroy()
-                self.settings_dialog=None
-                self.settings_save_status=None
-        if kind=='error' and event.get('context')=='settings':
-            self.settings_save_pending=False
-            message=event.get('message') or 'Settings could not be saved. Check the fields and try again.'
-            self.status.set_text(message)
-            if self.settings_save_status is not None:
-                self.settings_save_status.set_text(message)
         if kind=='source_selected' and self.pending_record is not None \
                 and event.get('request_id')==self.pending_record.get('request_id'):
             self.selected_source=event.get('source')
@@ -490,6 +475,23 @@ class NativeShell:
             self.client.send(command)
         if kind=='audio_playback':
             self._start_playback(event)
+        if kind in {'audio_info','audio_window'} and event.get('request_id')==self.audio_pending \
+                and event.get('session_id')==self.state.selected_id:
+            self.audio_pending=None
+            if kind=='audio_info':
+                self.audio_durations=event.get('track_durations') or {}
+                self._set_audio_duration()
+                self._request_audio_window(int(self.audio_scale.get_value()*1000))
+            else:
+                self.audio_start=event['start_ms']
+                self._start_playback(event)
+        if kind=='error' and event.get('request_id')==self.audio_pending and self.audio_pending is not None:
+            self._reset_audio()
+            self.gst_error.set_text(event.get('message') or 'Audio could not be loaded.')
+        if kind=='connection_lost' and (self.audio_playing or self.audio_paused
+            or self.audio_pending is not None or self.audio_seek_timer is not None):
+            self._reset_audio()
+            self.gst_error.set_text('Playback stopped. Reconnect to load audio.')
         if kind=='markdown_export':
             self._save_markdown(event)
         if kind=='summary_started':
@@ -507,6 +509,34 @@ class NativeShell:
         if kind in {'connection_lost','error'}:
             self.status.set_text(event.get('message') or 'Connection error.')
         self.refresh()
+        self._offer_call()
+
+    def _offer_call(self):
+        if self.call_dialog is not None or self.pending_record is not None:
+            return
+        candidate=self.state.call_candidate(self.offered_calls)
+        if not candidate:
+            return
+        self.offered_calls.add(candidate['id'])
+        dialog=Gtk.MessageDialog(transient_for=self.window,modal=True,
+            message_type=Gtk.MessageType.QUESTION,buttons=Gtk.ButtonsType.NONE,
+            text='Possible call detected')
+        dialog.format_secondary_text(
+            f"Take notes for {candidate.get('name', 'this call')}? "
+            'Recording uses your microphone and all system audio, and requires permission.')
+        dialog.add_button('Not now',Gtk.ResponseType.CANCEL)
+        dialog.add_button('Review recording',Gtk.ResponseType.ACCEPT)
+        dialog.set_keep_above(True)
+        self.call_dialog=dialog
+        def response(dialog,response_id):
+            self.call_dialog=None
+            self.client.send({'action':'dismiss_candidate','candidate_id':candidate['id']})
+            dialog.destroy()
+            if response_id==Gtk.ResponseType.ACCEPT:
+                self._recording_dialog(call_name=candidate.get('name'))
+        dialog.connect('response',response)
+        dialog.show_all()
+        dialog.present()
 
     def refresh(self):
         self._refresh_history()
@@ -533,6 +563,7 @@ class NativeShell:
                 if entry is None:
                     row=Gtk.ListBoxRow()
                     row.session_id=sid
+                    add_class(row,'history-item')
                     box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=2)
                     add_class(box,'history-row')
                     box.set_margin_top(6);box.set_margin_bottom(6)
@@ -569,7 +600,7 @@ class NativeShell:
         session=self.state.selected_session()
         if session:
             self.detail_title.set_text(str(session.get('title') or 'Untitled conversation'))
-            self.detail_status.set_text(session_status_text(session))
+            self.detail_status.set_text(session_label(session))
         else:
             self.detail_title.set_text('Ready when you are')
             self.detail_status.set_text('No conversation selected')
@@ -577,8 +608,9 @@ class NativeShell:
     def _refresh_actions(self):
         busy=self.state.is_busy()
         accepted=self.state.agreement.get('accepted') is True
+        configured=self.state.transcription.get('configured') is True
         summary_ready=self.state.summary_provider.get('configured') is True
-        self.new_button.set_sensitive(accepted and not busy)
+        self.new_button.set_sensitive(accepted and configured and not busy)
         self.stop_button.set_sensitive(busy and self.state.active_id is not None)
         self.generate_button.set_sensitive(accepted and summary_ready and not busy and
             self.state.summary_active_id is None and self.state.selected_id is not None)
@@ -619,6 +651,7 @@ class NativeShell:
 
     def _transcript_row(self,row,turns):
         container=Gtk.ListBoxRow()
+        add_class(container,'transcript-item')
         box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=3)
         add_class(box,'transcript-row')
         stream='Microphone' if row.get('stream')=='mic' else 'Meeting audio'
@@ -633,6 +666,7 @@ class NativeShell:
 
     def _partial_row(self,stream,text):
         container=Gtk.ListBoxRow()
+        add_class(container,'transcript-item')
         box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=2)
         add_class(box,'partial-row')
         meta=make_label('Recognizing…',classes=('speaker',),xalign=0)
@@ -645,13 +679,25 @@ class NativeShell:
     def _refresh_audio(self):
         sid=self.state.selected_id
         audio=self.state.audio_states.get(sid,{})
-        self.track_combo.remove_all()
-        for track in audio.get('tracks') or []:
-            self.track_combo.append_text('Microphone' if track=='mic' else 'Meeting audio')
-        if audio.get('tracks'):
-            self.track_combo.set_active(0)
-        self.track_combo.set_sensitive(bool(audio.get('available') and not audio.get('archived')))
-        self.minute_spin.set_sensitive(self.track_combo.get_sensitive())
+        tracks=tuple(audio.get('tracks') or [])
+        key=(sid,tracks)
+        if key!=self.audio_tracks_key:
+            self._reset_audio()
+            self.audio_session=sid
+            self.audio_durations={}
+            self.audio_tracks_key=key
+            self.track_combo.remove_all()
+            if tracks:
+                self.track_combo.append('conversation','Conversation')
+                for track in tracks:
+                    self.track_combo.append(track,'Microphone' if track=='mic' else 'Meeting audio')
+                self.track_combo.set_active_id('conversation')
+            self._set_audio_duration()
+        available=bool(audio.get('available') and not audio.get('archived'))
+        if not available and (self.audio_playing or self.audio_paused or self.audio_pending is not None):
+            self._reset_audio()
+        self.track_combo.set_sensitive(available)
+        self.audio_scale.set_sensitive(available and bool(self.audio_durations))
         self.archive_button.set_label('Unarchive audio' if audio.get('archived') else 'Archive audio')
         if audio.get('available'):
             if audio.get('archived'):
@@ -662,7 +708,8 @@ class NativeShell:
             self.audio_status.set_text('Audio has expired. Transcript and notes are preserved.')
         else:
             self.audio_status.set_text('Audio is unavailable.')
-        self.play_button.set_sensitive(bool(audio.get('available') and not audio.get('archived')))
+        self.play_button.set_sensitive(available and self.player is not None)
+        self.audio_stop_button.set_sensitive(available and self.player is not None)
         self.archive_button.set_sensitive(bool(audio.get('available')))
 
     def _start_playback(self,event):
@@ -670,25 +717,26 @@ class NativeShell:
             return
         try:
             data=base64.b64decode(event.get('wav_base64',''),validate=True)
-            directory,path=private_playback_file(data)
-            self._cleanup_playback()
-            self.audio_directory=directory
-            self.audio_path=path
-            self.audio_session=event.get('session_id')
-            self.player.set_state(self.gst.State.NULL)
-            self.player.set_property('uri',path.as_uri())
-            self.player.set_state(self.gst.State.PLAYING)
-            self.gst_error.set_text('')
+            self._stop_playback()
+            self.audio_path=os.fdopen(os.memfd_create('scribeloop-playback',os.MFD_CLOEXEC),'w+b')
+            self.audio_path.write(data)
+            self.audio_path.flush()
+            self.player.set_property('uri',f'file:///proc/self/fd/{self.audio_path.fileno()}')
+            if self.player.set_state(self.gst.State.PLAYING)==self.gst.StateChangeReturn.FAILURE:
+                raise RuntimeError('GStreamer could not start')
+            self.audio_playing=True
+            self.audio_paused=False
+            self._set_audio_play_button(True)
+            self.gst_error.set_text('Playing audio.')
         except Exception as exc:  # noqa: BLE001 - show transport class only
-            self._cleanup_playback()
+            self._reset_audio()
             self.gst_error.set_text(f'Playback could not start ({type(exc).__name__}).')
 
     def on_history_selected(self,listbox,row):
         if self.updating_history or row is None:
             return
-        sid=getattr(row,'session_id',None)
+        sid=row.session_id
         if sid and sid!=self.state.selected_id:
-            self._cleanup_playback()
             self.state.select(sid)
             self.client.send(self.state.page_payload(sid,0))
             self.refresh()
@@ -726,12 +774,19 @@ class NativeShell:
         sid=event.get('session_id')
         if sid and sid!=self.state.selected_id:
             return
-        filename=str(event.get('filename') or 'scribeloop-export.md')
+        session=self.state.sessions.get(sid) or {}
+        filename=markdown_filename(session.get('title'))
         content=str(event.get('content') or '')
-        dialog=Gtk.FileChooserDialog(title='Save Markdown export',transient_for=self.window,
+        dialog=Gtk.FileChooserDialog(title='Save notes as Markdown',transient_for=self.window,
             action=Gtk.FileChooserAction.SAVE)
+        add_class(dialog,'markdown-export')
         dialog.set_modal(True)
+        dialog.set_default_size(980,700)
         dialog.set_do_overwrite_confirmation(True)
+        download_dir=GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
+        if not download_dir or not Path(download_dir).is_dir():
+            download_dir=str(Path.home())
+        dialog.set_current_folder(download_dir)
         dialog.set_current_name(filename)
         dialog.add_buttons('Cancel',Gtk.ResponseType.CANCEL,'Save',Gtk.ResponseType.ACCEPT)
         dialog.show()
@@ -753,11 +808,120 @@ class NativeShell:
 
     def on_play_audio(self,*_args):
         sid=self.state.selected_id
-        index=self.track_combo.get_active()
-        tracks=self.state.audio_states.get(sid,{}).get('tracks') or []
-        if sid and 0<=index<len(tracks):
-            self.client.send({'action':'play_audio','session_id':sid,'stream':tracks[index],
-                'start_ms':int(self.minute_spin.get_value()*60000)})
+        if not sid or self.player is None:
+            return
+        if self.audio_seek_timer is not None:
+            self._reset_audio()
+        if self.audio_playing:
+            if self.audio_pending is not None:
+                self._reset_audio()
+                self.gst_error.set_text('Playback stopped.')
+                return
+            self.player.set_state(self.gst.State.PAUSED)
+            self.audio_playing=False
+            self.audio_paused=True
+            self._set_audio_play_button(False)
+            self.gst_error.set_text('Paused.')
+        elif self.audio_paused:
+            if self.player.set_state(self.gst.State.PLAYING)==self.gst.StateChangeReturn.FAILURE:
+                self._reset_audio()
+                self.gst_error.set_text('Audio output is unavailable.')
+                return
+            self.audio_playing=True
+            self.audio_paused=False
+            self._set_audio_play_button(True)
+            self.gst_error.set_text('Playing audio.')
+        elif self.audio_pending is None:
+            self.audio_playing=True
+            self._set_audio_play_button(True)
+            if self.audio_durations:
+                position=int(self.audio_scale.get_value()*1000)
+                self._request_audio_window(0 if position>=self._audio_duration() else position)
+            else:
+                self._request_audio({'action':'audio_info','session_id':sid})
+
+    def _request_audio(self,command):
+        self.audio_pending=self.state.next_request_id()
+        command['request_id']=self.audio_pending
+        self.gst_error.set_text('Loading audio...')
+        if not self.client.send(command):
+            self._reset_audio()
+            self.gst_error.set_text('Reconnect to load audio.')
+
+    def _request_audio_window(self,start_ms):
+        self._request_audio({'action':'audio_window','session_id':self.state.selected_id,
+            'stream':self.track_combo.get_active_id(),'start_ms':start_ms})
+
+    def _audio_duration(self):
+        track=self.track_combo.get_active_id()
+        return max(self.audio_durations.values(),default=0) if track=='conversation' \
+            else self.audio_durations.get(track,0)
+
+    def _set_audio_duration(self):
+        duration=self._audio_duration()
+        self.audio_scale.set_range(0,max(1,duration/1000))
+        self.audio_scale.set_value(0)
+        self.audio_scale.set_sensitive(duration>0)
+        self._update_audio_position()
+
+    def _update_audio_position(self):
+        if self.audio_playing and self.audio_path is not None:
+            success,position=self.player.query_position(self.gst.Format.TIME)
+            if success:
+                self.audio_scale.set_value(min(self._audio_duration()/1000,
+                    self.audio_start/1000+position/self.gst.SECOND))
+        position=int(self.audio_scale.get_value())
+        duration=int(self._audio_duration()/1000)
+        self.audio_position.set_text(f'{position//60}:{position%60:02d} / {duration//60}:{duration%60:02d}')
+        return True
+
+    def _reset_audio(self):
+        if self.audio_seek_timer is not None:
+            GLib.source_remove(self.audio_seek_timer)
+            self.audio_seek_timer=None
+        self.audio_seek_resume=False
+        self.audio_pending=None
+        self.audio_playing=False
+        self.audio_paused=False
+        self._stop_playback()
+        self._set_audio_play_button(False)
+
+    def _set_audio_play_button(self,playing):
+        self.play_button.set_label('Pause' if playing else 'Play')
+        self._icon_button(self.play_button,
+            'media-playback-pause-symbolic' if playing else 'media-playback-start-symbolic',
+            'Pause playback' if playing else 'Play audio')
+
+    def on_stop_audio(self,*_args):
+        self._reset_audio()
+        self.audio_scale.set_value(0)
+        self._update_audio_position()
+        self.gst_error.set_text('Playback stopped.')
+
+    def on_audio_track_changed(self,*_args):
+        if not hasattr(self,'audio_scale'):
+            return
+        self._reset_audio()
+        self._set_audio_duration()
+
+    def on_audio_seek(self,_scale,_scroll,value):
+        if not self.audio_durations:
+            return False
+        resume=self.audio_playing or self.audio_seek_resume
+        self._reset_audio()
+        self.audio_scale.set_value(value)
+        self._update_audio_position()
+        if resume and value*1000<self._audio_duration():
+            self.audio_seek_resume=True
+            self.audio_seek_timer=GLib.timeout_add(250,self._finish_audio_seek,int(value*1000))
+        return False
+
+    def _finish_audio_seek(self,start_ms):
+        self.audio_seek_timer=None
+        self.audio_seek_resume=False
+        self.audio_playing=True
+        self._request_audio_window(start_ms)
+        return False
 
     def on_archive_audio(self,*_args):
         sid=self.state.selected_id
@@ -774,10 +938,8 @@ class NativeShell:
         dialog.set_default_size(620,460)
         add_class(dialog.get_content_area(),'dialog-panel')
         label=make_label('Use ScribeLoop only when you have permission to record the people captured. '
-            'Recording is explicit. System audio captures everything sent to the selected output, '
-            'including notifications, music, and other calls. Cloud transcription sends audio to '
-            'your selected provider.',
-            classes=('text',),wrap=True)
+            'Recording is explicit. Cloud transcription sends audio to your selected provider.',
+            classes=('dialog-copy',),wrap=True)
         dialog.get_content_area().pack_start(label,True,True,12)
         dialog.add_button('Not now',Gtk.ResponseType.CANCEL)
         agree=dialog.add_button('Agree and continue',Gtk.ResponseType.ACCEPT)
@@ -794,28 +956,19 @@ class NativeShell:
         if self.state.agreement.get('accepted') is not True:
             self._show_agreement()
             return
-        if self.state.is_busy():
-            self.status.set_text('Stop the active recording or processing before starting another.')
-            return
-        if recording_provider_missing(self.state):
-            self.status.set_text('Set up a Deepgram transcription key in Settings before recording. '
-                'The desktop app does not load credentials from .env files.')
-            self._settings_dialog()
-            return
         self._recording_dialog()
 
-    def _recording_dialog(self):
+    def _recording_dialog(self,call_name=None):
         dialog=Gtk.Dialog(title='New recording',transient_for=self.window,modal=True)
-        dialog.set_default_size(590,460)
+        dialog.set_default_size(560,420)
         add_class(dialog.get_content_area(),'dialog-panel')
         grid=Gtk.Grid(column_spacing=10,row_spacing=10)
-        add_class(grid,'form-grid')
         grid.set_margin_top(10);grid.set_margin_bottom(10)
         grid.set_margin_start(10);grid.set_margin_end(10)
         source=Gtk.ComboBoxText()
         source.append_text('Microphone only')
-        source.append_text('All output audio + microphone')
-        source.set_active(0)
+        source.append_text('All system audio + microphone')
+        source.set_active(1 if call_name else 0)
         microphone=Gtk.ComboBoxText()
         mics=self.state.discovery.get('microphones') or []
         if not mics:
@@ -833,24 +986,16 @@ class NativeShell:
         for code,name in languages.items():
             language.append(str(code),str(name))
         language.set_active(0)
-        title=Gtk.Entry();title.set_text('Meeting conversation');title.set_max_length(160)
+        title=Gtk.Entry();title.set_text(f'{call_name} conversation' if call_name else 'Meeting conversation');title.set_max_length(160)
         consent=Gtk.CheckButton(label='Everyone captured has agreed.')
-        status=make_label('',classes=('dialog-status',),wrap=True)
-        scope_help=make_label('',classes=('dialog-help',),wrap=True)
-        def update_scope_help(_source):
-            scope_help.set_text('Captures all sound sent to the selected output, including '
-                'notifications, music, and other calls. App-specific isolation is unavailable.'
-                if source.get_active()==1 else 'Captures microphone input only.')
-        source.connect('changed',update_scope_help)
-        update_scope_help(source)
+        status=make_label('',classes=('status-label',))
         grid.attach(Gtk.Label(label='Capture source'),0,0,1,1);grid.attach(source,1,0,1,1)
         grid.attach(Gtk.Label(label='Microphone'),0,1,1,1);grid.attach(microphone,1,1,1,1)
         grid.attach(Gtk.Label(label='Limit'),0,2,1,1);grid.attach(duration,1,2,1,1)
         grid.attach(Gtk.Label(label='Language'),0,3,1,1);grid.attach(language,1,3,1,1)
         grid.attach(Gtk.Label(label='Title'),0,4,1,1);grid.attach(title,1,4,1,1)
         grid.attach(consent,0,5,2,1)
-        grid.attach(scope_help,0,6,2,1)
-        grid.attach(status,0,7,2,1)
+        grid.attach(status,0,6,2,1)
         dialog.get_content_area().pack_start(grid,True,True,8)
         dialog.add_button('Cancel',Gtk.ResponseType.CANCEL)
         record=dialog.add_button('Record & take notes',Gtk.ResponseType.ACCEPT)
@@ -880,78 +1025,41 @@ class NativeShell:
 
     def _settings_dialog(self):
         dialog=Gtk.Dialog(title='Provider settings',transient_for=self.window,modal=True)
-        dialog.set_default_size(620,480)
+        dialog.set_default_size(560,380)
         add_class(dialog.get_content_area(),'dialog-panel')
         grid=Gtk.Grid(column_spacing=10,row_spacing=10)
-        add_class(grid,'form-grid')
         grid.set_margin_top(10);grid.set_margin_bottom(10)
         grid.set_margin_start(10);grid.set_margin_end(10)
         settings=self.state.settings or {}
-        presets=settings.get('summary_presets') or {}
-        detection=Gtk.CheckButton(label='Monitor meeting-app activity (preview)')
-        detection.set_active(settings.get('detection_enabled') is True)
-        provider=Gtk.ComboBoxText()
-        for name in (*presets.keys(),'Custom'):
-            provider.append(name,name)
-        current_provider=str(settings.get('summary_provider') or 'OpenAI')
-        if current_provider not in presets and current_provider!='Custom':
-            current_provider='Custom'
-        provider.set_active_id(current_provider)
+        provider=Gtk.Entry();provider.set_text(str(settings.get('summary_provider') or 'OpenAI'));provider.set_max_length(80)
         endpoint=Gtk.Entry();endpoint.set_text(str(settings.get('summary_endpoint') or ''));endpoint.set_max_length(500)
-        endpoint.set_editable(current_provider=='Custom')
         model=Gtk.Entry();model.set_text(str(settings.get('summary_model') or ''));model.set_max_length(100)
         summary_key=Gtk.Entry();summary_key.set_visibility(False);summary_key.set_max_length(2048)
         deepgram_key=Gtk.Entry();deepgram_key.set_visibility(False);deepgram_key.set_max_length(512)
-        key_previews=settings.get('summary_key_previews') or {}
-        def update_summary_key_placeholder(provider_name):
-            saved=key_previews.get(provider_name) or (
-                settings.get('summary_key_preview') if provider_name==settings.get('summary_provider') else '')
-            summary_key.set_placeholder_text('Saved key · leave blank to keep' if saved
-                                             else 'Enter notes API key')
-        update_summary_key_placeholder(current_provider)
-        deepgram_key.set_placeholder_text('Saved key · leave blank to keep' if settings.get('deepgram_configured')
-                          else 'Enter Deepgram API key')
-        def provider_changed(_provider):
-            selected=provider.get_active_id() or 'Custom'
-            endpoint.set_text(provider_endpoint(selected,presets,endpoint.get_text()))
-            endpoint.set_editable(selected=='Custom')
-            update_summary_key_placeholder(selected)
-        provider.connect('changed',provider_changed)
+        detection=Gtk.CheckButton(label='Suggest recording when a possible call is detected')
+        detection.set_active(settings.get('detection_enabled',True))
         grid.attach(Gtk.Label(label='Notes provider'),0,0,1,1);grid.attach(provider,1,0,1,1)
         grid.attach(Gtk.Label(label='Notes API URL'),0,1,1,1);grid.attach(endpoint,1,1,1,1)
         grid.attach(Gtk.Label(label='Notes model'),0,2,1,1);grid.attach(model,1,2,1,1)
         grid.attach(Gtk.Label(label='Notes API key'),0,3,1,1);grid.attach(summary_key,1,3,1,1)
         grid.attach(Gtk.Label(label='Deepgram API key'),0,4,1,1);grid.attach(deepgram_key,1,4,1,1)
         grid.attach(detection,0,5,2,1)
-        explanation=make_label('Metadata monitoring only. Start recording manually; automatic suggestions and app-specific audio capture are not available yet.',
-            classes=('dialog-help',),wrap=True)
-        grid.attach(explanation,0,6,2,1)
-        save_status=make_label('',classes=('dialog-status',),wrap=True)
-        grid.attach(save_status,0,7,2,1)
         dialog.get_content_area().pack_start(grid,True,True,8)
         dialog.add_button('Cancel',Gtk.ResponseType.CANCEL)
         save=dialog.add_button('Save settings',Gtk.ResponseType.ACCEPT)
         add_class(save,'accent-button')
-        self.settings_dialog=dialog
-        self.settings_save_status=save_status
         def response(dialog,response_id):
             if response_id!=Gtk.ResponseType.ACCEPT:
-                if self.settings_dialog is dialog:
-                    self.settings_dialog=None
-                    self.settings_save_status=None
                 dialog.destroy();return
-            payload={'summary_provider':provider.get_active_id() or 'Custom',
+            payload={'summary_provider':provider.get_text(),
                 'summary_endpoint':endpoint.get_text(),'summary_model':model.get_text(),
                 'detection_enabled':detection.get_active()}
             if summary_key.get_text():
                 payload['summary_key']=summary_key.get_text()
             if deepgram_key.get_text():
                 payload['deepgram_key']=deepgram_key.get_text()
-            self.settings_save_status.set_text('Saving settings…')
-            self.settings_save_pending=True
-            if self.client.send({'action':'save_settings','settings':payload}) is not True:
-                self.settings_save_pending=False
-                self.settings_save_status.set_text('Not connected. Reconnect before saving settings.')
+            self.client.send({'action':'save_settings','settings':payload})
+            dialog.destroy()
         dialog.connect('response',response)
         dialog.show_all()
 

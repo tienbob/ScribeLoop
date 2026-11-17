@@ -50,6 +50,12 @@ are not loaded from a repository `.env`. Exported Markdown is plaintext. Removin
 the package preserves the workspace and keyring entries. Do not remove those keys
 if you want to keep your meetings.
 
+In a saved conversation, open **Audio** to play, pause, stop, or seek. The
+Conversation track combines available microphone and meeting audio; individual
+tracks are also selectable. Playback continues through the recording in bounded
+windows and uses the desktop's configured audio output. Audio must be retained
+and unarchived, and playback is unavailable while recording or processing.
+
 ## Build
 
 Build separately on each target Ubuntu release and architecture. Packages vendor
