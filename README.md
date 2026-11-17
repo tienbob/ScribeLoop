@@ -9,13 +9,8 @@ was actually said.
 **Record → Transcribe → Take notes → Search → Ask**
 
 [Get started](#get-started) · [Features](#a-notebook-for-the-whole-conversation) ·
-<<<<<<< Updated upstream
 [Search & Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
 [What's new](CHANGELOG.md) · [Developer guides](#for-developers)
-=======
-[Search &amp; Ask](#find-it-or-ask-about-it) · [Privacy](#your-data-your-choices) ·
-[Developer guides](#for-developers)
->>>>>>> Stashed changes
 
 > **Internal preview:** Apple Silicon Macs, macOS 13 or later. Automatic call
 > detection requires macOS 14.2+. The app includes its runtime; no Python,
@@ -79,7 +74,6 @@ recording and Stop. Browser capture can include audio from other tabs in that br
 
 **Search** finds passages. **Ask** uses retrieved evidence to answer a question.
 
-<<<<<<< Updated upstream
 Search updates automatically when you pause typing for half a second. With cloud
 Hybrid Search enabled, those searches use your configured embedding provider.
 
@@ -88,13 +82,6 @@ Hybrid Search enabled, those searches use your configured embedding provider.
 | **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed. |
 | **Hybrid Search** | Combines keyword matches with semantic retrieval to find related ideas across wording and languages. Enable it in Preferences and configure an embedding provider. |
 | **Ask** | Answers questions about the current, chosen or all meetings using retrieved excerpts and source citations. Requires configured Hybrid Search and a notes provider. |
-=======
-| Mode               | What it does                                                                                                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Keyword Search** | Searches saved text locally. Enabled by default; no embedding service needed.                                                                                      |
-| **Hybrid Search**  | Combines keyword matches with semantic retrieval to find related ideas across wording and languages. Enable it in Preferences and configure an embedding provider. |
-| **Ask**            | Answers questions about the current, chosen or all meetings using retrieved excerpts and source citations. Requires configured Hybrid Search and a notes provider. |
->>>>>>> Stashed changes
 
 Try questions such as:
 
@@ -193,5 +180,3 @@ and steps to reproduce. Keep API keys, passwords and private recordings out of b
 reports.
 
 **License:** Proprietary.
-
-# Run: .venv-linux/bin/python -m scribeloop_core.api.linux
