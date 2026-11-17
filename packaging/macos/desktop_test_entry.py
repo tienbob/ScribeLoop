@@ -27,11 +27,27 @@ class Vault:
 
 def fixture_app(request, helpers):
     settings = DesktopSettings(Vault())
+    # Test-only: deterministic generation through the real notes workflow, no HTTP.
+    settings.save({'summary_provider':'LM Studio','summary_model':'synthetic-template-preview'})
+    async def preview_summary(messages):
+        payload = json.loads(messages[1]['content'])
+        if payload.get('note_template',{}).get('name') != 'Planning':
+            raise ValueError('Preview requires the saved Planning template snapshot')
+        identities = ([row['id'] for row in payload['untrusted_transcript']]
+                      if 'untrusted_transcript' in payload else payload['allowed_original_segment_ids'])
+        cited = {'text':'The next release will simplify recording and keep notes beside the transcript.',
+                 'segment_ids':identities[:3]}
+        return {'overview':cited,'key_points':[{'text':'Test the desktop workflow together.','segment_ids':identities[:3]}],
+                'decisions':[],'action_items':[],'open_questions':[],'uncertainties':[]}
+    provider = settings.value.summary()
+    provider._request = preview_summary
     contract = DesktopContract(settings, helpers/'scribeloop-meeting')
     def recording(store, audio, _factory, publish):
         store.accept_agreement(store.AGREEMENT_VERSION)  # Synthetic preview only; no capture or providers.
         sid = store.create_recording('Designing a quieter workspace',
             {'provider':'fixture','scope':'microphone','language':'en'})['id']
+        from scribeloop_core.storage.note_templates import NoteTemplateStore
+        NoteTemplateStore(store.conn).select(sid,'planning')
         audio.create_session(sid)
         store.set_audio_paths(sid,audio)
         with audio.writer(sid,'mic') as writer:
@@ -57,7 +73,7 @@ def fixture_app(request, helpers):
         return CloudRecordingRouter(store,audio,source,publish,cloud_config=settings.cloud())
     return create_app(database=Path(request['database']),storage='encrypted',key_store=FixtureKeys(),
         discovery_factory=lambda publish:DiscoveryService(publish),recording_factory=recording,
-        desktop=contract,launch_token=request['token'],summary_provider=settings.value.summary())[0]
+        desktop=contract,launch_token=request['token'],summary_provider=provider)[0]
 
 
 def main():

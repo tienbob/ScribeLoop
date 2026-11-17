@@ -322,6 +322,7 @@ struct PreferencesSaveProgress {
     private var completion: (() -> Void)?
     let playback = MeetingPlayback()
     private var player: AVAudioPlayer?
+    private var exportPanel: NSSavePanel?
     private var reconnectAttempts = 0
     private var lastSequence = 0
     var connected: Bool { state == "Connected" }
@@ -1064,9 +1065,23 @@ struct PreferencesSaveProgress {
     }
     func stopAudio() { playback.close(); player?.stop(); player = nil; playing = false }
     func saveExport(_ content: String) {
+        guard exportPanel == nil else { exportPanel?.makeKeyAndOrderFront(nil); return }
         let panel = NSSavePanel(); panel.nameFieldStringValue = "Meeting notes.md"
         panel.message = "This export is readable plaintext outside encrypted app storage."
-        if panel.runModal() == .OK, let url = panel.url { do { try content.write(to:url,atomically:true,encoding:.utf8) } catch { message = "Export could not be saved." } }
+        exportPanel = panel
+        let finish:(NSApplication.ModalResponse)->Void = { [weak self] response in
+            defer { self?.exportPanel = nil }
+            guard response == .OK, let url = panel.url else { return }
+            do { try content.write(to:url,atomically:true,encoding:.utf8) }
+            catch { self?.message = "Export could not be saved." }
+        }
+        // Called by the WebSocket reader: never suspend that reader inside a
+        // synchronous modal loop while the user chooses where to save.
+        NSApp.activate(ignoringOtherApps:true)
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "notebook" || $0.title == "ScribeLoop" }) {
+            window.makeKeyAndOrderFront(nil)
+            panel.beginSheetModal(for:window,completionHandler:finish)
+        } else { panel.begin(completionHandler:finish) }
     }
     func chooseDatabase() {
         guard !busy else { return }

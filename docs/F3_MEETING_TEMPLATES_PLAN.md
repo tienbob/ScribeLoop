@@ -261,3 +261,7 @@ No live provider calls, native F3 UI acceptance or formatting-quality score clai
 Next: slice 3, backend template commands and the native Notes preferences page,
 meeting selection, static preview and custom-template draft editor. Slice 4 must
 then render/export saved presentation, followed by F3 acceptance in slice 5.
+
+Rebuild/UI follow-up: [slices 1–2 in-app check](F3_IN_APP_CHECK_2026-11-17.md)
+records synthetic generation, citation navigation, production workspace reopen and
+the nonblocking export-dialog fix found during the UI test. This does not close F3.
