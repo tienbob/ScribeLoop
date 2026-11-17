@@ -373,16 +373,26 @@ class MeetingSearch:
                 if span['document_id'] not in best:
                     best[span['document_id']]={**span,'rank':rank,'distance':chunk['distance']}
         semantic_ids=list(best)
+        by_id={}
         if semantic_ids:
-            placeholders=','.join('?' for _ in semantic_ids)
-            constraints=[]; args=list(semantic_ids)
-            if person_id:
-                constraints.append('(speaker_id=? OR EXISTS (SELECT 1 FROM person_links pl WHERE pl.session_id=search_documents.session_id AND pl.revision=search_documents.revision AND pl.person_id=?))'); args.extend((person_id,person_id))
-            if date_from is not None: constraints.append('started_at>=?'); args.append(date_from)
-            if date_to is not None: constraints.append('started_at<?'); args.append(date_to)
-            rows=self.conn.execute(f'SELECT * FROM search_documents WHERE id IN ({placeholders})'+
-                ((' AND '+' AND '.join(constraints)) if constraints else ''),args).fetchall()
-            by_id={row['id']:row for row in rows}
+            # The candidate identifiers are bound as JSON (<=100 documents); the
+            # person/date eligibility filters match the SQL forms used elsewhere
+            # and run on this bounded candidate set.
+            rows=self.conn.execute('SELECT * FROM search_documents '
+                'WHERE id IN (SELECT value FROM json_each(?))',(json.dumps(semantic_ids),)).fetchall()
+            links=set()
+            if person_id is not None:
+                links={(r['session_id'],r['revision']) for r in self.conn.execute(
+                    'SELECT session_id,revision FROM person_links WHERE person_id=?',(person_id,))}
+            for row in rows:
+                if person_id is not None and not (row['speaker_id']==person_id or
+                        (row['session_id'],row['revision']) in links):
+                    continue
+                if date_from is not None and row['started_at']<date_from:
+                    continue
+                if date_to is not None and row['started_at']>=date_to:
+                    continue
+                by_id[row['id']]=row
         else: by_id={}
         lexical_rank={row['id']:rank for rank,row in enumerate(lexical['results'],1)}
         semantic_rank={identity:best[identity]['rank'] for identity in semantic_ids if identity in by_id}
