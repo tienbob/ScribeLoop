@@ -40,3 +40,4 @@ Thumbs.db
 shell/macos/DerivedData/
 *.xcuserstate
 xcuserdata/
+.venv-linux

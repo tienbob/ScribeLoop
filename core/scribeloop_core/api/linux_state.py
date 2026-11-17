@@ -112,6 +112,14 @@ class LinuxState:
     def is_busy(self):
         return any(row.get('status') in LIVE_STATES for row in self.sessions.values())
 
+    def call_candidate(self, offered):
+        if (self.agreement.get('accepted') is not True or self.is_busy()
+                or self.discovery.get('status') != 'available'
+                or self.discovery.get('permission') != 'authorized'):
+            return None
+        return next((row for row in self.discovery.get('candidates', [])
+                     if row.get('selectable') and row.get('id') not in offered), None)
+
     def select(self,session_id):
         self.selected_id=session_id
         self.page_offset=0

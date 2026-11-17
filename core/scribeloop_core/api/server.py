@@ -478,8 +478,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
             retention_task = None
             rolling_task = None
             try:
-                if ((desktop and not desktop.settings.value.detection_enabled)
-                    or (not desktop and settings and not settings.value.detection_enabled)):
+                if ((desktop and not desktop.settings.value.detection_enabled) or
+                        (not desktop and settings and not settings.value.detection_enabled)):
                     await app.state.discovery.set_enabled(False)
                 await app.state.discovery.start()
                 closing = False
@@ -743,13 +743,6 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             if app.state.settings_saving and action not in {'stop','stop_recording','revoke_agreement'}:
                                 raise ValueError('Wait for the settings save to finish')
                             desktop.receipt(dispatch_id,'dispatching')
-                            if action == 'delete_ask_history':
-                                if any(not task.done() for task in app.state.ask_tasks):
-                                    raise ValueError('Wait for Ask to finish before deleting history')
-                                response=desktop.delete_ask_history(store,command)
-                                await publish({**response,'response_to':dispatch_id})
-                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
-                                continue
                             if action == 'ask_question':
                                 from ..llm.meeting_ask import AskScope, MeetingAsk
                                 from ..storage.search_work import (
@@ -987,6 +980,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     or set(command) != {'action','settings'}):
                                 raise ValueError('Wait for processing before changing providers')
                             await asyncio.to_thread(settings.save,command['settings'])
+                            await app.state.discovery.set_enabled(settings.value.detection_enabled)
                             summary_provider = settings.value.summary()
                             configure_cloud = getattr(app.state.recording,'configure_cloud',None)
                             if configure_cloud is not None:
@@ -994,7 +988,6 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             elif app.state.recording:
                                 app.state.recording.base_config = settings.cloud()
                                 app.state.recording.cloud = app.state.recording.base_config
-                            await app.state.discovery.set_enabled(settings.value.detection_enabled)
                             await publish({'type':'settings','settings':settings.value.public(),
                                 'summary_provider':summary_provider.public(),
                                 'transcription':app.state.recording.cloud.public()
@@ -1016,6 +1009,28 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 raise ValueError('Transcription engine changed; review and try again')
                             command['model'] = expected
                         retained = app.state.audio
+                        if not desktop and action in {'audio_info','audio_window'}:
+                            fields={'action','session_id','request_id'}
+                            if action=='audio_window':
+                                fields.update({'stream','start_ms'})
+                            if (set(command)!=fields or not retained or recording_busy()
+                                    or type(command['request_id']) is not int):
+                                raise ValueError('Saved audio operation unavailable')
+                            sid=SavedMeeting.model_validate({'action':'recover',
+                                'session_id':command['session_id']}).session_id
+                            session=store.get(sid)
+                            if not session or session['status'] not in {'completed','failed','interrupted'}:
+                                raise ValueError('Select a saved meeting')
+                            retained.require(sid)
+                            if action=='audio_info':
+                                result={'type':'audio_info',**await retained.describe(sid)}
+                            else:
+                                data=await retained.seek(sid,command['stream'],command['start_ms'])
+                                result={'type':'audio_window','stream':command['stream'],
+                                    'start_ms':command['start_ms'],
+                                    'wav_base64':base64.b64encode(data).decode('ascii')}
+                            await queue.put({**result,'session_id':sid,'request_id':command['request_id']})
+                            continue
                         if retained and retained.busy and action in {'record','accept_call','resume','reprocess','recover','delete','retention','archive_audio','play_audio'}:
                             raise ValueError('Wait for the audio reader or cleanup')
                         if action in {'resume','reprocess'} and retained:
@@ -1357,7 +1372,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1379,18 +1394,12 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     if action=='set_detection' else
                                     'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'
                                     if action=='search_meetings' else
-                                    'Chat deletion could not be confirmed. Reopen History before retrying; meeting data is unchanged.'
-                                    if action=='delete_ask_history' else
                                     'Ask could not prepare evidence. Check the question and meeting scope; your saved conversations are unchanged.'
                                     if action in {'ask_evidence','ask_history','ask_question','cancel_ask'} else
                                     'This page or citation is unavailable. Reopen the meeting to load its current transcript revision.')})
                             continue
-                        if not desktop and action == 'save_settings':
-                            queue.put_nowait({'type':'error','context':'settings',
-                                'message':'Settings were not saved. Check the provider URL/model and Secret Service, then try again.'})
-                            continue
                         meeting = (isinstance(action, str) and action
-                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','create_person','link_person','set_person_learning','forget_person','check_ollama'})
+                                   in {'select_source', 'dismiss_candidate', 'record', 'microphone_permission', 'reprocess', 'recover', 'resume', 'delete', 'retention','rename_speaker','merge_speaker','summarize','export_markdown','accept_call','keep_recording','accept_agreement','revoke_agreement','archive_audio','play_audio','audio_info','audio_window','create_person','link_person','set_person_learning','forget_person','check_ollama'})
                         queue.put_nowait({'type': 'error', 'context': 'meeting' if meeting else 'replay',
                             'request_id': command.get('request_id') if meeting else None,
                             'message': ('Summary/export rejected. Select the current saved transcript, check configuration and the first-use agreement, and wait for any summary request to finish.'
@@ -1402,7 +1411,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             'Request rejected. Wait for active work to finish; check consent, saved session, or source selection.'
                             if action in {'recover','resume','delete','retention'} else
                             'Saved audio is unavailable or busy. Check its expiry and try again.'
-                            if action in {'archive_audio','play_audio','reprocess'} else
+                            if action in {'archive_audio','play_audio','audio_info','audio_window','reprocess'} else
                             'Local model check could not run. Set the Ollama endpoint and model in Preferences and wait for active work to finish.'
                             if action == 'check_ollama' else
                             'Source unavailable or suggestion expired. Choose again manually.')

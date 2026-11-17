@@ -1,8 +1,5 @@
 # Ubuntu desktop preview validation
 
-See the [Ubuntu desktop release plan](LINUX_UBUNTU_APP_PLAN.md) for the roadmap
-from this preview to a supported release.
-
 Implemented on `feat/ubuntu-22-desktop`. Install/build instructions and primary
 research sources are in [Linux packaging](../packaging/linux/README.md).
 
@@ -10,12 +7,20 @@ The preview uses a native GTK 3 shell with the same Notes / Transcript / Audio
 layout as the macOS shell. It reuses the same core, encrypted storage and local
 loopback backend. The first native pass covers conversation history, live
 transcript, notes, retained-audio playback, provider settings, the recording
-dialog and the first-use agreement. Calendar and Email sharing, per-application
-capture, and user-facing call suggestions are not included. An opt-in metadata
-observer checks known apps' PulseAudio/PipeWire-Pulse stream activity; it does
-not read audio, start recording, or provide reliable per-application capture.
-GStreamer pulls explicit microphone and default-output-monitor sources through
-PulseAudio, including the protocol used by PipeWire's Pulse server.
+dialog and the first-use agreement. macOS-only shell integrations such as
+Calendar and Email sharing and per-application capture are not included.
+GStreamer pulls explicit microphone and default-output-monitor
+sources through PulseAudio, including the protocol used by PipeWire's Pulse
+server.
+
+Linux can suggest a recording while ScribeLoop is running when PulseAudio or
+PipeWire-Pulse reports microphone and playback activity for a recognized meeting
+app or browser. This is a heuristic, not proof of a call; muted calls, unknown
+apps, missing stream metadata, and audio routed outside PulseAudio may not be
+detected. The suggestion never starts recording without user confirmation.
+Linux records the microphone and all system audio, not only the detected app.
+Detection can be disabled in Settings and does not continue after ScribeLoop
+is closed.
 
 Validation on 2026-10-30:
 
