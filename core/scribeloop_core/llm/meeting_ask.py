@@ -292,8 +292,11 @@ class MeetingAsk:
         answer_id=uuid4().hex
         with self.store.conn:
             ids=scope.meeting_ids
-            present=self.store.conn.execute('SELECT count(*) FROM sessions WHERE status!=? AND id IN ('+
-                ','.join('?' for _ in ids)+')',('deleting',*ids)).fetchone()[0]
+            # The scope list is bound as JSON instead of building an identifier-sized
+            # IN list; the statement itself stays a static literal.
+            present=self.store.conn.execute('SELECT count(*) FROM sessions WHERE status!=? '
+                'AND id IN (SELECT value FROM json_each(?))',
+                ('deleting',json.dumps(ids))).fetchone()[0]
             if present!=len(ids):
                 raise ValueError('Meeting changed during Ask; submit again')
             if previous_answer_id and not self.store.conn.execute(
@@ -330,10 +333,23 @@ class MeetingAsk:
         self.work.check()
         rows=self.store.conn.execute('SELECT * FROM meeting_answers WHERE scope_json=? ORDER BY created_at DESC LIMIT ?',
             (json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':')),limit)).fetchall()
-        return self._history_rows(rows,scope)
+        return self._history_rows(rows,scope,
+            sources_sql='SELECT * FROM meeting_answer_sources WHERE answer_id IN '
+                '(SELECT id FROM meeting_answers WHERE scope_json=?) ORDER BY rowid',
+            sources_args=(json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':')),),
+            documents_sql='SELECT d.*,s.answer_id FROM meeting_answer_sources s '
+                'JOIN search_documents d ON d.id=s.citation_id AND d.session_id=s.session_id '
+                'WHERE s.answer_id IN (SELECT id FROM meeting_answers WHERE scope_json=?)',
+            documents_args=(json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':')),))
 
-    def _history_rows(self, rows, scope):
+    def _history_rows(self, rows, scope, *, sources_sql, sources_args, documents_sql, documents_args):
         allowed=set(scope.meeting_ids)
+        sources_by_answer={}
+        for source in self.store.conn.execute(sources_sql,sources_args):
+            sources_by_answer.setdefault(source['answer_id'],[]).append(source)
+        documents_by_answer={}
+        for document in self.store.conn.execute(documents_sql,documents_args):
+            documents_by_answer.setdefault(document['answer_id'],{})[document['id']]=document
         result=[]
         for row in rows:
             saved_scope=json.loads(row['scope_json'])
@@ -341,16 +357,14 @@ class MeetingAsk:
                     not (scope.kind=='all' and saved_scope['kind']=='all' and
                          set(saved_scope['meeting_ids'])<=allowed)):
                 continue
-            sources=list(self.store.conn.execute('SELECT * FROM meeting_answer_sources WHERE answer_id=?',
-                                                 (row['id'],)))
+            sources=sources_by_answer.get(row['id'],[])
             source_ids={source['session_id'] for source in sources}
             if not source_ids<=allowed:
                 continue
             stale=False
             evidence=[]
             for source in sources:
-                document=self.store.conn.execute('SELECT * FROM search_documents WHERE id=? AND session_id=?',
-                    (source['citation_id'],source['session_id'])).fetchone()
+                document=documents_by_answer.get(row['id'],{}).get(source['citation_id'])
                 passage=_document_passage(document) if document else None
                 if (not passage or document['revision']!=source['revision'] or
                         _evidence_hash(passage)!=source['content_hash']):
@@ -375,20 +389,34 @@ class MeetingAsk:
             raise ValueError('Invalid Ask history limit')
         self.work.check()
         scope_json=json.dumps({'kind':scope.kind,'meeting_ids':list(scope.meeting_ids)},separators=(',',':'))
-        condition='1=1' if scope.kind=='all' else 'scope_json=?'
-        params=(limit,) if scope.kind=='all' else (scope_json,limit)
-        rows=self.store.conn.execute(f'''SELECT thread_id,max(created_at) AS updated_at,
-            count(*) AS turn_count FROM meeting_answers WHERE {condition}
-            GROUP BY thread_id ORDER BY updated_at DESC,thread_id LIMIT ?''',
-            params).fetchall()
+        # One windowed pass returns turn counts, latest activity and each thread's
+        # first question; the per-thread lookup is gone.
+        if scope.kind=='all':
+            rows=self.store.conn.execute(
+                'SELECT thread_id,question,scope_json,turn_count,updated_at FROM ('
+                'SELECT thread_id,question,scope_json,created_at,'
+                'count(*) OVER (PARTITION BY thread_id) AS turn_count,'
+                'max(created_at) OVER (PARTITION BY thread_id) AS updated_at,'
+                'row_number() OVER (PARTITION BY thread_id ORDER BY created_at,rowid) AS rn '
+                'FROM meeting_answers) WHERE rn=1 ORDER BY updated_at DESC,thread_id LIMIT ?',
+                (limit,)).fetchall()
+        else:
+            rows=self.store.conn.execute(
+                'SELECT thread_id,question,scope_json,turn_count,updated_at FROM ('
+                'SELECT thread_id,question,scope_json,created_at,'
+                'count(*) OVER (PARTITION BY thread_id) AS turn_count,'
+                'max(created_at) OVER (PARTITION BY thread_id) AS updated_at,'
+                'row_number() OVER (PARTITION BY thread_id ORDER BY created_at,rowid) AS rn '
+                'FROM meeting_answers WHERE scope_json=?) WHERE rn=1 ORDER BY updated_at DESC,thread_id LIMIT ?',
+                (scope_json,limit)).fetchall()
         result=[]
         for row in rows:
-            first=self.store.conn.execute('SELECT question,scope_json FROM meeting_answers WHERE thread_id=? '
-                'ORDER BY created_at,rowid LIMIT 1',(row['thread_id'],)).fetchone()
-            saved=json.loads(first['scope_json'])
+            saved=json.loads(row['scope_json'])
             if not set(saved['meeting_ids'])<=set(scope.meeting_ids):
                 continue
-            result.append({**dict(row),'id':row['thread_id'],'question':first['question'],'scope':saved})
+            result.append({'thread_id':row['thread_id'],'updated_at':row['updated_at'],
+                'turn_count':row['turn_count'],'id':row['thread_id'],
+                'question':row['question'],'scope':saved})
         self.work.check()
         return result
 
@@ -403,4 +431,11 @@ class MeetingAsk:
             raise ValueError('Ask thread exceeds limit')
         await MeetingSearch(self.store,work=self.work).sync_async(list(scope.meeting_ids) if scope.kind!='all' else None)
         self.work.check()
-        return self._history_rows(rows,scope)
+        return self._history_rows(rows,scope,
+            sources_sql='SELECT * FROM meeting_answer_sources WHERE answer_id IN '
+                '(SELECT id FROM meeting_answers WHERE thread_id=?) ORDER BY rowid',
+            sources_args=(thread_id,),
+            documents_sql='SELECT d.*,s.answer_id FROM meeting_answer_sources s '
+                'JOIN search_documents d ON d.id=s.citation_id AND d.session_id=s.session_id '
+                'WHERE s.answer_id IN (SELECT id FROM meeting_answers WHERE thread_id=?)',
+            documents_args=(thread_id,))
