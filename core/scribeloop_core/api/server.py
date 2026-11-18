@@ -771,7 +771,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                     owns_playback = False
                     dispatch_id = None
                     try:
-                        raw = await text_frame(12288 if desktop else 4096)
+                        raw = await text_frame(1_000_000 if desktop else 4096)
                         command = json.loads(raw)
                         if not isinstance(command, dict):
                             raise TypeError('Expected an object')
@@ -781,6 +781,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipts[dispatch_id])
                                 continue
                             action = command.get('action')
+                            if len(raw.encode()) > (1_000_000 if action == 'save_note_templates' else 12288):
+                                raise ValueError('Desktop command too large')
                             if action in {'search_meetings','ask_evidence','cancel_search'}:
                                 if action == 'cancel_search' and set(command)!={'action'}:
                                     raise ValueError('Invalid search cancellation')
@@ -977,6 +979,21 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     raise ValueError('Select an idle saved conversation')
                                 session=store.rename_conversation(sid,command['title'])
                                 await publish({'type':'conversation_renamed','session':session})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action in {'save_note_templates', 'select_note_template'}:
+                                if recording_busy() or summary_task is not None or auto_tasks:
+                                    raise ValueError('Wait for processing before saving template choices')
+                                from .note_templates import library, save_library
+                                if action == 'save_note_templates':
+                                    result = save_library(store, command)
+                                else:
+                                    if set(command) != {'action', 'session_id', 'template_id'}:
+                                        raise ValueError('Invalid meeting template choice')
+                                    NoteTemplateStore(store.conn).select(command['session_id'], command['template_id'])
+                                    result = library(store)
+                                    await publish({'type':'invalidate', 'session_id':command['session_id']})
+                                await publish({'type':'note_templates', **result})
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             if action == 'save_settings':
@@ -1455,7 +1472,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'note_templates','save_note_templates','select_note_template','stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else
@@ -1473,6 +1490,8 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     if action=='name_speaker' else
                                     'Settings were not saved. Wait for processing to finish, check the URL/model/key fields and Keychain access.'
                                     if action=='save_settings' else
+                                    'Template changes were not saved. Reopen Settings if the library changed; wait for processing to finish.'
+                                    if action in {'note_templates','save_note_templates','select_note_template'} else
                                     'Stop recording before changing detection. The previous detection state remains available in Preferences.'
                                     if action=='set_detection' else
                                     'Search could not finish. The local index may be unavailable; your saved conversations are unchanged.'

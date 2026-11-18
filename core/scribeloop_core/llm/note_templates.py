@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -70,6 +71,23 @@ def canonical_json(value):
 def definition_hash(definition):
     template = NoteTemplate.model_validate(definition)
     return hashlib.sha256(canonical_json(template.model_dump()).encode()).hexdigest()
+
+
+def saved_presentation(saved):
+    """Read only the saved generation, never the mutable template library.
+
+    The canonical summary has no language field. Vietnamese diacritics in its
+    overview select Vietnamese headings; explicit language policies take priority.
+    Legacy summaries keep their original layout.
+    """
+    generation = saved.get('generation') if saved else None
+    if not generation:
+        return None
+    policy = generation.get('language_policy', 'conversation')
+    overview = saved.get('summary', {}).get('overview', {}).get('text', '')
+    vietnamese = re.search('[ăâđêôơưĂÂĐÊÔƠƯ\u1ea0-\u1ef9]', overview)
+    language = policy if policy in ('en', 'vi') else ('vi' if vietnamese else 'en')
+    return NoteTemplate.model_validate(generation['template']['definition']).presentation(language)
 
 
 def _builtin(name, focus, overrides=None):

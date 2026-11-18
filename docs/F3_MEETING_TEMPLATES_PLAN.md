@@ -1,7 +1,7 @@
 # F3 — Meeting templates: implementation preparation
 
 Prepared 16 November 2026 against main `71b6f59`.
-Status: **slice 1 complete on 17 November 2026; slice 2 implemented; slices 3–5 pending**.
+Status: **slices 1–4 implemented through 18 November 2026; sampled native UI checks recorded; slice 5 quality/acceptance work remains**.
 F1/F2 are closed by user approval. Their accepted validation follow-ups do not
 block F3. Requirements remain in [the delivery plan](MEETING_WORKSPACE_DELIVERY_PLAN.md#f3--meeting-templates).
 
@@ -265,3 +265,18 @@ then render/export saved presentation, followed by F3 acceptance in slice 5.
 Rebuild/UI follow-up: [slices 1–2 in-app check](F3_IN_APP_CHECK_2026-11-17.md)
 records synthetic generation, citation navigation, production workspace reopen and
 the nonblocking export-dialog fix found during the UI test. This does not close F3.
+
+
+## Slices 3–4 implementation record — 18 November 2026
+
+Implemented the native Notes settings page, workspace default, per-meeting picker,
+static preview, custom draft editor, saved-template badges and saved-presentation
+rendering/exports. Template persistence is an atomic SQLCipher library operation
+with optimistic revision checks, separate from Keychain settings. Personal guidance
+is preserved exactly, including an empty value. The selected meeting refreshes
+after library changes. Generation continues to use the immutable slice-2 policy.
+
+See [native F1/F2/F3 checks](F1_F2_F3_UI_CHECK_2026-11-18.md) for observed custom
+save/cancel/override/regeneration flows and Search/Ask checks, including the fixed
+Ask-this-meeting scope initialization. Full F3 closeout and live model-quality
+acceptance are not claimed by this implementation record.

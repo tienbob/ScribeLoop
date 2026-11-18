@@ -8,7 +8,10 @@ from collections import OrderedDict
 from uuid import uuid4
 
 from ..llm.rolling import RollingNotes
+from ..storage.note_templates import NoteTemplateStore
 from ..storage.search_work import SearchWork
+from .note_templates import active_generation
+from .note_templates import library as template_library
 
 PROTOCOL = 2
 ID = re.compile(r'^[0-9a-f]{32}$')
@@ -59,6 +62,8 @@ class DesktopContract:
 
     def snapshot(self, app, summary_provider, active_id, summary_id):
         return {'type':'snapshot', 'agreement':app.state.store.agreement(),
+            'note_templates':template_library(app.state.store),
+            'notes_generation':active_generation(app.state.store, summary_id or active_id),
             'settings':self.settings.value.public(), 'discovery':app.state.discovery.snapshot(),
             'account':app.state.account.public() if getattr(app.state,'account',None) else {'configured':False,'phase':'setup_required'},
             'active_id':active_id, 'summary_active_id':summary_id,
@@ -121,6 +126,8 @@ class DesktopContract:
         from .calendar_links import read_link
         return {'type':'meeting_page', 'session':session, 'revision':revision, 'offset':offset,
             'calendar_event':read_link(store,sid),
+            'note_template':NoteTemplateStore(store.conn).selection(sid),
+            'notes_generation':active_generation(store, sid),
             'transcript_provider':store.transcript_provider(sid),
             'total':count, 'segments':rows, 'speakers':roster, 'notes':store.notes(sid)[:100000], 'summary':summary,
             'audio':app.state.audio.status(sid) if app.state.audio and session['source']=='meeting' else {},
@@ -129,6 +136,8 @@ class DesktopContract:
 
     async def read(self, app, command, summary_provider, active_id, summary_id, *, work=None):
         action = command.get('action')
+        if action == 'note_templates' and set(command) == {'action'}:
+            return {'type':'note_templates', **template_library(app.state.store)}
         if action == 'desktop_snapshot' and set(command)=={'action'}:
             return self.snapshot(app, summary_provider, active_id, summary_id)
         if action == 'history_page' and not set(command)-{'action','cursor'}:

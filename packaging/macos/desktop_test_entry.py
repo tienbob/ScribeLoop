@@ -28,11 +28,18 @@ class Vault:
 def fixture_app(request, helpers):
     settings = DesktopSettings(Vault())
     # Test-only: deterministic generation through the real notes workflow, no HTTP.
-    settings.save({'summary_provider':'LM Studio','summary_model':'synthetic-template-preview'})
+    settings.save({'summary_provider':'LM Studio','summary_model':'synthetic-template-preview',
+                   'search_mode':'hybrid','embedding_provider':'Local',
+                   'embedding_model':'granite-embedding-97m-multilingual-r2','embedding_dimensions':384})
     async def preview_summary(messages):
         payload = json.loads(messages[1]['content'])
-        if payload.get('note_template',{}).get('name') != 'Planning':
-            raise ValueError('Preview requires the saved Planning template snapshot')
+        if 'untrusted_evidence' in payload:
+            passages = payload['untrusted_evidence']
+            return {'claims':([{'text':passages[0]['text'], 'kind':'fact',
+                                'citation_ids':[passages[0]['citation_id']]}] if passages else []),
+                    'insufficient_evidence':not bool(passages),'caveat':'Synthetic UI fixture answer.'}
+        from scribeloop_core.llm.note_templates import NoteTemplate
+        NoteTemplate.model_validate(payload['note_template'])
         identities = ([row['id'] for row in payload['untrusted_transcript']]
                       if 'untrusted_transcript' in payload else payload['allowed_original_segment_ids'])
         cited = {'text':'The next release will simplify recording and keep notes beside the transcript.',

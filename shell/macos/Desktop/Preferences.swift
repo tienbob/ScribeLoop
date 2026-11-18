@@ -19,11 +19,18 @@ struct Preferences: View {
     @State private var model = "gpt-5.4-mini"
     @State private var provider = "OpenAI"
     @State private var instructions = ""
-    private let defaultInstructions = """
-    Summarize the meeting in the conversation's language. Write a concise topic title and overview, followed by key points, decisions, action items, open questions and uncertainties.
+    @State private var templateDrafts: [NotesTemplateDraft] = []
+    @State private var defaultTemplateID = "general"
+    @State private var libraryRevision = ""
+    @State private var templateEditor: NotesTemplateDraft?
+    @State private var deletingTemplate: NotesTemplateDraft?
+    private var selectedTemplate: NotesTemplateDraft? { templateDrafts.first { $0.id == defaultTemplateID } }
+    private var templatesSignature: String {
+        let value: Object = ["default_id":defaultTemplateID,"templates":templateDrafts.filter { !$0.builtin }.map(\.object)]
+        return (try? JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])).map { String(decoding:$0,as:UTF8.self) } ?? ""
+    }
+    private var templatesChanged: Bool { templatesSignature != saveProgress.initialTemplates }
 
-    Use only facts supported by the transcript and cite the relevant sources. Keep proposals separate from approved decisions. Preserve disagreements and uncertainty. Include owners and due dates only when explicitly stated; otherwise leave them unassigned. Do not infer dates from relative phrases or invent missing details. Omit unsupported items.
-    """
     @State private var selectedLanguages: Set<String> = ["en","vi"]
     @State private var languageSearch = ""
     @State private var duration = 3600
@@ -98,7 +105,7 @@ struct Preferences: View {
     }
     private var valuesSignature: String { [String(automaticNotes),endpoint,model,provider,selectedLanguages.sorted().joined(separator:","),String(duration),instructions,String(Int(microphoneGain.rounded())),microphoneFilter,String(Int(microphoneThreshold.rounded())),String(stopOnMicrophoneRelease),vocabulary,asrMicrophoneSource,String(finalTranscription),transcriptionEngine,localModel,cleanupProvider,cleanupEndpoint,cleanupModel,String(localSpeakerLabels),String(localTranscriptCleanup),String(cleanupValidate),searchMode,embeddingProvider,embeddingEndpoint,embeddingModel,String(embeddingDimensions)].joined(separator:"\u{001f}") }
     private var providerChanged: Bool { valuesSignature != saveProgress.initialValues || !summaryKey.isEmpty || !transcriptionKey.isEmpty || !assemblyKey.isEmpty || removeAssemblyKey || !cleanupKey.isEmpty || !embeddingKey.isEmpty || removeTranscriptionKey }
-    private var changed: Bool { providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
+    private var changed: Bool { templatesChanged || providerChanged || detectionDraft != saveProgress.initialDetection || login != initialLogin }
     private var keyPreview: String {
         guard let preview = savedKeyPreviews[provider] else { return "" }
         let trimmed = CharacterSet(charactersIn:"/")
@@ -137,16 +144,19 @@ struct Preferences: View {
             Picker("Settings category",selection:$page) {
                 Label("Recording",systemImage:"record.circle").tag("Recording")
                 Label("Models",systemImage:"cpu").tag("Models")
+                Label("Notes",systemImage:"text.book.closed").tag("Notes")
                 Label("Microphone",systemImage:"mic").tag("Microphone")
                 Label("Calendar",systemImage:"calendar").tag("Calendar")
                 Label("Experience",systemImage:"wand.and.stars").tag("Experience")
                 Label("Account",systemImage:"person.crop.circle").tag("Account")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal,24)
+            }.pickerStyle(.segmented).controlSize(.small).font(.system(size:12))
+                .labelsHidden().frame(width:602).padding(.horizontal,24)
                 .accessibilityLabel("Settings category")
                 .onChange(of:page) { _ in focusedField = nil }
-            Text(page == "Recording" ? "Languages, call detection and recording permissions." : page == "Models" ? "Choose how conversations are transcribed and turned into notes." : page == "Microphone" ? "Adjust your voice level and background noise filtering." : page == "Calendar" ? "Connect calendars and choose which meetings appear." : page == "Experience" ? "Experimental settings for trying features before they are finished." : "Your sign-in and purchase information.")
+            Text(page == "Recording" ? "Languages, call detection and recording permissions." : page == "Models" ? "Choose how conversations are transcribed and turned into notes." : page == "Notes" ? "Choose a default outline and personal guidance for future notes." : page == "Microphone" ? "Adjust your voice level and background noise filtering." : page == "Calendar" ? "Connect calendars and choose which meetings appear." : page == "Experience" ? "Experimental settings for trying features before they are finished." : "Your sign-in and purchase information.")
                 .font(.caption).foregroundStyle(.secondary).padding(.horizontal,24)
             Form {
+                if page == "Notes" { notesPreferences }
                 if page == "Calendar" { CalendarSettings(calendar:calendar) }
                 if page == "Account" {
                 Section("Account and plan") {
@@ -406,17 +416,7 @@ struct Preferences: View {
                             .accessibilityLabel(keyPreview.isEmpty ? "API key" : "Replace saved API key")
                     }.padding(.vertical,4)
                     Text(localSummary ? "Connects to your running local model server. A key is optional unless the server requires one." : "Your key is stored securely. Each provider remembers its own key and model, so switching providers restores both automatically; leave the fields unchanged to keep them or enter new values to replace them.").font(.caption).foregroundStyle(.secondary)
-                    VStack(alignment:.leading,spacing:8) {
-                        Text("Summary instructions").font(.callout.weight(.medium))
-                        TextEditor(text:$instructions).font(.body)
-                            .focused($focusedField,equals:.instructions)
-                            .frame(minHeight:110,maxHeight:160).padding(6)
-                            .background(ScribeTheme.canvas,in:RoundedRectangle(cornerRadius:8))
-                            .overlay { RoundedRectangle(cornerRadius:8).strokeBorder(ScribeTheme.border) }
-                            .accessibilityLabel("Summary instructions")
-                        Text("Control the language, style and detail of new or regenerated notes. Clear to restore defaults. Citations remain required.").font(.caption).foregroundStyle(.secondary)
-                        Text("\(instructions.count)/2,000 characters").font(.caption).foregroundStyle(instructions.count>2000 ? ScribeTheme.warning : .secondary)
-                    }.padding(.vertical,4)
+                    Button("Templates and personal guidance…") { page = "Notes" }
                 }
                 Section("Transcript cleanup") {
                     Toggle("Improve transcript wording",isOn:$localTranscriptCleanup)
@@ -575,7 +575,9 @@ struct Preferences: View {
                 }
                 }
             }.formStyle(.grouped).id(page).disabled(applying)
-        }.background(ScribeTheme.canvas).tint(ScribeTheme.accent).background(InteractiveWindowActivation())
+                .frame(width:650).frame(maxHeight:.infinity)
+        }.frame(width:650,height:720,alignment:.topLeading)
+        .background(ScribeTheme.canvas).tint(ScribeTheme.accent).background(InteractiveWindowActivation())
         .background(OutsideClickFocusDismissal(dismissFocus:{ focusedField = nil },
             cancelOnOutsideModal:applying ? nil : { cancel() }).allowsHitTesting(false)).onAppear {
             guard core.connected else { dismiss(); return }
@@ -586,7 +588,6 @@ struct Preferences: View {
             core.refreshMeetingAudioPermission()
             provider = text(core.settings["summary_provider"])
             instructions = text(core.settings["summary_instructions"])
-            if instructions.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty { instructions = defaultInstructions }
             if endpoint.isEmpty { endpoint = "https://api.openai.com/v1" }
             if model.isEmpty { model = "gpt-5.4-mini" }
             if provider.isEmpty { provider = "OpenAI" }
@@ -620,7 +621,11 @@ struct Preferences: View {
             if microphoneFilter.isEmpty { microphoneFilter = "standard" }
             microphoneThreshold = (core.settings["microphone_noise_threshold_db"] as? NSNumber)?.doubleValue ?? -40
             stopOnMicrophoneRelease = core.settings["stop_on_microphone_release"] as? Bool ?? false
+            templateDrafts = (core.noteTemplates["templates"] as? [Object] ?? []).map(NotesTemplateDraft.init)
+            defaultTemplateID = text(core.noteTemplates["default_id"])
+            libraryRevision = text(core.noteTemplates["library_revision"])
             saveProgress = PreferencesSaveProgress()
+            saveProgress.initialTemplates = templatesSignature
             saveProgress.initialValues = valuesSignature
             saveProgress.initialDetection = core.detection; detectionDraft = saveProgress.initialDetection
             initialLogin = SMAppService.mainApp.status == .enabled; login = initialLogin
@@ -631,6 +636,7 @@ struct Preferences: View {
             if status == "accepted" {
                 let action = text(pendingSaveCommand?["action"])
                 saveProgress.accept(action:action,values:valuesSignature,detection:detectionDraft)
+                if action == "save_note_templates" { saveProgress.initialTemplates = templatesSignature; libraryRevision = text(core.noteTemplates["library_revision"]) }
                 if action == "save_settings" { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = ""; removeTranscriptionKey = false }
                 pendingSave = nil; pendingSaveCommand = nil; saveNext()
             }
@@ -639,9 +645,65 @@ struct Preferences: View {
                 saveError = saveProgress.failure(uncertain:status == "unknown")
             }
         }.interactiveDismissDisabled(applying)
+        .sheet(item:$templateEditor) { draft in
+            NotesTemplateEditor(draft:draft) { edited in
+                if let index = templateDrafts.firstIndex(where:{$0.id == edited.id}) { templateDrafts[index] = edited }
+                else { templateDrafts.append(edited); defaultTemplateID = edited.id }
+            }
+        }
+        .alert("Delete this custom template?",isPresented:Binding(get:{deletingTemplate != nil},set:{if !$0 { deletingTemplate=nil }})) {
+            Button("Cancel",role:.cancel) { deletingTemplate=nil }
+            Button("Delete from draft",role:.destructive) {
+                if let draft = deletingTemplate {
+                    templateDrafts.removeAll { $0.id == draft.id }
+                    if defaultTemplateID == draft.id { defaultTemplateID="general" }
+                }
+                deletingTemplate=nil
+            }
+        } message: {
+            Text("When you save Settings, \(deletingTemplate?.affectedMeetings ?? 0) meeting selections using this template reset to General. Its workspace default also resets if selected. Saved notes and generation snapshots remain available. Cancel Settings to discard this deletion.")
+        }
         .onChange(of:core.accepted) { accepted in if !accepted { cancel() } }
         .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)) { _ in core.refreshMeetingAudioPermission() }
         .onDisappear { summaryKey = ""; transcriptionKey = ""; assemblyKey = ""; removeAssemblyKey = false; cleanupKey = ""; embeddingKey = "" }
+    }
+    @ViewBuilder private var notesPreferences: some View {
+        Section("Default notes template") {
+            if templateDrafts.isEmpty {
+                Text("Templates are unavailable. Reconnect and reopen Settings.").foregroundStyle(ScribeTheme.warning)
+            } else {
+                Picker("New meetings",selection:$defaultTemplateID) {
+                    ForEach(templateDrafts) { draft in Text(draft.name).tag(draft.id) }
+                }
+                Text("New meetings keep this choice. Existing meetings keep their own template. Selection and previews make no model requests.").font(.caption).foregroundStyle(.secondary)
+                if let selectedTemplate {
+                    HStack {
+                        Button(selectedTemplate.builtin ? "Customize a copy…" : "Edit template…") {
+                            templateEditor = selectedTemplate.builtin ? selectedTemplate.copy() : selectedTemplate
+                        }.disabled(selectedTemplate.builtin && templateDrafts.filter { !$0.builtin }.count >= 50)
+                        Button("New template…") {
+                            templateEditor = templateDrafts.first(where:{$0.id == "general"})?.copy()
+                        }.disabled(templateDrafts.filter { !$0.builtin }.count >= 50)
+                        if !selectedTemplate.builtin {
+                            Button("Delete…",role:.destructive) { deletingTemplate = selectedTemplate }
+                        }
+                    }
+                    Text("\(templateDrafts.filter { !$0.builtin }.count)/50 custom templates · changes stay in this draft until Save changes.").font(.caption).foregroundStyle(.secondary)
+                    if !selectedTemplate.builtin { Text("Editing this template affects future generations in every meeting using it.").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+        }
+        Section("Personal guidance") {
+            TextEditor(text:$instructions).font(.body).frame(height:100).focused($focusedField,equals:.instructions)
+                .accessibilityLabel("Personal guidance")
+            Text("Optional language, style and detail preferences, applied alongside the template. Citations and supported facts remain required. Leave empty to use the conversation’s language.").font(.caption).foregroundStyle(.secondary)
+            Text("\(instructions.unicodeScalars.count)/2,000 characters").font(.caption).foregroundStyle(instructions.unicodeScalars.count > 2000 ? ScribeTheme.warning : .secondary)
+        }
+        if let selectedTemplate {
+            Section("Outline preview") {
+                NotesOutlinePreview(template:selectedTemplate,guidance:instructions,destination:"\(provider) · \(model) · \(endpoint)")
+            }
+        }
     }
     private func selectProvider(_ selected: String) {
         guard selected != provider else { return }
@@ -666,10 +728,14 @@ struct Preferences: View {
         guard vocabularyTerms.count <= 50, vocabularyTerms.allSatisfy({ $0.count <= 80 }), vocabularyTerms.reduce(0,{ $0 + $1.utf8.count }) <= 500 else {
             saveError = "Keep vocabulary to a shorter list of important names and terms."; return
         }
-        guard instructions.count <= 2000 else { saveError = "Keep summary instructions within 2,000 characters."; return }
+        guard instructions.unicodeScalars.count <= 2000 else { saveError = "Keep summary instructions within 2,000 characters."; return }
         guard searchMode != "hybrid" || (!embeddingModel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && (32...4096).contains(embeddingDimensions)) else { saveError = "Enter an embedding model and output size from 32 to 4,096."; return }
         guard core.connected, !core.busy else { saveError = "Reconnect and wait for processing to finish before saving."; return }
+        guard !templatesChanged || (!libraryRevision.isEmpty && selectedTemplate != nil && templateDrafts.allSatisfy({$0.error == nil})) else { saveError = "Reopen Settings to load templates, or correct the template draft."; return }
         saveError = nil; saveCommands = []
+        if templatesChanged {
+            saveCommands.append(["action":"save_note_templates","templates":templateDrafts.filter { !$0.builtin }.map(\.object),"default_id":defaultTemplateID,"library_revision":libraryRevision])
+        }
         if providerChanged {
             var value: Object = ["summary_endpoint":endpoint,"summary_model":model,"summary_provider":provider,"summary_instructions":instructions,"language":"auto","language_hints":selectedLanguages.sorted(),"duration_s":duration,"microphone_gain_db":microphoneGain,"microphone_noise_filter":microphoneFilter,"microphone_noise_threshold_db":microphoneThreshold]
             if !summaryKey.isEmpty { value["summary_key"] = summaryKey }
@@ -1069,5 +1135,175 @@ struct RenameConversation: View {
         failure = nil
         pending = core.send(["action":"rename_conversation","session_id":conversation.id,"title":title])
         if pending == nil { failure = "Reconnect before saving. Your name is still here." }
+    }
+}
+
+// Value types keep Settings edits local until the outer Save changes action.
+struct NotesTemplateSection: Identifiable, Equatable {
+    var key: String
+    var label: String
+    var labelVI: String
+    var id: String { key }
+    var object: Object {
+        var result: Object = ["key":key,"label":label]
+        if !labelVI.isEmpty { result["label_vi"] = labelVI }
+        return result
+    }
+}
+
+struct NotesTemplateDraft: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var focus: String
+    var sections: [NotesTemplateSection]
+    var builtin: Bool
+    var version: Int
+    var affectedMeetings: Int
+    init(_ object: Object) {
+        let definition = object["definition"] as? Object ?? [:]
+        id = text(object["id"]); name = text(definition["name"]); focus = text(definition["focus"])
+        builtin = object["builtin"] as? Bool ?? false
+        version = object["version"] as? Int ?? 0; affectedMeetings = object["affected_meetings"] as? Int ?? 0
+        sections = (definition["sections"] as? [Object] ?? []).map {
+            NotesTemplateSection(key:text($0["key"]),label:text($0["label"]),labelVI:text($0["label_vi"]))
+        }
+    }
+    var definition: Object { ["name":name,"focus":focus,"sections":sections.map(\.object)] }
+    var object: Object { ["id":id,"definition":definition] }
+    var error: String? {
+        if name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || name.unicodeScalars.count > 80 { return "Enter a name from 1 to 80 characters." }
+        if focus.unicodeScalars.count > 2000 { return "Keep template focus within 2,000 characters." }
+        if sections.isEmpty || !sections.contains(where:{$0.key == "overview"}) || Set(sections.map(\.key)).count != sections.count { return "Include the overview and use each section once." }
+        if sections.contains(where:{$0.label.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || $0.label.unicodeScalars.count > 80 || $0.labelVI.unicodeScalars.count > 80 || (!$0.labelVI.isEmpty && $0.labelVI.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)}) { return "Section labels must be 1–80 characters; Vietnamese labels are optional." }
+        return nil
+    }
+    func copy() -> NotesTemplateDraft {
+        var result = self
+        result.id = "custom-" + UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
+        result.name = String(name.prefix(70)) + " copy"; result.builtin = false; result.version = 0; result.affectedMeetings = 0
+        return result
+    }
+}
+
+struct NotesOutlinePreview: View {
+    let template: NotesTemplateDraft
+    let guidance: String
+    let destination: String
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            Label(template.name,systemImage:"text.book.closed").font(.headline)
+            Text(template.focus).font(.callout).foregroundStyle(.secondary)
+            ForEach(Array(template.sections.enumerated()),id:\.element.id) { index, section in
+                HStack(alignment:.top) {
+                    Text(String(index+1)).font(.caption.monospacedDigit()).foregroundStyle(ScribeTheme.accent).frame(width:18)
+                    VStack(alignment:.leading,spacing:2) {
+                        Text(section.label).font(.callout)
+                        if !section.labelVI.isEmpty { Text(section.labelVI).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            Text("Only supported content appears. Citations, decisions, actions and uncertainty are preserved.").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Text("Personal guidance").font(.callout.weight(.medium))
+            Text(guidance.isEmpty ? "No extra guidance. Use the conversation’s language." : guidance).font(.caption).textSelection(.enabled)
+            Text("Notes model · \(destination)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Text("Static outline · no model request. Applies to the next notes generation.").font(.caption).foregroundStyle(ScribeTheme.accent)
+        }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+}
+
+struct NotesTemplateEditor: View {
+    @State var draft: NotesTemplateDraft
+    let save: (NotesTemplateDraft)->Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment:.leading,spacing:16) {
+            HStack {
+                Text(draft.version == 0 ? "New notes template" : "Edit notes template").font(.system(size:24,design:.serif))
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Use draft") { save(draft); dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(draft.error != nil)
+            }
+            Text("Saved to this Settings draft. Choose Save changes in Settings to keep it.").font(.caption).foregroundStyle(.secondary)
+            Form {
+                TextField("Name",text:$draft.name).textFieldStyle(.roundedBorder)
+                Section("Focus · what should these notes emphasize?") {
+                    TextEditor(text:$draft.focus).font(.body).frame(height:90).accessibilityLabel("Template focus")
+                    Text("\(draft.focus.unicodeScalars.count)/2,000 characters").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Section order and labels") {
+                    ForEach(Array(draft.sections.enumerated()),id:\.element.id) { index, section in
+                        VStack(alignment:.leading,spacing:6) {
+                            HStack {
+                                Text(section.key.replacingOccurrences(of:"_",with:" ").capitalized).font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Button { draft.sections.swapAt(index,index-1) } label: { Image(systemName:"arrow.up") }
+                                    .disabled(index == 0).accessibilityLabel("Move \(section.key) up")
+                                Button { draft.sections.swapAt(index,index+1) } label: { Image(systemName:"arrow.down") }
+                                    .disabled(index == draft.sections.count-1).accessibilityLabel("Move \(section.key) down")
+                            }
+                            TextField("English label",text:$draft.sections[index].label).textFieldStyle(.roundedBorder).accessibilityLabel("\(section.key) English label")
+                            TextField("Vietnamese label (optional)",text:$draft.sections[index].labelVI).textFieldStyle(.roundedBorder).accessibilityLabel("\(section.key) Vietnamese label")
+                        }.padding(.vertical,5)
+                    }
+                    Text("Labels organize the existing cited fields. Empty sections stay hidden.").font(.caption).foregroundStyle(.secondary)
+                }
+            }.formStyle(.grouped)
+            if let error = draft.error { Label(error,systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(ScribeTheme.warning) }
+        }.padding(22).frame(width:580,height:680).background(ScribeTheme.canvas).tint(ScribeTheme.accent)
+    }
+}
+
+struct MeetingNotesTemplateControls: View {
+    @ObservedObject var core: DesktopClient
+    let generate: ()->Void
+    @State private var preview = false
+    @State private var selectionRequest: String?
+    private var choices: [NotesTemplateDraft] { (core.noteTemplates["templates"] as? [Object] ?? []).map(NotesTemplateDraft.init) }
+    private var current: NotesTemplateDraft? { (core.detail["note_template"] as? Object).map(NotesTemplateDraft.init) }
+    private var saved: Object? { core.detail["summary"] as? Object }
+    private var savedTemplate: NotesTemplateDraft? { ((saved?["generation"] as? Object)?["template"] as? Object).map(NotesTemplateDraft.init) }
+    private var pending: Bool { selectionRequest.map { ["pending","dispatching","unknown"].contains(core.requests[$0] ?? "") } ?? false }
+    var body: some View {
+        VStack(alignment:.leading,spacing:10) {
+            HStack(spacing:10) {
+                Label("Notes template",systemImage:"text.book.closed")
+                    .font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
+                Picker("Notes template",selection:Binding(get:{current?.id ?? "general"},set:{ id in
+                    guard let sid = core.selectedID else { return }
+                    selectionRequest = core.send(["action":"select_note_template","session_id":sid,"template_id":id])
+                })) {
+                    ForEach(choices) { template in Text(template.name).tag(template.id) }
+                }.labelsHidden()
+                    .disabled(core.busy || pending || !core.connected || choices.isEmpty || current == nil)
+                Button("Preview") { preview = true }.disabled(current == nil)
+                Spacer(minLength:0)
+                Button(saved == nil ? "Generate notes" : "Regenerate") { generate() }
+                    .buttonStyle(.borderedProminent).tint(ScribeTheme.action)
+                    .disabled(core.busy || pending || !core.connected || !core.accepted || core.revision == 0 || core.summaryProvider["configured"] as? Bool != true)
+            }
+            if core.summaryID == core.selectedID || (core.activeID == core.selectedID && !(core.detail["notes_generation"] as? Object ?? [:]).isEmpty) {
+                let generation = core.summaryID == core.selectedID ? core.notesGeneration : core.detail["notes_generation"] as? Object ?? [:]
+                let snapshot = generation["template"] as? Object
+                Text("Generating with \(text((snapshot?["definition"] as? Object)?["name"]).isEmpty ? current?.name ?? "saved template" : text((snapshot?["definition"] as? Object)?["name"])) · settings are fixed for this run.").font(.caption).foregroundStyle(ScribeTheme.accent)
+            } else if let savedTemplate {
+                Label("Saved notes · \(savedTemplate.name) · v\(savedTemplate.version)",systemImage:"text.book.closed").font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
+                if current?.id != savedTemplate.id || current?.version != savedTemplate.version {
+                    Text("Regenerate to apply the selected template.").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if saved != nil {
+                Label("Saved notes · General / legacy",systemImage:"clock").font(.system(size:12,weight:.semibold)).foregroundStyle(.secondary)
+            } else {
+                Text("The selected template applies to your next notes generation.").font(.caption).foregroundStyle(.secondary)
+            }
+        }.notebookCard()
+        .sheet(isPresented:$preview) {
+            VStack(alignment:.leading,spacing:18) {
+                HStack { Text("Next notes preview").font(.system(size:24,design:.serif)); Spacer(); Button("Done") { preview=false }.keyboardShortcut(.cancelAction) }
+                ScrollView {
+                    if let current { NotesOutlinePreview(template:current,guidance:text(core.settings["summary_instructions"]),destination:"\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"])) · \(text(core.summaryProvider["endpoint"]))") }
+                }
+            }.padding(24).frame(width:560,height:640).background(ScribeTheme.canvas)
+        }
     }
 }
