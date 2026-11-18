@@ -466,7 +466,8 @@ struct Notebook: View {
                 core.select(citation.text("meeting_id"))
                 if citation.text("source_type") == "summary" { tab="Notes" }
                 else { tab="Transcript"; core.loadPage(0,anchor:citation.text("source_id")) }
-            }.frame(width:820,height:700)
+            }.id(askEntry + ":" + (askEntry == "current" ? core.selectedID ?? "" : "all"))
+                .frame(width:820,height:700)
         }
         .sheet(item:$renaming) { row in RenameConversation(core:core,conversation:row) }
         .alert("Delete this conversation permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
@@ -505,7 +506,7 @@ struct Notebook: View {
     }
     private func summarize(_ row: Record) {
         core.send(["action":"summarize","session_id":row.id,"revision":core.revision,
-            "provider":text(core.summaryProvider["provider"]),"model":text(core.summaryProvider["model"])])
+            "provider":text(core.summaryProvider["provider"]),"model":text(core.summaryProvider["model"]),"text_consent":true])
     }
     private var transcript: some View {
         VStack(spacing:0) {
@@ -569,11 +570,12 @@ struct Notebook: View {
     private var notes: some View {
         ScrollView {
             VStack(alignment:.leading,spacing:22) {
+                MeetingNotesTemplateControls(core:core) { if let row = core.selected { summarize(row) } }
                 if core.summaryID == core.selectedID { Label("Preparing cited notes…",systemImage:"sparkles").foregroundStyle(.secondary); ProgressView() }
                 if let saved = core.detail["summary"] as? Object, let summary = saved["summary"] as? Object {
                     HStack { Label("CONVERSATION NOTES",systemImage:"text.alignleft").font(.system(size:10,weight:.semibold)).tracking(1.1); Spacer(); Text("\(text(saved["provider"])) · Revision \((saved["revision"] as? Int) ?? 0)").font(.caption) }.foregroundStyle(.secondary)
                     if saved["stale"] as? Bool == true { Text("These notes are outdated. Generate a summary for the current transcript.").foregroundStyle(.orange) }
-                    CitedNotes(summary:summary) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
+                    CitedNotes(summary:summary,presentation:saved["presentation"] as? [Object]) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
                 } else if let rolling = core.detail["rolling"] as? Object, let summary = rolling["summary"] as? Object {
                     Text("Section notes · provisional").font(.headline)
                     CitedNotes(summary:summary) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
@@ -658,6 +660,7 @@ struct MeetingSearchView: View {
     let open:(Record)->Void
     @Environment(\.dismiss) private var dismiss
     @State private var query=""
+    @FocusState private var queryFocused:Bool
     @State private var meetingID=""
     @State private var personID=""
     @State private var dateRange=0
@@ -706,6 +709,7 @@ struct MeetingSearchView: View {
                 HStack {
                     Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search decisions, names or phrases",text:$query)
+                        .focused($queryFocused)
                         .textFieldStyle(.plain).font(.title3)
                         .onChange(of:query) { _ in scheduleSearch() }
                     if core.searchLoading || waitingForSearch { ProgressView().controlSize(.small) }
@@ -806,7 +810,7 @@ struct MeetingSearchView: View {
                 if !core.searchUsage.isEmpty { RetrievalUsage(usage:core.searchUsage).padding(.horizontal,20).padding(.bottom,10) }
             }
         }.background(ScribeTheme.canvas)
-        .onAppear { core.send(["action":"people_page"]) }
+        .onAppear { core.send(["action":"people_page"]); queryFocused=true }
         .onChange(of:core.searchLoading) { loading in
             if !loading && searchDue { runSearch() }
         }
@@ -1462,23 +1466,29 @@ struct RecordingReview: View {
 
 struct CitedNotes: View {
     let summary: Object
+    var presentation: [Object]? = nil
     let citation: (String) -> Void
     var body: some View {
         VStack(alignment:.leading,spacing:22) {
-            if let overview = summary["overview"] as? Object {
-                VStack(alignment:.leading,spacing:12) {
-                    Label("At a glance",systemImage:"quote.bubble").font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
-                    item(overview)
-                }.notebookCard()
-            }
-            ForEach(["key_points","decisions","action_items","open_questions","uncertainties"],id:\.self) { key in
-                let rows = summary[key] as? [Object] ?? []
-                if !rows.isEmpty {
-                    Text(key.replacingOccurrences(of:"_",with:" ").uppercased()).font(.system(size:11,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary).padding(.top,8)
-                    ForEach(Array(rows.enumerated()),id:\.offset) { _, row in item(row) }
+            ForEach(sections,id:\.key) { section in
+                if section.key == "overview", let overview = summary["overview"] as? Object {
+                    VStack(alignment:.leading,spacing:12) {
+                        Label(section.label,systemImage:"quote.bubble").font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
+                        item(overview)
+                    }.notebookCard()
+                } else {
+                    let rows = summary[section.key] as? [Object] ?? []
+                    if !rows.isEmpty {
+                        Text(section.label.uppercased()).font(.system(size:11,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary).padding(.top,8)
+                        ForEach(Array(rows.enumerated()),id:\.offset) { _, row in item(row) }
+                    }
                 }
             }
         }
+    }
+    private var sections: [(key:String,label:String)] {
+        if let presentation { return presentation.map { (text($0["key"]),text($0["label"])) } }
+        return [("overview","At a glance"),("key_points","Key points"),("decisions","Decisions"),("action_items","Action items"),("open_questions","Open questions"),("uncertainties","Uncertainties")]
     }
     private func item(_ row: Object) -> some View {
         VStack(alignment:.leading,spacing:8) {

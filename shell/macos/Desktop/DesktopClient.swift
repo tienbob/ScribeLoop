@@ -158,13 +158,18 @@ final class TranscriptNavigationState:ObservableObject {
 struct PreferencesSaveProgress {
     var initialValues = ""
     var initialDetection = true
+    var initialTemplates = ""
+    private(set) var savedSteps: [String] = []
     private(set) var anySaved = false
     mutating func accept(action:String,values:String,detection:Bool) {
         if action == "save_settings" { initialValues = values; anySaved = true }
         if action == "set_detection" { initialDetection = detection; anySaved = true }
+        let label = action == "save_note_templates" ? "Notes templates" : action == "save_settings" ? "Model and personal settings" : "Call detection"
+        if !savedSteps.contains(label) { savedSteps.append(label) }
+        if action == "save_note_templates" { anySaved = true }
     }
     func failure(uncertain:Bool) -> String {
-        let prefix = anySaved ? "Some changes are already saved. " : ""
+        let prefix = anySaved ? "Some changes are already saved: \(savedSteps.joined(separator:", ")). " : ""
         return prefix + (uncertain ? "The remaining save status is uncertain. Reconnect and review settings before retrying." : "The remaining changes could not be saved. Review them and try again; Cancel discards only unsaved edits.")
     }
 }
@@ -266,6 +271,8 @@ struct PreferencesSaveProgress {
     @Published var settings: Object = [:]
     @Published var account: Object = [:]
     @Published var summaryProvider: Object = [:]
+    @Published var noteTemplates: Object = [:]
+    @Published var notesGeneration: Object = [:]
     @Published var transcription: Object = [:]
     @Published var discovery: Object = [:]
     @Published var agreement: Object = [:]
@@ -529,7 +536,7 @@ struct PreferencesSaveProgress {
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence","search_meetings"]
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence","search_meetings","note_templates"]
         let isRead = reads.contains(action)
         let emergency = ["stop","stop_recording","revoke_agreement","cancel_ask","cancel_search"].contains(action)
         if !isRead && !emergency && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
@@ -548,7 +555,7 @@ struct PreferencesSaveProgress {
         do {
             let envelope: Object = ["protocol":2,"request_id":id,"command":command]
             let bytes = try JSONSerialization.data(withJSONObject:envelope)
-            guard bytes.count <= 12288 else { throw CocoaError(.coderInvalidValue) }
+            guard bytes.count <= (action == "save_note_templates" ? 1_000_000 : 12288) else { throw CocoaError(.coderInvalidValue) }
             if !isRead { requests[id] = "pending"; mutationIDs.insert(id) }
             if emergency { emergencyRequests[action] = id }
             Task { [weak self] in
@@ -571,6 +578,8 @@ struct PreferencesSaveProgress {
         switch kind {
         case "snapshot":
             state = "Connected"; message = nil; deadline?.cancel(); reconnectAttempts = 0
+            noteTemplates = v["note_templates"] as? Object ?? [:]
+            notesGeneration = v["notes_generation"] as? Object ?? [:]
             account = v["account"] as? Object ?? [:]
             if let location = v["database"] as? String { database = location }
             settings = v["settings"] as? Object ?? [:]; summaryProvider = v["summary_provider"] as? Object ?? [:]
@@ -713,6 +722,7 @@ struct PreferencesSaveProgress {
             if scrollOnPageResponse || adjacent { pageSerial += 1 }
             upsert(v["session"] as? Object ?? [:])
             if refreshAfterPage { refreshAfterPage = false; reloadSoon() }
+        case "note_templates": noteTemplates = v; reloadSoon()
         case "account_state": account = v
         case "account_authorize":
             guard let url = URL(string:text(v["url"])), url.scheme == "https",
@@ -782,8 +792,8 @@ struct PreferencesSaveProgress {
         case "transcription_stage":
             if text(v["stage"]) == "finalizing" { processingLabel = "Refining the saved transcript…" }
             else if text(v["stage"]) == "local_cleanup" { processingLabel = "Cleaning up" }
-        case "summary_started": summaryID = v["session_id"] as? String
-        case "summary_ready", "summary_error": summaryID = nil; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
+        case "summary_started": summaryID = v["session_id"] as? String; notesGeneration = v["generation"] as? Object ?? [:]
+        case "summary_ready", "summary_error": summaryID = nil; notesGeneration = [:]; reloadSoon(); if kind == "summary_error" { message = text(v["message"]) }
         case "markdown_export": saveExport(text(v["content"]))
         case "email_export": emailExport = v
         case "audio_info", "audio_window": playback.receive(v)
@@ -933,7 +943,7 @@ struct PreferencesSaveProgress {
         guard let selectedID else { return }
         if scroll { finishAdjacentLoad(); transcriptRestoring=false; transcriptViewport.cancel() }
         if !scroll && navigationPending { refreshAfterPage = true; return }
-        if scroll {
+        if scroll { 
             refreshTask?.cancel(); refreshTask = nil; refreshAfterPage = false
             transcriptFollow.navigate(latest:offset == -1 && anchor == nil,
                 top:offset == 0 && anchor == nil)

@@ -57,13 +57,19 @@ def summary_blocks(saved,rows,title,*,include_sources=False):
             if item.get('due'):value+=' · Due: '+plain(item['due'])
         return value+(' ['+', '.join(str(numbers[sid]) for sid in ids)+']' if ids and include_sources else '')
     summary=saved['summary']
-    blocks=[{'style':'title','text':title},{'style':'paragraph','text':cited(summary['overview'])}]
-    for heading,key in [('Key points','key_points'),('Decisions','decisions'),('Action items','action_items'),
-                        ('Open questions','open_questions'),('Uncertainties','uncertainties')]:
-        items=summary.get(key,[])
-        if items:
-            blocks.append({'style':'heading','text':heading})
-            blocks.extend({'style':'bullet','text':cited(item,key=='action_items')} for item in items)
+    blocks=[{'style':'title','text':title}]
+    sections = saved.get('presentation') or [{'key':key, 'label':heading} for heading,key in [
+        ('At a glance','overview'), ('Key points','key_points'), ('Decisions','decisions'),
+        ('Action items','action_items'), ('Open questions','open_questions'), ('Uncertainties','uncertainties')]]
+    for section in sections:
+        key = section['key']
+        if key == 'overview':
+            if saved.get('presentation'):
+                blocks.append({'style':'heading','text':section['label']})
+            blocks.append({'style':'paragraph','text':cited(summary['overview'])})
+        elif summary.get(key):
+            blocks.append({'style':'heading','text':section['label']})
+            blocks.extend({'style':'bullet','text':cited(item,key=='action_items')} for item in summary[key])
     if used and include_sources:
         blocks.append({'style':'references','text':'Sources'})
         blocks.extend({'style':'source','text':f'[{numbers[sid]}] {timestamp(by_id[sid]["start_ms"])}–{timestamp(by_id[sid]["end_ms"])} · '

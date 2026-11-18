@@ -492,6 +492,8 @@ class SessionStore:
         if result.get('generation_id'):
             from .note_templates import NoteTemplateStore
             result['generation']=NoteTemplateStore(self.conn).generation(result['generation_id'])
+            from ..llm.note_templates import saved_presentation
+            result['presentation'] = saved_presentation(result)
         versions = tuple(tuple(r) for r in self.conn.execute(
             'SELECT bucket,generation FROM summary_source_versions WHERE session_id=? ORDER BY bucket',(session_id,)))
         cache = getattr(self,'_transcript_hash_cache',None)

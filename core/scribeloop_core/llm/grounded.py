@@ -115,19 +115,25 @@ def citation_anchor(segment_id):
     return 'segment-'+hashlib.sha256(segment_id.encode('utf-8')).hexdigest()
 
 
-def summary_markdown(summary):
+def summary_markdown(summary, *, presentation=None):
     def cited(item, action=False):
         value = escape_md(item['task'] if action else item['text'])
         if action:
             value += f" · Owner: {escape_md(item.get('owner') or 'not stated')}"
             value += f" · Due: {escape_md(item.get('due') or 'not stated')}"
         return value + ' ' + ' '.join(f'[source](#{citation_anchor(sid)})' for sid in item['segment_ids'])
-    parts = ['## Summary draft','Review the cited transcript before relying on these notes.',
-             cited(summary['overview'])]
-    for title,key in [('Key points','key_points'),('Decisions','decisions'),
-                      ('Action items','action_items'),('Open questions','open_questions'),
-                      ('Uncertainties','uncertainties')]:
-        parts += ['### '+title] + (['- '+cited(item,key=='action_items') for item in summary[key]] or ['None stated.'])
+    parts = ['## Summary draft','Review the cited transcript before relying on these notes.']
+    sections = presentation or [{'key':key, 'label':title} for title,key in [
+        ('At a glance','overview'), ('Key points','key_points'), ('Decisions','decisions'),
+        ('Action items','action_items'), ('Open questions','open_questions'), ('Uncertainties','uncertainties')]]
+    for section in sections:
+        key = section['key']
+        if key == 'overview':
+            parts += (['### ' + escape_md(section['label'])] if presentation else []) + [cited(summary['overview'])]
+        elif summary[key]:
+            parts += ['### ' + escape_md(section['label'])] + ['- '+cited(item,key=='action_items') for item in summary[key]]
+        elif presentation is None:
+            parts += ['### ' + section['label'], 'None stated.']
     return '\n\n'.join(parts)
 
 
@@ -146,8 +152,11 @@ def export_markdown(session, rows, revisions, saved_summary):
         (saved_summary['content_hash'] == summary_content_hash(rows)
          if saved_summary.get('content_hash') else saved_summary.get('input_hash') == transcript_hash(rows)))
     if matching:
+        if saved_summary.get('generation'):
+            template = saved_summary['generation']['template']
+            parts.append(f"Notes template: {escape_md(template['definition']['name'])} · Version {template['version']}")
         parts += [f"Summary provider: {escape_md(saved_summary['provider'])} · Model: {escape_md(saved_summary['model'])}",
-                  summary_markdown(saved_summary['summary'])]
+                  summary_markdown(saved_summary['summary'], presentation=saved_summary.get('presentation'))]
     elif saved_summary:
         parts.append('The saved summary is outdated and has been omitted.')
     parts.append('## Transcript')
