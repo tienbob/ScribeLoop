@@ -10,6 +10,7 @@ from uuid import uuid4
 from ..llm.rolling import RollingNotes
 from ..storage.note_templates import NoteTemplateStore
 from ..storage.search_work import SearchWork
+from ..storage.tasks import TaskStore
 from .note_templates import active_generation
 from .note_templates import library as template_library
 
@@ -123,6 +124,7 @@ class DesktopContract:
                 row['speaker_label']=labels[row['display_speaker_id']]
         # Notes are bounded at their original provider limits; no full transcript.
         summary = store.grounded_summary(sid)
+        overview = TaskStore(store.conn).meeting_overview(sid)
         from .calendar_links import read_link
         return {'type':'meeting_page', 'session':session, 'revision':revision, 'offset':offset,
             'calendar_event':read_link(store,sid),
@@ -130,14 +132,37 @@ class DesktopContract:
             'notes_generation':active_generation(store, sid),
             'transcript_provider':store.transcript_provider(sid),
             'total':count, 'segments':rows, 'speakers':roster, 'notes':store.notes(sid)[:100000], 'summary':summary,
+            'tasks':overview['tasks'], 'tasks_next_offset':overview['tasks_next_offset'],
+            'task_counts':overview['task_counts'], 'suggestions':overview['suggestions'],
             'audio':app.state.audio.status(sid) if app.state.audio and session['source']=='meeting' else {},
             'rolling':RollingNotes(store,summary_provider).latest(sid),
             'budget':RollingNotes(store,summary_provider).public(sid)}
+
+    def tasks_page(self, app, command):
+        if set(command) - {'action','session_id','status','owner_person_id','due','offset'}:
+            raise ValueError('Invalid task read')
+        return TaskStore(app.state.store.conn).page(
+            session_id=command.get('session_id'), status=command.get('status','open'),
+            owner_person_id=command.get('owner_person_id'), due=command.get('due'),
+            offset=command.get('offset', 0))
+
+    def task_carryover(self, app, command):
+        if set(command) != {'action','session_id'}:
+            raise ValueError('Invalid carryover read')
+        sid = command.get('session_id')
+        if not isinstance(sid,str) or not ID.fullmatch(sid):
+            raise ValueError('Invalid session')
+        return {'type':'task_carryover','session_id':sid,
+                'candidates':TaskStore(app.state.store.conn).carryover_candidates(sid)}
 
     async def read(self, app, command, summary_provider, active_id, summary_id, *, work=None):
         action = command.get('action')
         if action == 'note_templates' and set(command) == {'action'}:
             return {'type':'note_templates', **template_library(app.state.store)}
+        if action == 'tasks_page':
+            return self.tasks_page(app, command)
+        if action == 'task_carryover':
+            return self.task_carryover(app, command)
         if action == 'desktop_snapshot' and set(command)=={'action'}:
             return self.snapshot(app, summary_provider, active_id, summary_id)
         if action == 'history_page' and not set(command)-{'action','cursor'}:

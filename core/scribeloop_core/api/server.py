@@ -781,7 +781,9 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 await queue.put(desktop.receipts[dispatch_id])
                                 continue
                             action = command.get('action')
-                            if len(raw.encode()) > (1_000_000 if action == 'save_note_templates' else 12288):
+                            if len(raw.encode()) > (1_000_000 if action == 'save_note_templates'
+                                                    else 512_000 if action == 'accept_task_suggestions'
+                                                    else 12288):
                                 raise ValueError('Desktop command too large')
                             if action in {'search_meetings','ask_evidence','cancel_search'}:
                                 if action == 'cancel_search' and set(command)!={'action'}:
@@ -994,6 +996,67 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                     result = library(store)
                                     await publish({'type':'invalidate', 'session_id':command['session_id']})
                                 await publish({'type':'note_templates', **result})
+                                await queue.put(desktop.receipt(dispatch_id,'accepted'))
+                                continue
+                            if action in {'create_task','update_task','delete_task','restore_task',
+                                          'accept_task_suggestions','dismiss_task_suggestions',
+                                          'restore_task_suggestions','link_task_suggestion',
+                                          'accept_task_carryover'}:
+                                if recording_busy() or summary_task is not None or auto_tasks:
+                                    raise ValueError('Wait for processing before changing tasks')
+                                from ..storage.tasks import TaskStore
+                                task_store = TaskStore(store.conn)
+                                if action == 'accept_task_suggestions':
+                                    if set(command) != {'action','session_id','items'}:
+                                        raise ValueError('Invalid suggestion acceptance')
+                                    task_store.accept_suggestions(command['session_id'],command['items'])
+                                    sid = command['session_id']
+                                elif action == 'dismiss_task_suggestions':
+                                    if set(command) != {'action','session_id','suggestion_ids'}:
+                                        raise ValueError('Invalid suggestion dismissal')
+                                    task_store.dismiss_suggestions(command['session_id'],command['suggestion_ids'])
+                                    sid = command['session_id']
+                                elif action == 'restore_task_suggestions':
+                                    if set(command) != {'action','session_id','suggestion_ids'}:
+                                        raise ValueError('Invalid suggestion undo')
+                                    task_store.restore_suggestions(command['session_id'],command['suggestion_ids'])
+                                    sid = command['session_id']
+                                elif action == 'link_task_suggestion':
+                                    if set(command) != {'action','session_id','suggestion_id','task_id'}:
+                                        raise ValueError('Invalid suggestion link')
+                                    task_store.link_suggestion(command['session_id'],
+                                        command['suggestion_id'],command['task_id'])
+                                    sid = command['session_id']
+                                elif action == 'accept_task_carryover':
+                                    if set(command) != {'action','session_id','source_task_id'}:
+                                        raise ValueError('Invalid carryover acceptance')
+                                    task_store.accept_carryover(command['session_id'],command['source_task_id'])
+                                    sid = command['session_id']
+                                elif action == 'create_task':
+                                    allowed = {'action','session_id','title','owner_person_id',
+                                               'owner_label','due_date'}
+                                    if set(command) - allowed:
+                                        raise ValueError('Invalid task creation')
+                                    task_store.create(command['session_id'],command['title'],
+                                        owner_person_id=command.get('owner_person_id'),
+                                        owner_label=command.get('owner_label'),
+                                        due_date=command.get('due_date'))
+                                    sid = command['session_id']
+                                elif action == 'update_task':
+                                    allowed = {'action','task_id','title','owner_person_id',
+                                               'owner_label','clear_owner','due_date','clear_due','status'}
+                                    if set(command) - allowed:
+                                        raise ValueError('Invalid task edit')
+                                    fields = {key:command[key] for key in set(command)-{'action','task_id'}}
+                                    task = task_store.update(command['task_id'],**fields)
+                                    sid = task['session_id']
+                                else:
+                                    if set(command) != {'action','task_id'}:
+                                        raise ValueError('Invalid task command')
+                                    task = (task_store.delete(command['task_id']) if action == 'delete_task'
+                                            else task_store.restore(command['task_id']))
+                                    sid = task['session_id']
+                                await publish({'type':'invalidate','session_id':sid})
                                 await queue.put(desktop.receipt(dispatch_id,'accepted'))
                                 continue
                             if action == 'save_settings':

@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 DDL = """
 CREATE TABLE sessions (
@@ -438,6 +438,59 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
                          "state TEXT NOT NULL CHECK(state IN ('active','failed','completed')),"
                          'final_revision INTEGER CHECK(final_revision>=1))')
             conn.execute('PRAGMA user_version=25')
+    if version < 26:
+        # F4 action-item tracking: durable tasks plus per-summary suggestion
+        # dispositions. Deleted task identities stay reserved by their fingerprint
+        # (partial unique index) so reaccepting a suggestion restores the same row
+        # instead of creating a replacement that could block Undo. Carryover
+        # reserves one destination identity per source task for the same reason.
+        from .tasks import backfill_suggestions
+        with conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS tasks ('
+                         'id TEXT PRIMARY KEY,'
+                         'session_id TEXT NOT NULL REFERENCES sessions(id),'
+                         "origin TEXT NOT NULL CHECK(origin IN ('suggestion','manual','carryover')),"
+                         'title TEXT NOT NULL,'
+                         'owner_person_id TEXT REFERENCES speakers(id),'
+                         'owner_label TEXT,'
+                         'owner_removed INTEGER NOT NULL DEFAULT 0 CHECK(owner_removed IN (0,1)),'
+                         'due_date TEXT,'
+                         "status TEXT NOT NULL CHECK(status IN ('open','done','dismissed','deleted')),"
+                         "restore_status TEXT CHECK(restore_status IN ('open','done','dismissed')),"
+                         'source_session_id TEXT,'
+                         'source_summary_id TEXT,'
+                         'source_revision INTEGER,'
+                         'source_segment_ids TEXT,'
+                         'suggestion_fingerprint TEXT,'
+                         'carryover_task_id TEXT,'
+                         'carryover_note TEXT,'
+                         'created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,'
+                         'completed_at INTEGER)')
+            conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_fingerprint '
+                         'ON tasks(session_id,suggestion_fingerprint) '
+                         'WHERE suggestion_fingerprint IS NOT NULL')
+            conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_carryover '
+                         'ON tasks(session_id,carryover_task_id) '
+                         'WHERE carryover_task_id IS NOT NULL')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id,status)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_global ON tasks(status,due_date)')
+            conn.execute('CREATE TABLE IF NOT EXISTS task_suggestions ('
+                         'id TEXT PRIMARY KEY,'
+                         'session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,'
+                         'summary_id TEXT NOT NULL REFERENCES grounded_summaries(id) ON DELETE CASCADE,'
+                         'ordinal INTEGER NOT NULL CHECK(ordinal>=0),'
+                         'task TEXT NOT NULL, owner TEXT, due TEXT,'
+                         'segment_ids TEXT NOT NULL,'
+                         'fingerprint TEXT NOT NULL,'
+                         'similar_task_id TEXT REFERENCES tasks(id),'
+                         "state TEXT NOT NULL CHECK(state IN ('proposed','accepted','dismissed','linked')),"
+                         'task_id TEXT REFERENCES tasks(id),'
+                         'created_at INTEGER NOT NULL,'
+                         'UNIQUE(summary_id,ordinal))')
+            # Malformed legacy summaries produce a diagnostic and stay readable;
+            # the upgrade never invents suggestions or aborts.
+            backfill_suggestions(conn)
+            conn.execute('PRAGMA user_version=26')
     return conn
 
 

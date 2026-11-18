@@ -464,10 +464,15 @@ class SessionStore:
                     not NoteTemplateStore(self.conn).generation_allows_revision(generation_id,revision)):
                 raise ValueError('Notes generation provenance does not match the summary')
         with self.conn:
+            summary_id = uuid4().hex
             self.conn.execute('INSERT INTO grounded_summaries '
                 '(id,session_id,revision,input_hash,provider,model,summary_json,created_at,content_hash,generation_id) '
                 'VALUES (?,?,?,?,?,?,?,?,?,?)',
-                (uuid4().hex,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now(),summary_content_hash(rows),generation_id))
+                (summary_id,session_id,revision,input_hash,provider,model,json.dumps(summary),self._now(),summary_content_hash(rows),generation_id))
+            # F4: reconcile action-item suggestions in the same transaction.
+            # Seeding never raises and never rewrites existing tasks.
+            from .tasks import seed_summary_suggestions
+            seed_summary_suggestions(self.conn, session_id, summary_id, summary)
             if generation_id is not None:
                 self.conn.execute("UPDATE note_generation_runs SET state='completed' WHERE id=?",(generation_id,))
             selection = self.conn.execute("SELECT payload_json FROM events WHERE session_id=? "
@@ -825,9 +830,13 @@ class SessionStore:
                 '(SELECT id FROM segments WHERE session_id=?) OR offline_segment_id IN '
                 '(SELECT id FROM segments WHERE session_id=?)', (session_id,session_id))
             self.conn.execute('DELETE FROM exemplar_provenance WHERE session_speaker_id IN (SELECT id FROM session_speakers WHERE session_id=?)',(session_id,))
-            for table in ('summary_usage','person_link_history','person_links','summary_jobs','session_audio_policy','grounded_summaries','revision_speaker_edits','words','segments','session_speakers','speaker_remaps','speaker_embeddings',
-                          'summaries','embeddings_chunks','speaker_turns','recording_checkpoints',
-                          'session_streams','events','transcript_revisions'):
+            for table in ('task_suggestions', 'tasks',  # child-first: suggestions reference tasks
+                          'summary_usage', 'person_link_history', 'person_links',
+                          'summary_jobs', 'session_audio_policy', 'grounded_summaries',
+                          'revision_speaker_edits', 'words', 'segments', 'session_speakers',
+                          'speaker_remaps', 'speaker_embeddings', 'summaries',
+                          'embeddings_chunks', 'speaker_turns', 'recording_checkpoints',
+                          'session_streams', 'events', 'transcript_revisions'):
                 column = 'source_session_id' if table == 'speaker_embeddings' else 'session_id'
                 self.conn.execute(f'DELETE FROM {table} WHERE {column}=?', (session_id,))
             self.conn.execute('DELETE FROM sessions WHERE id=?', (session_id,))

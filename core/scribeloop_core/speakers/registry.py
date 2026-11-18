@@ -103,6 +103,11 @@ class SpeakerRegistry:
         sessions.update(r[0] for r in self.conn.execute('SELECT session_id FROM session_speakers WHERE speaker_id=?',(person,)))
         from ..storage.vectors import purge_session_vectors
         with self.conn:
+            # F4: meetings whose tasks/suggestions name this person also lose
+            # derived summaries; owner links and matching labels are cleared from
+            # tasks (including deleted and carryover copies) in this transaction.
+            from ..storage.tasks import TaskStore
+            sessions.update(TaskStore(self.conn).forget_owner(person,row[0]))
             for sid in sessions:
                 purge_session_vectors(self.conn,sid)
                 for table in ('embeddings_chunks','grounded_summaries','summary_jobs','summaries'):
