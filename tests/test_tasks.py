@@ -1,5 +1,6 @@
 """F4 action-item tracking: reconciliation, identity reservation and task CRUD."""
 import json
+import sqlite3
 from uuid import uuid4
 
 import pytest
@@ -405,4 +406,74 @@ def test_person_forgetting_clears_task_owners_and_derived_notes(store):
     tasks.update(labelled_row['id'], owner_label='Someone else')
     assert tasks._task(labelled_row['id'])['owner_removed'] == 0, \
         'explicitly setting an owner later resets the removal marker'
+
+
+# ---------- audit remediation regressions ----------
+
+def test_reconciliation_storage_errors_roll_back_the_summary_save(store):
+    sid = saved_meeting(store, items=[action()])
+    before = store.conn.execute('SELECT COUNT(*) FROM grounded_summaries').fetchone()[0]
+    store.conn.execute("CREATE TRIGGER reject_suggestion BEFORE INSERT ON task_suggestions "
+                       "BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END")
+    with pytest.raises(sqlite3.IntegrityError, match='simulated'):
+        save_summary(store, sid, [action(task='A new commitment')])
+    assert store.conn.execute('SELECT COUNT(*) FROM grounded_summaries').fetchone()[0] == before, \
+        'a storage error must roll back the summary save, not commit unsuggested notes'
+
+
+def test_migration_storage_errors_roll_back_the_schema_upgrade(tmp_path, monkeypatch):
+    conn = migrate(connect(tmp_path / 'upgrade.db'))
+    store = SessionStore(conn)
+    saved_meeting(store, items=[action()])
+    conn.execute('DROP TABLE task_suggestions')
+    conn.execute('DROP TABLE tasks')
+    conn.execute('PRAGMA user_version=25')
+    conn.commit()
+
+    def failing_backfill(_conn):
+        raise sqlite3.IntegrityError('simulated storage failure')
+
+    monkeypatch.setattr(task_module, 'backfill_suggestions', failing_backfill)
+    with pytest.raises(sqlite3.IntegrityError, match='simulated'):
+        migrate(conn)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 25, \
+        'seeding failures must not advance the schema version'
+
+
+def test_ambiguity_is_recomputed_against_current_tasks(store):
+    sid = saved_meeting(store, items=[action(task='Send the weekly report', owner=None, due=None)])
+    tasks = store_tasks(store)
+    # A task with the same text appears after the summary was saved.
+    manual = tasks.create(sid, 'Send the weekly report')
+    row = suggestion(store, sid)
+    assert row['state'] == 'proposed'
+    with pytest.raises(ValueError, match='similar'):
+        tasks.accept_suggestions(sid, [{'suggestion_id': row['id']}])
+    confirmed = tasks.accept_suggestions(
+        sid, [{'suggestion_id': row['id'], 'allow_similar': True}])[0]
+    assert confirmed['id'] != manual['id']
+    # Keep-existing revalidates text similarity after edits.
+    other = saved_meeting(store, title='Review', items=[])
+    candidate = tasks.create(other, 'Prepare the demo environment')
+    save_summary(store, other, [action(task='Prepare the demo environment now', owner=None, due=None)])
+    similar = suggestion(store, other)
+    assert similar['similar_task_id'] == candidate['id']
+    tasks.update(candidate['id'], title='Something entirely different now')
+    with pytest.raises(ValueError, match='no longer matches'):
+        tasks.link_suggestion(other, similar['id'], candidate['id'])
+    refreshed = suggestion(store, other)
+    assert refreshed['similar_task_id'] is None, 'stale candidates are refreshed for review'
+
+
+def test_reconciliation_uses_scoped_indexes_and_rows_carry_meeting_metadata(store):
+    sid = saved_meeting(store, items=[])
+    tasks = store_tasks(store)
+    tasks.create(sid, 'Meeting task')
+    plan = ' '.join(str(tuple(row)) for row in store.conn.execute(
+        'EXPLAIN QUERY PLAN SELECT task_id FROM task_suggestions '
+        'WHERE session_id=? AND fingerprint=? AND state=?', (sid, 'f', 'proposed')))
+    assert 'idx_suggestions_session_fingerprint' in plan, plan
+    row = tasks.page(session_id=sid)['tasks'][0]
+    assert row['meeting_title'] == 'Standup'
+    assert row['meeting_started_at'] is not None
 

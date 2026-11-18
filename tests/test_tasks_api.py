@@ -72,6 +72,12 @@ def rejected(ws, payload):
             continue
         if value['type'] == 'receipt':
             assert value['status'] == 'rejected', (value, errors)
+            # The paired desktop error event follows the rejected receipt; drain
+            # it so later steps stay in sync.
+            for _ in range(100):
+                following = ws.receive_json()
+                if following['type'] == 'error':
+                    break
             return errors
         assert value['type'] != 'invalidate', 'rejected commands must not invalidate'
     raise AssertionError(f'Rejected receipt missing: {errors}')
@@ -202,3 +208,12 @@ def test_task_mutations_publish_invalidation_and_persist(workspace):
     rejected(ws, {'action': 'delete_task', 'task_id': 'not-an-id'})
     rejected(ws, {'action': 'update_task', 'task_id': created['id'], 'status': 'nope'})
 
+
+
+def test_missing_required_fields_are_rejected_without_killing_the_connection(workspace):
+    app, _client, ws = workspace
+    sid = make_meeting(app, items=[])
+    rejected(ws, {'action': 'create_task', 'title': 'Missing session'})
+    rejected(ws, {'action': 'update_task', 'title': 'Missing task'})
+    command(ws, {'action': 'create_task', 'session_id': sid, 'title': 'Still connected'})
+    assert call_tasks(app, 'page', session_id=sid)['counts']['all'] == 1

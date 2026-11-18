@@ -21,7 +21,7 @@ except (ImportError, OSError):
 # DB-API providers have distinct exception hierarchies; handle both explicitly.
 DATABASE_ERRORS = (sqlite3.Error,) + ((_sqlcipher.Error,) if _sqlcipher else ())
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 DDL = """
 CREATE TABLE sessions (
@@ -491,6 +491,17 @@ def migrate(conn: sqlite3.Connection) -> sqlite3.Connection:
             # the upgrade never invents suggestions or aborts.
             backfill_suggestions(conn)
             conn.execute('PRAGMA user_version=26')
+    if version < 27:
+        # F4 audit: reconciliation and task-reference lookups need scoped indexes.
+        # Without them, suggestion-history scans grow with every saved summary.
+        with conn:
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_suggestions_session_fingerprint '
+                         'ON task_suggestions(session_id,fingerprint,state)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_suggestions_task '
+                         'ON task_suggestions(task_id)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_suggestions_similar '
+                         'ON task_suggestions(similar_task_id)')
+            conn.execute('PRAGMA user_version=27')
     return conn
 
 

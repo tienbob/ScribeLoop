@@ -504,3 +504,56 @@ Implemented on `feature/f4-action-tracking` against `364aa95`.
   build has been installed for user review, and `ACTION_TRACKING_CLOSEOUT.md`
   does not exist. Slice 5 (acceptance and closeout) remains.
 
+## Audit remediation record — 18 November 2026
+
+All twelve findings in [F4_ACTION_TRACKING_AUDIT.md](F4_ACTION_TRACKING_AUDIT.md)
+and its additional observations were applied on this branch. The audit document
+remains the point-in-time record; the fixes are summarized here.
+
+1. **First manual task (P1)** — the Notes tab renders the Tasks card with its
+   empty state for every meeting; Add task no longer depends on existing rows.
+2. **Silent re-extraction on clear (P1)** — the editor serializes explicit
+   clears as JSON `null` (`NSNull`) and omits only untouched fields, so cleared
+   owners/dates stay cleared; untouched fields still prefill.
+3. **Evidence context (P1)** — task chips resolve `source_session_id` and
+   `source_revision`: same-meeting same-revision chips navigate to the cited
+   segment, cross-meeting evidence offers an explicit source-meeting jump,
+   stale-revision evidence renders as text instead of a broken link, and
+   carryover rows display their copied provenance note.
+4. **Meeting pagination (P2)** — the card cursor initializes from the meeting
+   read's `tasks_next_offset`, the More control renders independently of the
+   locally filtered rows, and deeper pages append through the scoped read.
+5. **Editor draft loss (P2)** — saves wait for their receipt; send failures,
+   rejections and unknown outcomes surface inline with retry while the draft
+   and editor stay open.
+6. **Swallowed storage errors (P2)** — suggestion seeding separates malformed
+   legacy data (skipped with a diagnostic) from storage errors, which now
+   propagate and roll back the summary save or schema upgrade (regression
+   tests cover injected failures at save and migration).
+7. **Missing required fields (P2)** — create/update require `session_id`,
+   `title` and `task_id` before indexing; rejections return receipts and the
+   connection stays usable (regression-tested).
+8. **Stuck task reads (P2)** — read failures are correlated by request ID, stop
+   loading, retain prior rows, show a retryable error, and clear an owner
+   filter that a person-forgetting just invalidated (one automatic retry).
+9. **Stale ambiguity (P2)** — acceptance, linking and review reads recompute
+   the similar-task candidate against current open tasks; stored candidates are
+   refreshed and Keep-existing revalidates text similarity (regression-tested).
+10. **Dismissal Undo and delete Undo (P2)** — dismissed suggestions expose an
+    Undo invoking `restore_task_suggestions`; task deletion shows a
+    "Task deleted · Undo" toast backed by the soft-delete restore.
+11. **Deletion/reconnect refresh (P2)** — `session_deleted`, snapshots and
+    reconnects refresh the open Tasks sheet, carryover and paging state.
+12. **Suggestion-history scans (P2)** — schema 27 adds the
+    session/fingerprint/state and task-reference indexes; `EXPLAIN QUERY PLAN`
+    uses the scoped index (regression-tested).
+
+Additional performance work: `page()` reads tasks with one joined query (rows
+now carry `meeting_title`/`meeting_started_at`, which also fixes the carryover
+card's empty earlier-meeting title) and computes all five counts in one
+aggregate; `meeting_overview` reuses those counts; `carryover_candidates`
+bounds its meeting scan (LIMIT 500, at most 100 joins). Verification after
+remediation: **1,044 passed, 2 skipped; ruff clean; the fixture preview app
+builds and the desktop smoke passes.** The audit's native-UI caveat stands:
+findings were source-verified, and interactive acceptance remains slice-5 work.
+

@@ -286,6 +286,8 @@ struct PreferencesSaveProgress {
     @Published var taskOwner: String?
     @Published var taskDue: String?
     @Published var taskLoading = false
+    @Published var taskError: String?
+    @Published var taskUndo: Record?
     @Published var carryover: [Record] = []
     @Published var cardTaskRows: [Record] = []
     @Published var cardTaskNextOffset: Int?
@@ -339,7 +341,9 @@ struct PreferencesSaveProgress {
     private var pageRequest: String?
     private var taskRequest: String?
     private var cardTaskRequest: String?
+    private var taskOwnerRetry = false
     private var midnightTimer: Timer?
+    private var undoTimer: Timer?
     private var completion: (() -> Void)?
     let playback = MeetingPlayback()
     private var player: AVAudioPlayer?
@@ -614,6 +618,8 @@ struct PreferencesSaveProgress {
             suggestCall()
             let uncertain = requests.filter { ["pending","dispatching","unknown"].contains($0.value) }.map(\.key)
             for id in uncertain { send(["action":"request_status","request_id":id]) }
+            if showTasks { loadTasks(reset:true) }
+            loadCarryover()
             if let activeID { select(activeID) }
             else if let selectedID { select(selectedID) }
             else if let first = sessions.first { select(first.id) }
@@ -739,6 +745,7 @@ struct PreferencesSaveProgress {
                 }
             }
             detail = next
+            cardTaskNextOffset = v["tasks_next_offset"] as? Int
             finishAdjacentLoad()
             if scrollOnPageResponse || adjacent { pageSerial += 1 }
             upsert(v["session"] as? Object ?? [:])
@@ -794,6 +801,11 @@ struct PreferencesSaveProgress {
                 stopAudio(); detail = [:]; partials = [:]
                 selectedID = sessions.isEmpty ? nil : sessions[min(index,sessions.count-1)].id
             }
+            // Deleted meetings remove their tasks; an open sheet must not keep
+            // offering rows that no longer exist.
+            resetMeetingTaskPaging()
+            if showTasks { loadTasks(reset:true) }
+            loadCarryover()
         case "conversation_renamed":
             upsert(v["session"] as? Object ?? [:]); reloadSoon()
         case "partial":
@@ -843,7 +855,15 @@ struct PreferencesSaveProgress {
             if activeID == nil { partials = [:] }
         case "error", "recording_error", "transcription_error", "rolling_notes_error", "audio_cleanup_error":
             if kind == "transcription_error" { streamingProgress = [:] }
-            message = text(v["message"]); reloadSoon()
+            let reason = text(v["message"])
+            let failedRequest = text(v["request_id"])
+            if !failedRequest.isEmpty && failedRequest == taskRequest {
+                taskReadFailed(reason); return
+            }
+            if !failedRequest.isEmpty && failedRequest == cardTaskRequest {
+                cardTaskRequest = nil; taskError = reason; return
+            }
+            message = reason; reloadSoon()
         case "reconnect_required": reconnect()
         case "tasks_page":
             if text(v["response_to"]) == cardTaskRequest {
@@ -858,7 +878,7 @@ struct PreferencesSaveProgress {
             if (v["offset"] as? NSNumber)?.intValue == 0 { taskRows = rows } else { taskRows += rows }
             nextTaskOffset = v["next_offset"] as? Int
             taskCounts = v["counts"] as? Object ?? [:]
-            taskLoading = false
+            taskLoading = false; taskError = nil; taskOwnerRetry = false
         case "task_carryover":
             if text(v["session_id"]) == selectedID { carryover = objects(v["candidates"]) }
         case "invalidate":
@@ -899,7 +919,25 @@ struct PreferencesSaveProgress {
         if let owner = taskOwner, !owner.isEmpty { command["owner_person_id"] = owner }
         if let due = taskDue, !due.isEmpty { command["due"] = due }
         if !reset, let offset = nextTaskOffset { command["offset"] = offset }
-        taskRequest = send(command)
+        guard let request = send(command) else {
+            // A local send failure must not leave the list loading forever.
+            taskRequest = nil; taskLoading = false
+            taskError = coreSendFailureMessage()
+            return
+        }
+        taskRequest = request
+    }
+    private func coreSendFailureMessage() -> String {
+        message ?? "The task list could not be refreshed. Check the connection and retry."
+    }
+    private func taskReadFailed(_ reason: String) {
+        taskRequest = nil; taskLoading = false
+        taskError = reason
+        // A forgotten person leaves an owner filter the server now rejects;
+        // clear it once and retry so the list recovers without manual steps.
+        if taskOwner != nil, !taskOwnerRetry {
+            taskOwnerRetry = true; taskOwner = nil; loadTasks(reset:true)
+        }
     }
     func setTaskFilter(status: String? = nil, owner: String?? = nil, due: String?? = nil) {
         if let status { taskStatus = status }
@@ -913,6 +951,19 @@ struct PreferencesSaveProgress {
     }
     func resetMeetingTaskPaging() {
         cardTaskRows = []; cardTaskNextOffset = nil; cardTaskRequest = nil
+    }
+    /// Soft-delete with the planned immediate Undo affordance.
+    func deleteTask(_ task: Record) {
+        send(["action":"delete_task","task_id":task.id])
+        taskUndo = task
+        undoTimer?.invalidate()
+        undoTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats:false) { [weak self] _ in
+            Task { @MainActor in self?.taskUndo = nil }
+        }
+    }
+    func undoDeleteTask() {
+        if let task = taskUndo { send(["action":"restore_task","task_id":task.id]) }
+        taskUndo = nil; undoTimer?.invalidate()
     }
     func loadMoreMeetingTasks() {
         guard connected, let selectedID, let offset = cardTaskNextOffset else { return }

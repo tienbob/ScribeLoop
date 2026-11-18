@@ -1035,7 +1035,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 elif action == 'create_task':
                                     allowed = {'action','session_id','title','owner_person_id',
                                                'owner_label','due_date'}
-                                    if set(command) - allowed:
+                                    if set(command) - allowed or not {'session_id','title'} <= set(command):
                                         raise ValueError('Invalid task creation')
                                     task_store.create(command['session_id'],command['title'],
                                         owner_person_id=command.get('owner_person_id'),
@@ -1045,7 +1045,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                                 elif action == 'update_task':
                                     allowed = {'action','task_id','title','owner_person_id',
                                                'owner_label','clear_owner','due_date','clear_due','status'}
-                                    if set(command) - allowed:
+                                    if set(command) - allowed or 'task_id' not in command:
                                         raise ValueError('Invalid task edit')
                                     fields = {key:command[key] for key in set(command)-{'action','task_id'}}
                                     task = task_store.update(command['task_id'],**fields)

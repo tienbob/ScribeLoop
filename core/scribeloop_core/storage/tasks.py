@@ -72,12 +72,17 @@ def _tokens(text):
     return frozenset(re.findall(r'\w+', text, re.UNICODE)) if text else frozenset()
 
 
-def similar_task_text(candidate, existing):
-    """Ambiguity is surfaced for review, never merged silently."""
+def similarity(candidate, existing):
+    """Token-overlap score in [0,1]; 0 when either side has no tokens."""
     left, right = _tokens(candidate), _tokens(existing)
     if not left or not right:
-        return False
-    return len(left & right) / len(left | right) >= SIMILARITY_THRESHOLD
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def similar_task_text(candidate, existing):
+    """Ambiguity is surfaced for review, never merged silently."""
+    return similarity(candidate, existing) >= SIMILARITY_THRESHOLD
 
 
 def overdue(task, today=None):
@@ -93,13 +98,13 @@ def _due_clause(due, params):
     if due == 'overdue':
         # Done/dismissed/deleted tasks are never overdue.
         params.append(local_today().isoformat())
-        return "(status='open' AND due_date IS NOT NULL AND due_date < ?)"
+        return "(t.status='open' AND t.due_date IS NOT NULL AND t.due_date < ?)"
     if due == 'next7':
         today = local_today()
         params.extend([today.isoformat(), (today + timedelta(days=7)).isoformat()])
-        return '(due_date IS NOT NULL AND due_date >= ? AND due_date <= ?)'
+        return '(t.due_date IS NOT NULL AND t.due_date >= ? AND t.due_date <= ?)'
     if due == 'undated':
-        return 'due_date IS NULL'
+        return 't.due_date IS NULL'
     raise ValueError('Invalid task due filter')
 
 
@@ -113,6 +118,12 @@ TASK_COLUMNS = ('id', 'session_id', 'origin', 'title', 'owner_person_id', 'owner
 
 def task_row(row, *, today=None):
     task = {key: row[key] for key in TASK_COLUMNS}
+    for key in ('meeting_title', 'meeting_started_at'):
+        # Joined meeting metadata is optional per query.
+        try:
+            task[key] = row[key]
+        except IndexError:
+            task[key] = None
     raw = task.get('source_segment_ids')
     task['source_segment_ids'] = json.loads(raw) if raw else []
     task['owner_removed'] = bool(task.get('owner_removed'))
@@ -160,36 +171,40 @@ def reconcile_state(conn, session_id, task_text, fingerprint):
 def seed_summary_suggestions(conn, session_id, summary_id, summary):
     """Insert one suggestion row per cited action item; idempotent per summary.
 
-    Never raises: a malformed legacy item must not abort a summary save or a
-    workspace upgrade. Bounds match the grounded-summary schema (20 items).
+    Malformed legacy items are skipped with a diagnostic, but storage errors
+    propagate so the caller's summary-save or migration transaction rolls back
+    instead of committing a silently incomplete reconciliation. Bounds match the
+    grounded-summary schema (20 items).
     """
-    try:
-        items = summary.get('action_items') if isinstance(summary, dict) else None
-        if not isinstance(items, list):
-            return
-        for ordinal, item in enumerate(items[:20]):
-            if not isinstance(item, dict):
-                continue
-            task_text = item.get('task')
-            segment_ids = item.get('segment_ids')
-            owner, due = item.get('owner'), item.get('due')
-            if (not isinstance(task_text, str) or not task_text.strip()
-                    or not isinstance(segment_ids, list)
-                    or not all(isinstance(value, str) for value in segment_ids)):
-                log.warning('Skipping malformed action item %s/%s in summary %s',
-                            session_id, ordinal, summary_id)
-                continue
-            fingerprint = suggestion_fingerprint(task_text, owner, due)
-            state, task_id, similar_id = reconcile_state(conn, session_id, task_text, fingerprint)
-            conn.execute('INSERT OR IGNORE INTO task_suggestions '
-                         '(id,session_id,summary_id,ordinal,task,owner,due,segment_ids,'
-                         'fingerprint,similar_task_id,state,task_id,created_at) '
-                         'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                         (uuid4().hex, session_id, summary_id, ordinal, task_text, owner, due,
-                          json.dumps(segment_ids), fingerprint, similar_id, state, task_id,
-                          int(time.time() * 1000)))
-    except Exception:
-        log.exception('Task suggestion reconciliation failed for summary %s', summary_id)
+    items = summary.get('action_items') if isinstance(summary, dict) else None
+    if not isinstance(items, list):
+        return
+    prepared = []
+    for ordinal, item in enumerate(items[:20]):
+        if not isinstance(item, dict):
+            log.warning('Skipping malformed action item %s/%s in summary %s',
+                        session_id, ordinal, summary_id)
+            continue
+        task_text = item.get('task')
+        segment_ids = item.get('segment_ids')
+        owner, due = item.get('owner'), item.get('due')
+        if (not isinstance(task_text, str) or not task_text.strip()
+                or not isinstance(segment_ids, list)
+                or not all(isinstance(value, str) for value in segment_ids)):
+            log.warning('Skipping malformed action item %s/%s in summary %s',
+                        session_id, ordinal, summary_id)
+            continue
+        prepared.append((ordinal, task_text, owner, due, segment_ids))
+    for ordinal, task_text, owner, due, segment_ids in prepared:
+        fingerprint = suggestion_fingerprint(task_text, owner, due)
+        state, task_id, similar_id = reconcile_state(conn, session_id, task_text, fingerprint)
+        conn.execute('INSERT OR IGNORE INTO task_suggestions '
+                     '(id,session_id,summary_id,ordinal,task,owner,due,segment_ids,'
+                     'fingerprint,similar_task_id,state,task_id,created_at) '
+                     'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                     (uuid4().hex, session_id, summary_id, ordinal, task_text, owner, due,
+                      json.dumps(segment_ids), fingerprint, similar_id, state, task_id,
+                      int(time.time() * 1000)))
 
 
 def backfill_suggestions(conn):
@@ -272,6 +287,29 @@ class TaskStore:
         if count + extra > MAX_TASKS:
             raise ValueError(f'Meetings hold at most {MAX_TASKS} tasks. Delete or dismiss one first.')
 
+    def _current_similar(self, session_id, task_text):
+        """The most-similar open task right now, not the stale saved candidate.
+
+        Task creation and edits after a summary was saved change what counts as
+        ambiguous, so acceptance, linking and review reads revalidate against
+        current state instead of trusting the stored similar_task_id.
+        """
+        best_id, best_score = None, 0.0
+        for candidate in self.conn.execute(
+                "SELECT id,title FROM tasks WHERE session_id=? AND status='open'",
+                (session_id,)).fetchall():
+            score = similarity(task_text, candidate['title'])
+            if score >= SIMILARITY_THRESHOLD and score > best_score:
+                best_id, best_score = candidate['id'], score
+        return best_id
+
+    def _refresh_similar(self, suggestion_id, current):
+        stored = self.conn.execute('SELECT similar_task_id FROM task_suggestions WHERE id=?',
+                                   (suggestion_id,)).fetchone()
+        if stored and stored['similar_task_id'] != current:
+            self.conn.execute('UPDATE task_suggestions SET similar_task_id=? WHERE id=?',
+                              (current, suggestion_id))
+
     @staticmethod
     def _now():
         return int(time.time() * 1000)
@@ -305,25 +343,22 @@ class TaskStore:
             status_clause, status_params = 't.status=?', [status]
         where = ' WHERE ' + ' AND '.join([*scope, status_clause]) if (scope or status_clause) else ''
         count_where = (' WHERE ' + ' AND '.join(scope)) if scope else ''
+        # One joined read and one aggregate keep meeting_page bounded: no
+        # per-row meeting lookups and no per-status count queries.
         rows = self.conn.execute(
-            f'SELECT t.* FROM tasks t{where} ORDER BY {ORDER} LIMIT ? OFFSET ?',
+            f'SELECT t.*, s.title AS meeting_title, s.started_at AS meeting_started_at '
+            f'FROM tasks t JOIN sessions s ON s.id=t.session_id{where} '
+            f'ORDER BY {ORDER} LIMIT ? OFFSET ?',
             (*params, *status_params, MAX_PAGE + 1, offset)).fetchall()
         tasks = [task_row(row) for row in rows[:MAX_PAGE]]
-        for task in tasks:
-            meeting = self.conn.execute('SELECT title,started_at FROM sessions WHERE id=?',
-                                        (task['session_id'],)).fetchone()
-            task['meeting_title'] = meeting['title'] if meeting else None
-            task['meeting_started_at'] = meeting['started_at'] if meeting else None
-        counts = {name: self.conn.execute(
-            f'SELECT COUNT(*) FROM tasks t{count_where}'
-            + (' AND ' + clause if scope else ' WHERE ' + clause), (*params,)).fetchone()[0]
-            for name, clause in (('open', "status='open'"), ('done', "status='done'"),
-                                 ('dismissed', "status='dismissed'"),
-                                 ('deleted', "status='deleted'"))}
-        counts['all'] = self.conn.execute(
-            f"SELECT COUNT(*) FROM tasks t{count_where}"
-            + (' AND ' if scope else ' WHERE ') + "status!='deleted'",
-            (*params,)).fetchone()[0]
+        counts = self.conn.execute(
+            f"SELECT SUM(t.status='open') AS open,SUM(t.status='done') AS done,"
+            f"SUM(t.status='dismissed') AS dismissed,SUM(t.status='deleted') AS deleted,"
+            f"SUM(t.status!='deleted') AS all_tasks FROM tasks t{count_where}",
+            (*params,)).fetchone()
+        counts = {'open': counts['open'] or 0, 'done': counts['done'] or 0,
+                  'dismissed': counts['dismissed'] or 0, 'deleted': counts['deleted'] or 0,
+                  'all': counts['all_tasks'] or 0}
         return {'type': 'tasks_page', 'tasks': tasks,
                 'next_offset': offset + MAX_PAGE if len(rows) > MAX_PAGE else None,
                 'offset': offset, 'status': status, 'due': due,
@@ -336,7 +371,11 @@ class TaskStore:
                                  (session_id,)).fetchone()
 
     def suggestions(self, session_id):
-        """Active summary suggestions with reconciliation state, for meeting_page."""
+        """Active summary suggestions with reconciliation state, for meeting_page.
+
+        Proposed rows recompute their similarity candidate against the meeting's
+        current open tasks so the review UI never offers a stale match.
+        """
         summary = self.active_summary(session_id)
         if not summary:
             return []
@@ -345,7 +384,18 @@ class TaskStore:
             'LEFT JOIN tasks t ON t.id=s.similar_task_id '
             'WHERE s.session_id=? AND s.summary_id=? ORDER BY s.ordinal',
             (session_id, summary['id'])).fetchall()
-        return [suggestion_row(row) for row in rows]
+        values = [suggestion_row(row) for row in rows]
+        for value in values:
+            if value['state'] != 'proposed':
+                continue
+            current = self._current_similar(session_id, value['task'])
+            if current == value['similar_task_id']:
+                continue
+            value['similar_task_id'] = current
+            title = self.conn.execute('SELECT title FROM tasks WHERE id=?',
+                                      (current,)).fetchone() if current else None
+            value['similar_task_title'] = title['title'] if title else None
+        return values
 
     def counts(self, session_id):
         row = self.conn.execute(
@@ -362,7 +412,7 @@ class TaskStore:
         self._known_session(session_id)
         page = self.page(session_id=session_id, status='all')
         return {'tasks': page['tasks'], 'tasks_next_offset': page['next_offset'],
-                'task_counts': self.counts(session_id),
+                'task_counts': page['counts'],
                 'suggestions': self.suggestions(session_id)}
 
     def carryover_candidates(self, session_id):
@@ -371,11 +421,14 @@ class TaskStore:
         key = normalize_text(session['title'])
         if not key:
             return []
+        # Recent meetings first; the Python-side normalized comparison is bounded
+        # so a large workspace cannot build an unbounded parameter list.
         meetings = [row for row in self.conn.execute(
             'SELECT id,title,started_at FROM sessions WHERE id!=? AND title IS NOT NULL '
-            'AND started_at IS NOT NULL AND started_at<=? ORDER BY started_at DESC, id DESC',
+            'AND started_at IS NOT NULL AND started_at<=? '
+            'ORDER BY started_at DESC, id DESC LIMIT 500',
             (session_id, session['started_at'] or 0))
-            if normalize_text(row['title']) == key]
+            if normalize_text(row['title']) == key][:100]
         if not meetings:
             return []
         marks = ','.join('?' * len(meetings))
@@ -450,7 +503,10 @@ class TaskStore:
 
     def _accept_plan(self, session_id, row, item):
         edits = self._accept_edits(item)
-        if row['similar_task_id'] and not item.get('allow_similar'):
+        # Ambiguity is judged against the meeting's current open tasks, not the
+        # candidate stored when the summary was saved.
+        current_similar = self._current_similar(session_id, row['task'])
+        if current_similar and not item.get('allow_similar'):
             raise ValueError('Confirm adding a task similar to an existing task')
         fingerprint = row['fingerprint']
         existing = self.conn.execute(
@@ -458,12 +514,12 @@ class TaskStore:
             (session_id, fingerprint)).fetchone()
         if existing and existing['status'] != 'deleted':
             # Reconciliation linked it on save; acceptance stays idempotent.
-            return {'kind': 'link', 'fingerprint': fingerprint,
+            return {'kind': 'link', 'fingerprint': fingerprint, 'similar_id': current_similar,
                     'suggestion_id': row['id'], 'task_id': existing['id']}
         if existing:
             # The deleted identity stays reserved; acceptance restores that row.
             return {'kind': 'restore', 'fingerprint': fingerprint, 'suggestion_id': row['id'],
-                    'task_id': existing['id'], 'edits': edits}
+                    'task_id': existing['id'], 'edits': edits, 'similar_id': current_similar}
         owner = edits.get('owner')
         if owner is None:  # omitted: prefill only an unambiguous stated owner label
             label = row['owner']
@@ -472,6 +528,7 @@ class TaskStore:
                      else None)
         due = edits.get('due', valid_due(row['due']))
         return {'kind': 'create', 'fingerprint': fingerprint, 'suggestion_id': row['id'],
+                'similar_id': current_similar,
                 'title': edits.get('title', self._clean_title(row['task'])),
                 'owner': owner, 'due': due,
                 'summary_id': row['summary_id'], 'segment_ids': row['segment_ids']}
@@ -513,6 +570,11 @@ class TaskStore:
                     task_id = self._restore_row(plan['task_id'], plan['edits'])
                 else:
                     task_id = self._insert_suggestion_task(session_id, plan)
+                if plan.get('similar_id') != rows[plan['suggestion_id']]['similar_task_id']:
+                    # Keep the stored review candidate aligned with current state.
+                    self.conn.execute('UPDATE task_suggestions SET similar_task_id=? '
+                                      'WHERE id=? AND session_id=?',
+                                      (plan.get('similar_id'), plan['suggestion_id'], session_id))
                 self.conn.execute("UPDATE task_suggestions SET state='accepted',task_id=? "
                                   'WHERE id=? AND session_id=?',
                                   (task_id, plan['suggestion_id'], session_id))
@@ -593,14 +655,19 @@ class TaskStore:
                     (state, task_id, similar_id, session_id, row['fingerprint']))
 
     def link_suggestion(self, session_id, suggestion_id, task_id):
-        """Keep existing: link the suggestion to its current open similarity candidate."""
+        """Keep existing: link the suggestion to its current similarity candidate."""
         self._session(session_id)
         summary = self._active_or_raise(session_id)
         rows = self._suggestion_batch(session_id, [suggestion_id], summary=summary)
         row = rows[suggestion_id]
+        current = self._current_similar(session_id, row['task'])
+        with self.conn:
+            self._refresh_similar(suggestion_id, current)
         target = self._task(task_id)
         if (target['session_id'] != session_id or target['status'] != 'open'
-                or target['id'] != row['similar_task_id']):
+                or not similar_task_text(row['task'], target['title'])):
+            raise ValueError('That task no longer matches the suggestion. Review the suggestion again.')
+        if current != task_id:
             raise ValueError('Link the suggestion to its current similar task')
         with self.conn:
             self.conn.execute("UPDATE task_suggestions SET state='linked',task_id=? WHERE id=?",
