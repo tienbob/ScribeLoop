@@ -1265,33 +1265,37 @@ struct MeetingNotesTemplateControls: View {
     private var savedTemplate: NotesTemplateDraft? { ((saved?["generation"] as? Object)?["template"] as? Object).map(NotesTemplateDraft.init) }
     private var pending: Bool { selectionRequest.map { ["pending","dispatching","unknown"].contains(core.requests[$0] ?? "") } ?? false }
     var body: some View {
-        VStack(alignment:.leading,spacing:12) {
-            HStack(spacing:12) {
+        VStack(alignment:.leading,spacing:10) {
+            HStack(spacing:10) {
+                Label("Notes template",systemImage:"text.book.closed")
+                    .font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
                 Picker("Notes template",selection:Binding(get:{current?.id ?? "general"},set:{ id in
                     guard let sid = core.selectedID else { return }
                     selectionRequest = core.send(["action":"select_note_template","session_id":sid,"template_id":id])
                 })) {
                     ForEach(choices) { template in Text(template.name).tag(template.id) }
-                }.frame(maxWidth:310).disabled(core.busy || pending || !core.connected || choices.isEmpty || current == nil)
+                }.labelsHidden()
+                    .disabled(core.busy || pending || !core.connected || choices.isEmpty || current == nil)
                 Button("Preview") { preview = true }.disabled(current == nil)
                 Spacer(minLength:0)
                 Button(saved == nil ? "Generate notes" : "Regenerate") { generate() }
                     .buttonStyle(.borderedProminent).tint(ScribeTheme.action)
                     .disabled(core.busy || pending || !core.connected || !core.accepted || core.revision == 0 || core.summaryProvider["configured"] as? Bool != true)
             }
-            Text("Applies to the next notes generation. Existing notes stay saved until new notes succeed.").font(.caption).foregroundStyle(.secondary)
-            if let savedTemplate {
-                Label("Saved notes · \(savedTemplate.name) · v\(savedTemplate.version)",systemImage:"text.book.closed").font(.caption).foregroundStyle(ScribeTheme.accent)
-                if current?.id != savedTemplate.id || current?.version != savedTemplate.version {
-                    Text("The selected template differs from these saved notes. Regenerate to apply it.").font(.caption).foregroundStyle(.secondary)
-                }
-            } else if saved != nil { Label("Saved notes · General / legacy",systemImage:"clock").font(.caption).foregroundStyle(.secondary) }
             if core.summaryID == core.selectedID || (core.activeID == core.selectedID && !(core.detail["notes_generation"] as? Object ?? [:]).isEmpty) {
                 let generation = core.summaryID == core.selectedID ? core.notesGeneration : core.detail["notes_generation"] as? Object ?? [:]
                 let snapshot = generation["template"] as? Object
                 Text("Generating with \(text((snapshot?["definition"] as? Object)?["name"]).isEmpty ? current?.name ?? "saved template" : text((snapshot?["definition"] as? Object)?["name"])) · settings are fixed for this run.").font(.caption).foregroundStyle(ScribeTheme.accent)
+            } else if let savedTemplate {
+                Label("Saved notes · \(savedTemplate.name) · v\(savedTemplate.version)",systemImage:"text.book.closed").font(.system(size:12,weight:.semibold)).foregroundStyle(ScribeTheme.accent)
+                if current?.id != savedTemplate.id || current?.version != savedTemplate.version {
+                    Text("Regenerate to apply the selected template.").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if saved != nil {
+                Label("Saved notes · General / legacy",systemImage:"clock").font(.system(size:12,weight:.semibold)).foregroundStyle(.secondary)
+            } else {
+                Text("The selected template applies to your next notes generation.").font(.caption).foregroundStyle(.secondary)
             }
-            Text("\(text(core.summaryProvider["provider"])) · \(text(core.summaryProvider["model"])) · \(text(core.summaryProvider["endpoint"]))").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
         }.notebookCard()
         .sheet(isPresented:$preview) {
             VStack(alignment:.leading,spacing:18) {

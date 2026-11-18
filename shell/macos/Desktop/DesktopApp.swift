@@ -491,7 +491,6 @@ struct Notebook: View {
         Button("Rename conversation…",systemImage:"pencil") { renaming = row }.disabled(core.busy)
         Button("Link calendar event…",systemImage:"calendar") { calendarConversation = row; showCalendar = true }
         Divider()
-        Button("Generate summary") { summarize(row) }.disabled(core.busy || core.revision == 0 || !core.accepted || core.summaryProvider["configured"] as? Bool != true)
         Button("Export Markdown…") { core.send(["action":"export_markdown","session_id":row.id,"revision":core.revision]) }.disabled(core.revision == 0)
         Button("Share by email…",systemImage:"envelope") { emailSharing = EmailSharingContext(conversation:row,detail:core.detail) }.disabled(!canShare(row))
         Button("People…") { core.send(["action":"people_page"]); showPeople = true }
@@ -569,7 +568,7 @@ struct Notebook: View {
     }
     private var notes: some View {
         ScrollView {
-            VStack(alignment:.leading,spacing:22) {
+            VStack(alignment:.leading,spacing:14) {
                 MeetingNotesTemplateControls(core:core) { if let row = core.selected { summarize(row) } }
                 if core.summaryID == core.selectedID { Label("Preparing cited notes…",systemImage:"sparkles").foregroundStyle(.secondary); ProgressView() }
                 if let saved = core.detail["summary"] as? Object, let summary = saved["summary"] as? Object {
