@@ -278,6 +278,17 @@ struct PreferencesSaveProgress {
     @Published var agreement: Object = [:]
     @Published var people: [Record] = []
     @Published var nextPeopleOffset: Int?
+    @Published var showTasks = false
+    @Published var taskRows: [Record] = []
+    @Published var nextTaskOffset: Int?
+    @Published var taskCounts: Object = [:]
+    @Published var taskStatus = "open"
+    @Published var taskOwner: String?
+    @Published var taskDue: String?
+    @Published var taskLoading = false
+    @Published var carryover: [Record] = []
+    @Published var cardTaskRows: [Record] = []
+    @Published var cardTaskNextOffset: Int?
     @Published var activeID: String?
     @Published var recordingPaused = false
     @Published var processingID: String?
@@ -326,6 +337,9 @@ struct PreferencesSaveProgress {
     private var refreshTask: Task<Void,Never>?
     private var stopping = false
     private var pageRequest: String?
+    private var taskRequest: String?
+    private var cardTaskRequest: String?
+    private var midnightTimer: Timer?
     private var completion: (() -> Void)?
     let playback = MeetingPlayback()
     private var player: AVAudioPlayer?
@@ -434,6 +448,11 @@ struct PreferencesSaveProgress {
     }
     func start() {
         guard !running else { return }
+        scheduleMidnight()
+        NotificationCenter.default.addObserver(forName:NSApplication.didBecomeActiveNotification,
+            object:nil, queue:.main) { [weak self] _ in Task { @MainActor in self?.overdueDayChanged() } }
+        NotificationCenter.default.addObserver(forName:.NSSystemTimeZoneDidChange,
+            object:nil, queue:.main) { [weak self] _ in Task { @MainActor in self?.overdueDayChanged() } }
         captureAccessReady = nil; captureAccessMessage = nil
         refreshMeetingAudioPermission()
         clearConnection(); port = nil; buffer = Data(); boot = ""; stopping = false
@@ -536,7 +555,7 @@ struct PreferencesSaveProgress {
         guard connected, let ws = socket else { message = "Core is disconnected. Reconnect before choosing an action."; return nil }
         let action = text(command["action"])
         if ["delete","reprocess","recover","resume"].contains(action) { stopAudio() }
-        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence","search_meetings","note_templates"]
+        let reads = ["desktop_snapshot","history_page","meeting_page","request_status","people_page","audio_info","audio_window","check_capture_access","ask_history","ask_evidence","search_meetings","note_templates","tasks_page","task_carryover"]
         let isRead = reads.contains(action)
         let emergency = ["stop","stop_recording","revoke_agreement","cancel_ask","cancel_search"].contains(action)
         if !isRead && !emergency && mutationIDs.contains(where: { requests[$0] == "unknown" || requests[$0] == "dispatching" || requests[$0] == "pending" }) {
@@ -555,7 +574,9 @@ struct PreferencesSaveProgress {
         do {
             let envelope: Object = ["protocol":2,"request_id":id,"command":command]
             let bytes = try JSONSerialization.data(withJSONObject:envelope)
-            guard bytes.count <= (action == "save_note_templates" ? 1_000_000 : 12288) else { throw CocoaError(.coderInvalidValue) }
+            guard bytes.count <= (action == "save_note_templates" ? 1_000_000
+                                  : action == "accept_task_suggestions" ? 512_000 : 12288)
+            else { throw CocoaError(.coderInvalidValue) }
             if !isRead { requests[id] = "pending"; mutationIDs.insert(id) }
             if emergency { emergencyRequests[action] = id }
             Task { [weak self] in
@@ -824,9 +845,31 @@ struct PreferencesSaveProgress {
             if kind == "transcription_error" { streamingProgress = [:] }
             message = text(v["message"]); reloadSoon()
         case "reconnect_required": reconnect()
+        case "tasks_page":
+            if text(v["response_to"]) == cardTaskRequest {
+                cardTaskRequest = nil
+                cardTaskRows += objects(v["tasks"])
+                cardTaskNextOffset = v["next_offset"] as? Int
+                return
+            }
+            guard text(v["response_to"]) == taskRequest else { return }
+            taskRequest = nil
+            let rows = objects(v["tasks"])
+            if (v["offset"] as? NSNumber)?.intValue == 0 { taskRows = rows } else { taskRows += rows }
+            nextTaskOffset = v["next_offset"] as? Int
+            taskCounts = v["counts"] as? Object ?? [:]
+            taskLoading = false
+        case "task_carryover":
+            if text(v["session_id"]) == selectedID { carryover = objects(v["candidates"]) }
         case "invalidate":
+            // Task and people changes in any meeting refresh an open global Tasks
+            // sheet and recheck the selected meeting's carryover; detail refreshes
+            // stay gated on the selected meeting.
+            if showTasks { loadTasks(reset:true) }
+            loadCarryover()
             guard text(v["session_id"]).isEmpty || text(v["session_id"]) == selectedID else { return }
             detail = [:]; partials = [:]; navigationPending = false
+            resetMeetingTaskPaging()
             loadPage(-1); send(["action":"people_page"])
         default: if ["audio_state","notes","rolling_notes","recovery_complete","speakers_corrected"].contains(kind) { reloadSoon() }
         }
@@ -846,7 +889,50 @@ struct PreferencesSaveProgress {
         if let index = sessions.firstIndex(where: { $0.id == row.id }) { sessions[index] = row }
         else { sessions.insert(row,at:0) }
     }
-    func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1) }
+    func select(_ id: String) { selectedID = id; detail = [:]; partials = [:]; stopAudio(); loadPage(-1); carryover = []; resetMeetingTaskPaging(); loadCarryover() }
+    /// Global Tasks sheet. Any task/meeting/people change refreshes it, and the
+    /// day rollover re-evaluates overdue badges without waiting for a reload.
+    func loadTasks(reset: Bool = true) {
+        guard connected, showTasks else { return }
+        if reset { nextTaskOffset = nil; taskLoading = true }
+        var command: Object = ["action":"tasks_page","status":taskStatus]
+        if let owner = taskOwner, !owner.isEmpty { command["owner_person_id"] = owner }
+        if let due = taskDue, !due.isEmpty { command["due"] = due }
+        if !reset, let offset = nextTaskOffset { command["offset"] = offset }
+        taskRequest = send(command)
+    }
+    func setTaskFilter(status: String? = nil, owner: String?? = nil, due: String?? = nil) {
+        if let status { taskStatus = status }
+        if let owner { taskOwner = owner }
+        if let due { taskDue = due }
+        loadTasks(reset:true)
+    }
+    func loadCarryover() {
+        guard connected, let selectedID else { carryover = []; return }
+        send(["action":"task_carryover","session_id":selectedID])
+    }
+    func resetMeetingTaskPaging() {
+        cardTaskRows = []; cardTaskNextOffset = nil; cardTaskRequest = nil
+    }
+    func loadMoreMeetingTasks() {
+        guard connected, let selectedID, let offset = cardTaskNextOffset else { return }
+        cardTaskRequest = send(["action":"tasks_page","session_id":selectedID,
+                                "status":"all","offset":offset])
+    }
+    func overdueDayChanged() {
+        scheduleMidnight()
+        guard connected else { return }
+        if showTasks { loadTasks(reset:true) }
+        if selectedID != nil { detail = [:]; loadPage(-1); loadCarryover() }
+    }
+    func scheduleMidnight() {
+        midnightTimer?.invalidate()
+        guard let next = Calendar.current.nextDate(after:Date(),
+            matching:DateComponents(hour:0,minute:0,second:0), matchingPolicy:.nextTime) else { return }
+        midnightTimer = Timer.scheduledTimer(withTimeInterval: next.timeIntervalSinceNow+1, repeats:false) { [weak self] _ in
+            Task { @MainActor in self?.overdueDayChanged() }
+        }
+    }
     func cancelSearch(clear:Bool = false) {
         let wasLoading=searchLoading
         searchRequest=nil; discardSearchResponse=true; searchLoading=false

@@ -240,6 +240,7 @@ struct Notebook: View {
     @State private var tab = "Notes"
     @State private var confirmed: String?
     @State private var renaming: Record?
+    @State private var taskEditor: TaskEditorContext?
     private let paper = ScribeTheme.canvas
     var candidates: [Record] { objects(core.discovery["candidates"]).filter { $0.raw["selectable"] as? Bool == true } }
     var body: some View {
@@ -258,6 +259,8 @@ struct Notebook: View {
                 Button { calendarConversation = nil; showCalendar = true } label: { Label("Calendar",systemImage:"calendar").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                 Button { showSearch = true } label: { Label("Search",systemImage:"magnifyingglass").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .keyboardShortcut("f",modifiers:.command).disabled(!core.accepted || !core.connected || core.busy)
+                Button { core.showTasks = true } label: { Label("Tasks",systemImage:"checklist").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
+                    .disabled(!core.accepted || !core.connected)
                 Button { askEntry="all"; showAsk = true } label: { Label("Ask across meetings",systemImage:"sparkles").frame(maxWidth:.infinity) }.buttonStyle(.bordered)
                     .disabled(!core.accepted || !core.connected || core.busy || !core.askHybridEnabled || core.summaryProvider["configured"] as? Bool != true)
                     .keyboardShortcut("k",modifiers:.command)
@@ -449,6 +452,13 @@ struct Notebook: View {
         .sheet(isPresented:$recording) { RecordingReview(core:core,candidate:candidate,initialCapture:retryCapture) }
         .sheet(item:$preferencesRequest) { destination in Preferences(core:core,calendar:calendar,initialPage:destination.id).frame(width:650,height:720) }
         .sheet(isPresented:$showPeople) { PeopleView(core:core).frame(width:650,height:680) }
+        .sheet(isPresented:$core.showTasks) {
+            MeetingTasksView(core:core) { meetingID in
+                core.showTasks = false
+                core.select(meetingID)
+                tab = "Notes"
+            }
+        }
         .sheet(isPresented:$showSearch) {
             MeetingSearchView(core:core) { result in
                 showSearch=false
@@ -473,7 +483,7 @@ struct Notebook: View {
         .alert("Delete this conversation permanently?",isPresented:Binding(get:{confirmed != nil},set:{ if !$0 { confirmed = nil } })) {
             Button("Cancel",role:.cancel) { confirmed = nil }
             Button("Delete conversation",role:.destructive) { if let id = confirmed { core.send(["action":"delete","session_id":id,"confirmed":true]); confirmed = nil } }
-        } message: { Text("\(core.sessions.first(where: { $0.id == confirmed })?.text("title") ?? "This conversation") and its audio, transcript and notes will be permanently deleted.") }
+        } message: { Text("\(core.sessions.first(where: { $0.id == confirmed })?.text("title") ?? "This conversation") and its audio, transcript, notes and linked tasks will be permanently deleted.") }
     }
     private var agreementView: some View {
         VStack(alignment:.leading,spacing:12) {
@@ -506,6 +516,22 @@ struct Notebook: View {
     private func summarize(_ row: Record) {
         core.send(["action":"summarize","session_id":row.id,"revision":core.revision,
             "provider":text(core.summaryProvider["provider"]),"model":text(core.summaryProvider["model"]),"text_consent":true])
+    }
+    private var taskCountsAll: Int {
+        (core.detail["task_counts"] as? Object)?["all"] as? Int ?? 0
+    }
+    private func keepExisting(_ suggestion: Record) {
+        guard let sid = core.selectedID, !suggestion.text("similar_task_id").isEmpty else { return }
+        core.send(["action":"link_task_suggestion","session_id":sid,
+                   "suggestion_id":suggestion.id,"task_id":suggestion.text("similar_task_id")])
+    }
+    private func dismissSuggestion(_ suggestion: Record) {
+        guard let sid = core.selectedID else { return }
+        core.send(["action":"dismiss_task_suggestions","session_id":sid,"suggestion_ids":[suggestion.id]])
+    }
+    private func acceptCarryover(_ source: Record) {
+        guard let sid = core.selectedID else { return }
+        core.send(["action":"accept_task_carryover","session_id":sid,"source_task_id":source.id])
     }
     private var transcript: some View {
         VStack(spacing:0) {
@@ -574,7 +600,13 @@ struct Notebook: View {
                 if let saved = core.detail["summary"] as? Object, let summary = saved["summary"] as? Object {
                     HStack { Label("CONVERSATION NOTES",systemImage:"text.alignleft").font(.system(size:10,weight:.semibold)).tracking(1.1); Spacer(); Text("\(text(saved["provider"])) · Revision \((saved["revision"] as? Int) ?? 0)").font(.caption) }.foregroundStyle(.secondary)
                     if saved["stale"] as? Bool == true { Text("These notes are outdated. Generate a summary for the current transcript.").foregroundStyle(.orange) }
-                    CitedNotes(summary:summary,presentation:saved["presentation"] as? [Object]) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
+                    CitedNotes(summary:summary,presentation:saved["presentation"] as? [Object],
+                               suggestions:objects(core.detail["suggestions"]),
+                               review:{ suggestion,allowSimilar in taskEditor = TaskEditorContext(suggestion:suggestion,task:nil,allowSimilar:allowSimilar) },
+                               linkExisting:{ suggestion in keepExisting(suggestion) },
+                               dismiss:{ suggestion in dismissSuggestion(suggestion) })
+                    { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
+                    Text("Tasks keep their edits when notes regenerate.").font(.caption).foregroundStyle(.secondary)
                 } else if let rolling = core.detail["rolling"] as? Object, let summary = rolling["summary"] as? Object {
                     Text("Section notes · provisional").font(.headline)
                     CitedNotes(summary:summary) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
@@ -583,8 +615,21 @@ struct Notebook: View {
                     Text(core.busy ? "Your transcript is saved as words arrive. Notes follow when the recording ends." : "Notes appear after a recorded conversation. Configure your summary provider in Preferences, or generate notes from a saved transcript.").foregroundStyle(.secondary)
                     if !text(core.detail["notes"]).isEmpty { Text(verbatim:text(core.detail["notes"])).textSelection(.enabled) }
                 }
+                if !core.carryover.isEmpty {
+                    CarryoverCard(core:core) { source in acceptCarryover(source) }
+                }
+                if !objects(core.detail["tasks"]).isEmpty || taskCountsAll > 0 {
+                    MeetingTasksCard(core:core,
+                        review:{ suggestion,allowSimilar in taskEditor = TaskEditorContext(suggestion:suggestion,task:nil,allowSimilar:allowSimilar) },
+                        edit:{ task in taskEditor = TaskEditorContext(suggestion:nil,task:task,allowSimilar:false) },
+                        create:{ taskEditor = TaskEditorContext(suggestion:nil,task:nil,allowSimilar:false) })
+                    { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
+                }
                 Label("Review notes against their sources. Speaker names are manual labels.",systemImage:"checkmark.shield").font(.caption).foregroundStyle(.secondary).padding(.top,8)
             }.padding(28).frame(maxWidth:850,alignment:.leading)
+        }
+        .sheet(item:$taskEditor) { context in
+            TaskEditorSheet(core:core,context:context) { anchor in tab = "Transcript"; core.loadPage(0,anchor:anchor) }
         }
     }
 }
@@ -1466,7 +1511,12 @@ struct RecordingReview: View {
 struct CitedNotes: View {
     let summary: Object
     var presentation: [Object]? = nil
+    var suggestions: [Record] = []
+    var review: ((Record, Bool) -> Void)? = nil
+    var linkExisting: ((Record) -> Void)? = nil
+    var dismiss: ((Record) -> Void)? = nil
     let citation: (String) -> Void
+    @State private var showDismissed = false
     var body: some View {
         VStack(alignment:.leading,spacing:22) {
             ForEach(sections,id:\.key) { section in
@@ -1479,7 +1529,14 @@ struct CitedNotes: View {
                     let rows = summary[section.key] as? [Object] ?? []
                     if !rows.isEmpty {
                         Text(section.label.uppercased()).font(.system(size:11,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary).padding(.top,8)
-                        ForEach(Array(rows.enumerated()),id:\.offset) { _, row in item(row) }
+                        ForEach(Array(rows.enumerated()),id:\.offset) { index, row in
+                            item(row)
+                            if section.key == "action_items", review != nil,
+                               let suggestion = self.suggestion(index) {
+                                reviewStrip(suggestion)
+                            }
+                        }
+                        if section.key == "action_items", review != nil { dismissedFooter }
                     }
                 }
             }
@@ -1488,6 +1545,43 @@ struct CitedNotes: View {
     private var sections: [(key:String,label:String)] {
         if let presentation { return presentation.map { (text($0["key"]),text($0["label"])) } }
         return [("overview","At a glance"),("key_points","Key points"),("decisions","Decisions"),("action_items","Action items"),("open_questions","Open questions"),("uncertainties","Uncertainties")]
+    }
+    private func suggestion(_ ordinal: Int) -> Record? {
+        suggestions.first { $0.int("ordinal") == ordinal }
+    }
+    private var dismissedCount: Int { suggestions.filter { $0.text("state") == "dismissed" }.count }
+    @ViewBuilder private var dismissedFooter: some View {
+        if dismissedCount > 0 {
+            Button(showDismissed ? "Hide" : "\(dismissedCount) dismissed suggestion\(dismissedCount == 1 ? "" : "s") · Show") {
+                showDismissed.toggle()
+            }.font(.caption).buttonStyle(.borderless).foregroundStyle(.secondary)
+        }
+    }
+    @ViewBuilder private func reviewStrip(_ suggestion: Record) -> some View {
+        let state = suggestion.text("state")
+        if state != "dismissed" || showDismissed {
+            HStack(spacing:8) {
+                switch state {
+                case "linked", "accepted":
+                    Label("In tasks",systemImage:"checkmark.circle").font(.caption).foregroundStyle(.secondary)
+                case "dismissed":
+                    Text("Dismissed").font(.caption).foregroundStyle(.secondary)
+                default:
+                    if !suggestion.text("similar_task_id").isEmpty {
+                        Text("Similar to an existing task").font(.caption).foregroundStyle(.secondary)
+                        Button("Keep existing") { linkExisting?(suggestion) }
+                            .buttonStyle(.borderless).font(.caption)
+                        Button("Add anyway") { review?(suggestion,true) }
+                            .buttonStyle(.borderless).font(.caption)
+                    } else {
+                        Button("Add to tasks") { review?(suggestion,false) }
+                            .buttonStyle(.borderless).font(.caption)
+                        Button("Dismiss") { dismiss?(suggestion) }
+                            .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.accessibilityElement(children:.contain)
+        }
     }
     private func item(_ row: Object) -> some View {
         VStack(alignment:.leading,spacing:8) {
@@ -1509,6 +1603,453 @@ struct CitedNotes: View {
 }
 
 
+struct TaskEditorContext: Identifiable {
+    let id = UUID()
+    let suggestion: Record?
+    let task: Record?
+    let allowSimilar: Bool
+}
+
+struct TaskEditorSheet: View {
+    @ObservedObject var core:DesktopClient
+    let context:TaskEditorContext
+    let citation:(String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var ownerLabel = ""
+    @State private var ownerPerson: Record?
+    @State private var hasOwnerPerson = false
+    @State private var hasDue = false
+    @State private var due = Date()
+    @State private var status = "open"
+    @State private var ownerDirty = false
+    @State private var dueDirty = false
+    private var editing: Bool { context.task != nil }
+    var body: some View {
+        VStack(alignment:.leading,spacing:14) {
+            Text(editing ? "Edit task" : "New task").font(.system(size:22,weight:.semibold,design:.serif))
+            VStack(alignment:.leading,spacing:6) {
+                Text("TITLE").font(.system(size:10,weight:.semibold)).tracking(1.1).foregroundStyle(.secondary)
+                TextField("What needs to happen",text:$title)
+                    .textFieldStyle(.roundedBorder).accessibilityLabel("Task title")
+            }
+            VStack(alignment:.leading,spacing:6) {
+                Text("OWNER").font(.system(size:10,weight:.semibold)).tracking(1.1).foregroundStyle(.secondary)
+                HStack {
+                    TextField("Not stated",text:$ownerLabel)
+                        .textFieldStyle(.roundedBorder).disabled(hasOwnerPerson)
+                        .onChange(of:ownerLabel) { _ in ownerDirty = true }
+                        .accessibilityLabel("Task owner name")
+                    if hasOwnerPerson, let person = ownerPerson {
+                        Label(person.text("canonical_name").isEmpty ? "Named person" : person.text("canonical_name"),
+                              systemImage:"person.crop.circle").font(.caption)
+                        Button("Clear") { hasOwnerPerson = false; ownerPerson = nil; ownerDirty = true }
+                            .buttonStyle(.borderless).font(.caption)
+                    } else {
+                        Menu("Person…") {
+                            ForEach(core.people) { person in
+                                Button(person.text("canonical_name").isEmpty ? "Unnamed person" : person.text("canonical_name")) {
+                                    ownerPerson = person; hasOwnerPerson = true; ownerDirty = true
+                                }
+                            }
+                            if core.people.isEmpty { Button("No named people yet") {}.disabled(true) }
+                        }.fixedSize()
+                    }
+                }
+                Text("Leave empty when nobody was named. People are chosen explicitly; names are never matched automatically.").font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment:.leading,spacing:6) {
+                Toggle("Due date",isOn:$hasDue.animation())
+                    .onChange(of:hasDue) { _ in dueDirty = true }
+                if hasDue {
+                    DatePicker("Due",selection:$due,displayedComponents:.date)
+                        .onChange(of:due) { _ in dueDirty = true }
+                        .accessibilityLabel("Task due date")
+                }
+            }
+            if editing {
+                Picker("Status",selection:$status) {
+                    Text("Open").tag("open"); Text("Done").tag("done"); Text("Dismissed").tag("dismissed")
+                }.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Task status")
+            }
+            if let suggestion = context.suggestion, !context.allowSimilar,
+               !suggestion.text("similar_task_id").isEmpty {
+                Text("This suggestion is similar to an existing task. Saving adds a separate task.").font(.caption).foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(editing ? "Save" : "Add task") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || core.busy)
+            }
+        }.padding(24).frame(width:460)
+        .onAppear(perform:prefill)
+    }
+    private func prefill() {
+        if let task = context.task {
+            title = task.text("title")
+            status = task.text("status").isEmpty ? "open" : task.text("status")
+            ownerLabel = task.text("owner_label")
+            hasDue = !task.text("due_date").isEmpty
+            if let parsed = dueDate(task.text("due_date")) { due = parsed } else { hasDue = false }
+        } else if let suggestion = context.suggestion {
+            title = suggestion.text("task")
+            ownerLabel = suggestion.text("owner")
+            if let parsed = dueDate(suggestion.text("due")) { due = parsed; hasDue = true } else { hasDue = false }
+        }
+    }
+    private func dueDate(_ value:String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"; formatter.locale = Locale(identifier:"en_US_POSIX")
+        return formatter.date(from:value)
+    }
+    private func dueText() -> String? {
+        guard hasDue else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"; formatter.locale = Locale(identifier:"en_US_POSIX")
+        return formatter.string(from:due)
+    }
+    private func save() {
+        let cleanTitle = title.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard let sid = core.selectedID else { dismiss(); return }
+        let dueValue: Any? = dueDirty ? (dueText() as Any?) : nil
+        if let task = context.task {
+            var command:Object = ["action":"update_task","task_id":task.id,"title":cleanTitle]
+            if ownerDirty {
+                if hasOwnerPerson, let person = ownerPerson { command["owner_person_id"] = person.id }
+                else if !ownerLabel.trimmingCharacters(in:.whitespaces).isEmpty { command["owner_label"] = ownerLabel }
+                else { command["clear_owner"] = true }
+            }
+            if dueDirty { if let value = dueValue as? String { command["due_date"] = value } else { command["clear_due"] = true } }
+            if status != task.text("status") { command["status"] = status }
+            core.send(command)
+        } else if let suggestion = context.suggestion {
+            var item:Object = ["suggestion_id":suggestion.id,"title":cleanTitle]
+            if ownerDirty || hasOwnerPerson {
+                item["owner"] = ownerPayload() as Any?
+            }
+            if dueDirty || !suggestion.text("due").isEmpty {
+                item["due_date"] = dueText() as Any?
+            }
+            if context.allowSimilar { item["allow_similar"] = true }
+            core.send(["action":"accept_task_suggestions","session_id":sid,"items":[item]])
+        } else {
+            var command:Object = ["action":"create_task","session_id":sid,"title":cleanTitle]
+            if hasOwnerPerson, let person = ownerPerson { command["owner_person_id"] = person.id }
+            else if !ownerLabel.trimmingCharacters(in:.whitespaces).isEmpty { command["owner_label"] = ownerLabel }
+            if let value = dueText() { command["due_date"] = value }
+            core.send(command)
+        }
+        dismiss()
+    }
+    private func ownerPayload() -> Any? {
+        if hasOwnerPerson, let person = ownerPerson { return ["person_id":person.id] }
+        let label = ownerLabel.trimmingCharacters(in:.whitespacesAndNewlines)
+        return label.isEmpty ? nil : ["label":label]
+    }
+}
+func ownerDisplay(_ task:Record, people:[Record]) -> String {
+    if task.int("owner_removed") == 1 { return "Owner removed" }
+    let label = task.text("owner_label")
+    if !label.isEmpty { return label }
+    if !task.text("owner_person_id").isEmpty {
+        if let person = people.first(where: { $0.id == task.text("owner_person_id") }) {
+            let name = person.text("canonical_name")
+            if !name.isEmpty { return name }
+        }
+        return "Named person"
+    }
+    return "Not stated"
+}
+func dueDisplay(_ task:Record) -> String {
+    task.text("due_date").isEmpty ? "No due date" : task.text("due_date")
+}
+struct MeetingTaskRow: View {
+    @ObservedObject var core:DesktopClient
+    let task:Record
+    let citation:(String) -> Void
+    var review:(Record,Bool) -> Void
+    var edit:(Record) -> Void
+    private var open: Bool { task.text("status") == "open" }
+    var body: some View {
+        HStack(alignment:.top,spacing:10) {
+            Button {
+                core.send(["action":"update_task","task_id":task.id,
+                           "status":open ? "done" : "open"])
+            } label: {
+                Image(systemName:task.text("status") == "done" ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(task.text("status") == "done" ? ScribeTheme.accent : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(task.text("status") == "done" ? "Mark task open" : "Mark task done")
+            VStack(alignment:.leading,spacing:4) {
+                Text(task.text("title")).font(.system(size:14)).lineSpacing(4)
+                    .strikethrough(task.text("status") == "done").textSelection(.enabled)
+                HStack(spacing:8) {
+                    Text("Owner: \(ownerDisplay(task,people:core.people))").font(.caption).foregroundStyle(.secondary)
+                    Text("Due: \(dueDisplay(task))").font(.caption).foregroundStyle(.secondary)
+                    if task.int("overdue") == 1 {
+                        Label("Overdue",systemImage:"exclamationmark.circle").font(.caption).foregroundStyle(ScribeTheme.warning)
+                    }
+                    Text(originLabel(task.text("origin"))).font(.caption2).foregroundStyle(.secondary)
+                    if task.text("status") == "dismissed" { Text("Dismissed").font(.caption2).foregroundStyle(.secondary) }
+                }
+                sourceChips
+            }
+            Spacer(minLength:0)
+            VStack(alignment:.trailing,spacing:4) {
+                Button { edit(task) } label: { Label("Edit",systemImage:"pencil") }
+                    .buttonStyle(.borderless).font(.caption)
+                    .accessibilityLabel("Edit task \(task.text("title"))")
+                Button(role:.destructive) {
+                    core.send(["action":"delete_task","task_id":task.id])
+                } label: { Label("Delete",systemImage:"trash") }
+                    .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityLabel("Delete task \(task.text("title"))")
+            }
+        }
+        .padding(.vertical,4)
+    }
+    private func originLabel(_ origin:String) -> String {
+        switch origin {
+        case "manual": return "Manual"
+        case "carryover": return "Carried over"
+        default: return "From notes"
+        }
+    }
+    @ViewBuilder private var sourceChips: some View {
+        let ids = task.raw["source_segment_ids"] as? [String] ?? []
+        if !ids.isEmpty {
+            ViewThatFits(in:.horizontal) {
+                HStack(spacing:6) { chips(ids) }
+                VStack(alignment:.leading,spacing:4) { chips(ids) }
+            }
+        }
+    }
+    @ViewBuilder private func chips(_ ids:[String]) -> some View {
+        ForEach(Array(ids.enumerated()),id:\.offset) { index, id in
+            Button { citation(id) } label: { Label("Source \(index+1)",systemImage:"arrow.up.right").font(.system(size:10,weight:.medium)).padding(.horizontal,7).padding(.vertical,3) }
+                .buttonStyle(.borderless).foregroundStyle(ScribeTheme.accent)
+                .background(ScribeTheme.subtle,in:Capsule()).accessibilityLabel("Task source \(index+1)")
+        }
+    }
+}
+/// Open tasks from earlier meetings with the same name; suggested, never asserted.
+struct CarryoverCard: View {
+    @ObservedObject var core:DesktopClient
+    var accept:(Record) -> Void
+    private var earlierTitle: String {
+        core.carryover.first?.text("meeting_title") ?? ""
+    }
+    var body: some View {
+        VStack(alignment:.leading,spacing:8) {
+            Label("Open tasks from earlier “\(earlierTitle)” meetings (\(core.carryover.count))",
+                  systemImage:"arrow.uturn.forward")
+                .font(.system(size:10,weight:.semibold)).tracking(1.1).foregroundStyle(ScribeTheme.accent)
+            ForEach(core.carryover) { source in
+                HStack(alignment:.top,spacing:10) {
+                    VStack(alignment:.leading,spacing:2) {
+                        Text(source.text("title")).font(.system(size:13))
+                        Text("\(source.text("meeting_title")) · \(dueDisplay(source))")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength:0)
+                    Button("Bring into this meeting") { accept(source) }
+                        .buttonStyle(.bordered).font(.caption)
+                        .disabled(!core.connected || core.busy)
+                        .accessibilityLabel("Bring task \(source.text("title")) into this meeting")
+                }
+            }
+            Text("Carrying a task copies it here. It does not mean the commitment was repeated or approved in this meeting.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(14).background(ScribeTheme.subtle,in:RoundedRectangle(cornerRadius:10))
+    }
+}
+/// Per-meeting Tasks card below the notes; the first page comes with the
+/// meeting read and deeper pages load on demand through the scoped read.
+struct MeetingTasksCard: View {
+    @ObservedObject var core:DesktopClient
+    var review:(Record,Bool) -> Void
+    var edit:(Record) -> Void
+    var create:() -> Void
+    let citation:(String) -> Void
+    @State private var filter = "open"
+    private var rows: [Record] {
+        let base = objects(core.detail["tasks"]) + core.cardTaskRows
+        switch filter {
+        case "open": return base.filter { $0.text("status") == "open" }
+        case "done": return base.filter { $0.text("status") == "done" }
+        default: return base
+        }
+    }
+    private var counts: Object { core.detail["task_counts"] as? Object ?? [:] }
+    private var nextOffset: Int? {
+        core.cardTaskRows.isEmpty ? core.detail["tasks_next_offset"] as? Int : core.cardTaskNextOffset
+    }
+    var body: some View {
+        VStack(alignment:.leading,spacing:10) {
+            HStack(spacing:10) {
+                Label("TASKS",systemImage:"checklist").font(.system(size:10,weight:.semibold)).tracking(1.1).foregroundStyle(.secondary)
+                Text("\(counts["open"] as? Int ?? 0) open · \(counts["done"] as? Int ?? 0) done").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Picker("Filter",selection:$filter) {
+                    Text("Open").tag("open"); Text("Done").tag("done"); Text("All").tag("all")
+                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth:240)
+                    .accessibilityLabel("Task status filter")
+                Button { create() } label: { Label("Add task",systemImage:"plus") }
+                    .buttonStyle(.borderless).font(.caption)
+                    .disabled(!core.connected || core.busy || !core.accepted)
+            }
+            if rows.isEmpty {
+                Text(filter == "open"
+                    ? "No open tasks. Accept a suggestion above or add one manually."
+                    : "No tasks match this filter.")
+                    .font(.callout).foregroundStyle(.secondary).padding(.vertical,6)
+            } else {
+                ForEach(rows) { task in
+                    MeetingTaskRow(core:core,task:task,citation:citation,review:review,edit:edit)
+                }
+                if nextOffset != nil {
+                    Button("More tasks") { core.loadMoreMeetingTasks() }
+                        .buttonStyle(.borderless).font(.caption).disabled(core.busy)
+                }
+            }
+        }
+        .padding(16).background(ScribeTheme.panel,in:RoundedRectangle(cornerRadius:10))
+        .overlay(RoundedRectangle(cornerRadius:10).stroke(ScribeTheme.border,lineWidth:1))
+    }
+}
+/// Global task list across all meetings, reached from the sidebar like Search.
+struct MeetingTasksView: View {
+    @ObservedObject var core:DesktopClient
+    var openMeeting:(String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(alignment:.leading,spacing:14) {
+            Text("Tasks").font(.system(size:24,weight:.semibold,design:.serif))
+            HStack(spacing:10) {
+                Picker("Status",selection: Binding(
+                    get: { core.taskStatus },
+                    set: { core.setTaskFilter(status:$0) })) {
+                    Text("Open").tag("open"); Text("Done").tag("done"); Text("All").tag("all")
+                    Text("Recently deleted").tag("deleted")
+                }.pickerStyle(.segmented).labelsHidden()
+                    .accessibilityLabel("Task status filter")
+                Menu("Owner") {
+                    Button("Any owner") { core.setTaskFilter(owner:.some(nil)) }
+                    ForEach(core.people) { person in
+                        Button(person.text("canonical_name").isEmpty ? "Unnamed person" : person.text("canonical_name")) {
+                            core.setTaskFilter(owner:.some(person.id))
+                        }
+                    }
+                }.fixedSize()
+                Menu("Due") {
+                    Button("Any date") { core.setTaskFilter(due:.some(nil)) }
+                    Button("Overdue") { core.setTaskFilter(due:.some("overdue")) }
+                    Button("Next 7 days") { core.setTaskFilter(due:.some("next7")) }
+                    Button("Undated") { core.setTaskFilter(due:.some("undated")) }
+                }.fixedSize()
+                Spacer()
+                if core.taskLoading { ProgressView().controlSize(.small) }
+                Button("Refresh") { core.loadTasks(reset:true) }.buttonStyle(.borderless).font(.caption)
+            }
+            if core.taskRows.isEmpty {
+                Text(core.taskStatus == "deleted" ? "No deleted tasks."
+                    : (core.taskStatus == "all" && (core.taskCounts["all"] as? Int ?? 0) == 0
+                        ? "No tasks yet. Open a meeting to accept a suggestion or add one manually."
+                        : "No tasks match these filters."))
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,24)
+            } else {
+                ScrollView {
+                    VStack(alignment:.leading,spacing:8) {
+                        ForEach(core.taskRows) { task in
+                            GlobalTaskRow(core:core,task:task) { meetingID in
+                                dismiss(); openMeeting(meetingID)
+                            }
+                        }
+                        if core.nextTaskOffset != nil {
+                            HStack { Spacer()
+                                Button("Older tasks") { core.loadTasks(reset:false) }
+                                    .buttonStyle(.bordered).font(.caption).disabled(core.busy)
+                                Spacer() }
+                        }
+                    }
+                }
+            }
+            Text("Deleted tasks stay recoverable here. They are removed permanently when their meeting is deleted.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
+        }.padding(24).frame(width:720,height:640)
+        .onAppear { core.send(["action":"people_page"]); core.loadTasks(reset:true) }
+    }
+}
+struct GlobalTaskRow: View {
+    @ObservedObject var core:DesktopClient
+    let task:Record
+    var openMeeting:(String) -> Void
+    var body: some View {
+        HStack(alignment:.top,spacing:10) {
+            Button {
+                if task.text("status") == "deleted" { return }
+                core.send(["action":"update_task","task_id":task.id,
+                           "status":task.text("status") == "done" ? "open" : "done"])
+            } label: {
+                Image(systemName:task.text("status") == "done" ? "checkmark.circle.fill"
+                    : task.text("status") == "deleted" ? "trash" : "circle")
+                    .foregroundStyle(task.text("status") == "done" ? ScribeTheme.accent : .secondary)
+            }
+            .buttonStyle(.borderless).disabled(task.text("status") == "deleted")
+            .accessibilityLabel(task.text("status") == "done" ? "Mark task open" : "Mark task done")
+            VStack(alignment:.leading,spacing:3) {
+                Text(task.text("title")).font(.system(size:14)).lineSpacing(4)
+                    .strikethrough(task.text("status") == "done").textSelection(.enabled)
+                HStack(spacing:8) {
+                    Text("Owner: \(ownerDisplay(task,people:core.people))").font(.caption).foregroundStyle(.secondary)
+                    Text("Due: \(dueDisplay(task))").font(.caption).foregroundStyle(.secondary)
+                    if task.int("overdue") == 1 {
+                        Label("Overdue",systemImage:"exclamationmark.circle").font(.caption).foregroundStyle(ScribeTheme.warning)
+                    }
+                    Text(originLabel).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength:0)
+            VStack(alignment:.trailing,spacing:4) {
+                Button("\(task.text("meeting_title")) · \(meetingDate(task))") {
+                    openMeeting(task.text("session_id"))
+                }.buttonStyle(.borderless).font(.caption).foregroundStyle(ScribeTheme.accent)
+                    .accessibilityLabel("Open meeting \(task.text("meeting_title"))")
+                if task.text("status") == "deleted" {
+                    Button("Restore") { core.send(["action":"restore_task","task_id":task.id]) }
+                        .buttonStyle(.borderless).font(.caption)
+                        .accessibilityLabel("Restore task \(task.text("title"))")
+                } else {
+                    Button(role:.destructive) {
+                        core.send(["action":"delete_task","task_id":task.id])
+                    } label: { Label("Delete",systemImage:"trash") }
+                        .buttonStyle(.borderless).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("Delete task \(task.text("title"))")
+                }
+            }
+        }
+        .padding(.vertical,4)
+    }
+    private var originLabel: String {
+        switch task.text("origin") {
+        case "manual": return "Manual"
+        case "carryover": return "Carried over"
+        default: return "From notes"
+        }
+    }
+    private func meetingDate(_ task:Record) -> String {
+        let seconds = (task.raw["meeting_started_at"] as? NSNumber)?.doubleValue ?? 0
+        guard seconds > 0 else { return "" }
+        return Date(timeIntervalSince1970:seconds/1000).formatted(date:.abbreviated,time:.omitted)
+    }
+}
 @main enum DesktopEntry {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--desktop-smoke") {

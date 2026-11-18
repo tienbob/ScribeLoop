@@ -1,6 +1,7 @@
 # F4 — Action-item tracking: implementation plan
 
-Prepared 18 November 2026 against main `364aa95`. Status: **planning — implementation not started.**
+Prepared 18 November 2026 against main `364aa95`. Status: **slices 1–4 implemented on
+2026-11-18 (core, API, native UI); slice 5 acceptance/closeout remains.**
 Revised 18 November 2026 after code and SQLite contract review; verification
 record and required regression cases are below.
 Requirements: [delivery plan §F4](MEETING_WORKSPACE_DELIVERY_PLAN.md#f4--action-item-tracking).
@@ -453,3 +454,53 @@ schema-26 migration, keeping all existing summary behavior bit-identical until
 reconciliation is wired into `save_grounded_summary` behind its own tests. Do not
 start with the UI: the reconciliation contract is the risk center, and the native
 review strip depends on the suggestion states it emits.
+
+## Slices 1–4 implementation record — 18 November 2026
+
+Implemented on `feature/f4-action-tracking` against `364aa95`.
+
+- **Slice 1 (storage + reconciliation).** Schema 26 adds `tasks` and
+  `task_suggestions` exactly as revised above, including the reserved deleted
+  fingerprint index, the carryover destination index and `owner_removed`. The
+  upgrade seeds suggestions from each meeting's latest summary with the shared
+  idempotent seeder (`storage/tasks.py` `backfill_suggestions`), skipping
+  malformed legacy items with a diagnostic. `save_grounded_summary` seeds
+  suggestions inside its existing transaction; the summary insert is otherwise
+  unchanged.
+- **Slice 2 (core + API).** `TaskStore` covers reconciliation, atomic 1–20 batch
+  accept with edit slots and `allow_similar`, dismissal with fingerprint-wide
+  Undo, Keep-existing linking, manual CRUD with undo and prior-status restore,
+  reserved-identity reacceptance, the 500-task limit, paged filtered reads with
+  counts and due filters, local-date overdue logic, carryover candidates and
+  acceptance with copied provenance, and `forget_owner` cleanup used by
+  `SpeakerRegistry.forget`. Meeting deletion removes suggestions child-first
+  before tasks under `PRAGMA foreign_keys=ON`. The desktop protocol gained
+  `tasks_page`/`task_carryover` reads, `meeting_page` task fields, six mutation
+  commands with receipts and invalidation, and the 512 KB batch allowance in
+  both transport checks.
+- **Slice 3–4 (native UI).** `DesktopClient` gained Tasks state and request
+  tracking for the global sheet and the meeting card, invalidation-driven
+  refreshes for open sheets regardless of the selected meeting, carryover
+  rechecks, midnight/activation/timezone overdue refresh, and the extended
+  transport limit. `DesktopApp` gained the per-suggestion review strip inside
+  `CitedNotes` (Add to tasks / Keep existing / Add anyway / Dismiss with a
+  collapsed dismissed footer), the meeting Tasks card with filters, undo-free
+  one-click done toggling, edit and delete, the carryover card, the shared task
+  editor sheet, and the global Tasks sheet with status/owner/due filters,
+  paging, restore and meeting deep links. The delete-conversation confirmation
+  now names linked tasks.
+- **Verification so far.** `tests/test_tasks.py` (17) and
+  `tests/test_tasks_api.py` (5) cover the required regression cases: populated
+  schema-25 upgrade with fresh/stale/malformed summaries and reopen-stable
+  dispositions; delete→regenerate→reaccept→undo identity reservation; batch
+  duplicate fingerprints, rollback and the 500-task limit; ambiguous review
+  paths; timezone overdue with a patched clock; carryover reservation and
+  source-meeting deletion; person-forgetting across linked, copied, deleted and
+  carryover owners; and protocol receipts, invalidation, filter reads and the
+  Unicode transport bound. Full suite: **1,039 passed, 2 skipped**; ruff clean.
+  Swift parses and `DesktopClient` compiles locally; full SwiftUI type checking
+  and the smoke build still require the hosted toolchain.
+- **Not claimed.** No in-app native check has been recorded, no development
+  build has been installed for user review, and `ACTION_TRACKING_CLOSEOUT.md`
+  does not exist. Slice 5 (acceptance and closeout) remains.
+
