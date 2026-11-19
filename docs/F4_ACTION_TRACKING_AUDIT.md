@@ -344,3 +344,63 @@ meeting read reports unavailable evidence.
 `git diff --check` and Swift frontend parsing passed. This resolves the remaining
 older-source availability finding; it does not claim interactive macOS acceptance
 or change the separate evidence-anchor/revision limitations noted above.
+
+## Zero-tasks triage for a long real conversation — 19 November 2026
+
+The user recorded one quite long conversation and F4 recorded no tasks. Static
+pipeline review plus a new read-only diagnostic; no product code changed.
+
+Chain of custody: notes generation → `save_grounded_summary` validates the output
+and seeds one `task_suggestions` row per well-formed action item inside its own
+transaction (`storage/sessions.py:474-475`, `storage/tasks.py:175-213`) →
+`meeting_page` carries suggestions and tasks → the native review strip and Tasks
+card surface them. Tasks exist only after the user accepts a suggestion.
+
+Zero tasks therefore means the chain broke at or before seeding:
+
+1. **No grounded summary was saved for the meeting:**
+   - the recording was made as "Record transcript only" (`automatic_notes=false`);
+   - the notes provider is missing or unconfigured;
+   - the automatic final summary never ran (processing pending, or failure);
+   - **the explicit-retry trap**: a failed run sets
+     `note_generation_runs.state='failed'` and every subsequent *automatic* run
+     raises `ExplicitRetryRequired('Previous dispatch requires explicit retry')`
+     (`llm/rolling.py:204-208`). One transient provider failure (for example a
+     429 mid-meeting) therefore permanently blocks the automatic final summary
+     until the user presses **Generate notes**, which is the only path that
+     passes `retry=True` (`api/server.py:1359`). The UI shows "Section notes
+     paused … Generate summary can explicitly retry" and the meeting keeps
+     provisional section notes only — which look like notes but never seed tasks.
+2. **A grounded summary exists but `action_items` is empty.** The grounded
+   prompt is deliberately conservative: action items only for explicit future
+   commitments or agreed/requested tasks; capability/architecture discussion is
+   not an assigned task; return an empty array when unsupported
+   (`llm/grounded.py` system rules). A long exploratory or design conversation
+   can legitimately yield zero items. Owners/dates require explicit statements.
+3. **Suggestions exist in `proposed` state but were never accepted.** They are
+   proposals in the Tasks card, not tasks, until explicitly accepted.
+
+Diagnostic: `scripts/inspect_task_pipeline.py` prints read-only per-meeting
+pipeline state (status, end reason, segment count, grounded-summary provider and
+action-item counts, suggestion/task counts, last `summary_outcome` code,
+generation-run states) and a determined verdict per meeting. Safety: refuses
+while the app holds the process lock (verified live — it refused while
+ScribeLoop PID 95520 was running), reads the existing Keychain key without ever
+creating or rotating one, never runs migrations, and executes SELECT statements
+only. Validated end-to-end against a disposable encrypted workspace with a fresh
+Keychain key: JSON fields, counts and the verdict were asserted, and the
+diagnostic key was deleted afterwards.
+
+Run after quitting the app:
+
+```
+.venv/bin/python scripts/inspect_task_pipeline.py --consent-inspect-workspace
+```
+
+Likeliest causes ranked for a long real conversation: (1) the explicit-retry
+trap after a transient section failure; (2) a saved summary with zero action
+items by prompt design; (3) suggestions awaiting review; (4) transcript-only
+recording. The script distinguishes them in one run. Extraction-quality
+improvements for Vietnamese conversations remain a separate, evidence-first
+task; this triage changes no product code.
+
