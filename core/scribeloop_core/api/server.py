@@ -1535,7 +1535,7 @@ def create_app(*, database=None, fixtures=None, backend_factory=None,
                             await ws.close(code=1013)
                             return
                         action = command.get('action') if isinstance(command, dict) else None
-                        if desktop and action in {'note_templates','save_note_templates','select_note_template','stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports'}:
+                        if desktop and action in {'note_templates','save_note_templates','select_note_template','stop','stop_recording','set_recording_paused','save_settings','set_detection','meeting_page','history_page','search_meetings','ask_evidence','ask_history','delete_ask_history','ask_question','cancel_ask','people_page','request_status','name_speaker','audio_info','audio_window','rename_conversation','link_calendar_event','prepare_email_export','discard_email_exports','tasks_page','task_carryover'}:
                             queue.put_nowait({'type':'error','context':'desktop','request_id':dispatch_id,
                                 'message':('Stop could not be confirmed. Reconnect to check the current recording, or quit ScribeLoop to stop capture.'
                                     if action in {'stop','stop_recording'} else

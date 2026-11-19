@@ -1,5 +1,6 @@
 """F4 desktop protocol: bounded task reads, mutations, receipts and invalidation."""
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -217,3 +218,21 @@ def test_missing_required_fields_are_rejected_without_killing_the_connection(wor
     rejected(ws, {'action': 'update_task', 'title': 'Missing task'})
     command(ws, {'action': 'create_task', 'session_id': sid, 'title': 'Still connected'})
     assert call_tasks(app, 'page', session_id=sid)['counts']['all'] == 1
+
+
+def test_task_read_errors_carry_the_request_id_for_client_recovery(workspace):
+    """A failed task read must be correlatable by request ID; the recovery
+    handler clears loading state, so anonymous error events strand the list."""
+    app, _client, ws = workspace
+    make_meeting(app, items=[])
+    request_id = uuid4().hex
+    ws.send_json(envelope({'action': 'tasks_page', 'status': 'open',
+                           'owner_person_id': 'f' * 32}, request=request_id))
+    for _ in range(100):
+        value = ws.receive_json()
+        if value['type'] == 'error':
+            assert value['request_id'] == request_id, \
+                'task read failures must carry their request ID'
+            return
+        assert value['type'] != 'tasks_page'
+    raise AssertionError('error event missing')

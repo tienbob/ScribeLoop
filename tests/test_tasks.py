@@ -318,7 +318,11 @@ def test_upgrade_from_schema_25_backfills_and_preserves_dispositions(store):
                        'provider,model,summary_json,created_at) VALUES (?,?,1,?,?,?,?,?)',
                        (uuid4().hex, broken, 'hash', 'p', 'm',
                         json.dumps({'overview': {'text': 'x', 'segment_ids': []},
-                                    'action_items': [{'owner': 'no task text', 'segment_ids': []}]}),
+                                    'action_items': [
+                                        {'owner': 'no task text', 'segment_ids': []},
+                                        {'task': 'Valid text but hostile fields',
+                                         'owner': {'name': 'Alice'}, 'due': ['tomorrow'],
+                                         'segment_ids': []}]}),
                         store._now()))
     # Simulate reopening a populated schema-25 workspace: drop F4 tables, rewind.
     conn = store.conn

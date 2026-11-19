@@ -3,7 +3,8 @@
 Reviewed commits `a2c0fa4` and `31e3ad1` against base `364aa95` and
 `F4_ACTION_TRACKING_PLAN.md`. Scope: feature correctness, performance and error
 handling. This is an implementation audit, not native UI acceptance. Findings
-below are open; application code was not changed during the audit.
+below record the original audit; application code was not changed during the
+audit. See the recheck below for the status after remediation commit `b3b7bf5`.
 
 ## Findings
 
@@ -202,3 +203,84 @@ verify query plans and growth with realistic regeneration history.
 - Native UI findings were established by source tracing. No interactive macOS
   acceptance session or full native build was performed in this audit. The
   current passing tests do not establish native task-flow correctness.
+
+## Recheck of remediation commit `b3b7bf5`
+
+Most remediation is present, but the feature still has the following open issues.
+The original 12 findings above remain a historical record.
+
+### R1. P2 — Task read errors still cannot reach the new recovery handler
+
+`shell/macos/Desktop/DesktopClient.swift:859`;
+`core/scribeloop_core/api/server.py:1541`
+
+The client now invokes `taskReadFailed` when an error's request ID matches
+`taskRequest`, but the server still omits task commands from its desktop error
+branch. A real WebSocket probe with a nonexistent owner returned a rejected
+receipt followed by an error with `context='replay'` and `request_id=null`. The
+client receipt handler does not handle task-read rejection, so the spinner stays
+active, `taskError` is not set, and the forgotten-owner retry never runs.
+
+Add task commands to request-correlated desktop errors and handle rejected read
+receipts explicitly. Regress the paired wire events and the client loading/filter
+state together, rather than testing each side separately.
+
+### R2. P2 — Cross-meeting evidence still links to deleted source meetings
+
+`shell/macos/Desktop/DesktopApp.swift:1897`
+
+The destination now opens the correct source meeting instead of using its own
+transcript. However, the cross-meeting button is unconditional whenever the stored
+source ID differs from the selected meeting. Carryover intentionally preserves
+that ID after source deletion, so the button still appears and selects a
+nonexistent meeting. It also opens the meeting without a segment anchor, and
+same-meeting chip rendering checks only revision equality, not segment existence.
+
+Resolve source availability server-side or through a dedicated evidence read.
+Hide unavailable evidence and navigate to the actual segment when it resolves.
+Do not treat presence in the paged sidebar history as proof of availability.
+
+### R3. P2 — Transcript paging resets the already-advanced task cursor
+
+`shell/macos/Desktop/DesktopClient.swift:748`
+
+Initializing the task cursor fixed the original inability to load page two.
+However, every `meeting_page` response unconditionally assigns its first-page
+`tasks_next_offset` to `cardTaskNextOffset`, while retaining `cardTaskRows`.
+After loading task rows 201–400, reading another transcript page resets the
+task cursor from 400 to 200. More tasks then appends rows 201–400 again, creating
+duplicate IDs and delaying access to rows 401–500. The same issue can re-enable
+paging after the last task page has loaded.
+
+Initialize the cursor only when replacing/resetting the task collection, or reset
+the collection and cursor together. Regress interleaved transcript/task paging.
+
+### R4. P2 — Malformed legacy owner/due fields can now abort workspace migration
+
+`core/scribeloop_core/storage/tasks.py:188`
+
+Propagating storage failures is correct, but legacy validation still checks only
+task text and segment-list shape. An otherwise readable saved summary whose owner
+is an object passes this check and reaches the INSERT as a Python dict. A
+populated-schema-25 upgrade probe failed with
+`ProgrammingError: Error binding parameter 6: type 'dict' is not supported`.
+Before remediation, the broad catch skipped the row; the narrower error policy
+now exposes this malformed-data path as an upgrade failure.
+
+Validate the full legacy action shape and bounds before SQL binding, skipping
+malformed items with diagnostics while continuing to propagate genuine database
+failures. Cover invalid owner/due types, title bounds and citation-array bounds.
+
+### Recheck verification
+
+- **159 tests passed** across the same 11 test files listed in the original
+  verification, including the five added remediation regressions.
+- The new rollback, stale-ambiguity and missing-required-field regressions pass.
+  Manual-task visibility, explicit JSON-null handling, dismissal recovery and
+  deletion/reconnect refresh changes are present in the native source.
+- A fresh trace for a 200-task meeting overview executed **6 SQL statements**, down
+  from 211. Scoped history indexes are now installed and their query-plan test
+  passes. Carryover responses preserve meeting metadata.
+- Additional synthetic probes exercised actual WebSocket error events and a
+  malformed legacy migration. Remaining native issues were established by source
+  tracing; interactive macOS acceptance was not performed in this recheck.

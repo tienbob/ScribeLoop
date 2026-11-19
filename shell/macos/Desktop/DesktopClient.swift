@@ -745,7 +745,12 @@ struct PreferencesSaveProgress {
                 }
             }
             detail = next
-            cardTaskNextOffset = v["tasks_next_offset"] as? Int
+            // Initialize the meeting-task cursor only from a pristine state.
+            // Transcript pages and merged windows carry an identical task page;
+            // re-syncing here would regress the cursor and duplicate loaded rows.
+            if cardTaskRows.isEmpty && cardTaskNextOffset == nil {
+                cardTaskNextOffset = v["tasks_next_offset"] as? Int
+            }
             finishAdjacentLoad()
             if scrollOnPageResponse || adjacent { pageSerial += 1 }
             upsert(v["session"] as? Object ?? [:])

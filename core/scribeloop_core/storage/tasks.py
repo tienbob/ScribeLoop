@@ -190,7 +190,9 @@ def seed_summary_suggestions(conn, session_id, summary_id, summary):
         owner, due = item.get('owner'), item.get('due')
         if (not isinstance(task_text, str) or not task_text.strip()
                 or not isinstance(segment_ids, list)
-                or not all(isinstance(value, str) for value in segment_ids)):
+                or not all(isinstance(value, str) for value in segment_ids)
+                or not (owner is None or isinstance(owner, str))
+                or not (due is None or isinstance(due, str))):
             log.warning('Skipping malformed action item %s/%s in summary %s',
                         session_id, ordinal, summary_id)
             continue

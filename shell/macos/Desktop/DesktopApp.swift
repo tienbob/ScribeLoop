@@ -1893,10 +1893,13 @@ struct MeetingTaskRow: View {
                     Text("Evidence is from an earlier transcript revision.")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
-            } else {
+            } else if core.sessions.contains(where: { $0.id == source }) {
                 Button("Evidence is in the source meeting") { openEvidence(source) }
                     .buttonStyle(.borderless).font(.caption2).foregroundStyle(ScribeTheme.accent)
                     .accessibilityLabel("Open the meeting that contains this task's evidence")
+            } else {
+                Text("The meeting holding this evidence was deleted.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

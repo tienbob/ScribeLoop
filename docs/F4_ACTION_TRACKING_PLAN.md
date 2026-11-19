@@ -557,3 +557,27 @@ remediation: **1,044 passed, 2 skipped; ruff clean; the fixture preview app
 builds and the desktop smoke passes.** The audit's native-UI caveat stands:
 findings were source-verified, and interactive acceptance remains slice-5 work.
 
+## Follow-up fixes — 18 November 2026
+
+A re-check of the remediation found four gaps, all fixed:
+
+1. **Task read errors lacked the request ID.** `tasks_page` and
+   `task_carryover` were missing from the desktop error set, so their failures
+   fell through to the replay branch with `request_id: None` and the recovery
+   handler could never correlate them. Both actions now emit desktop-scoped
+   errors with their request ID (regression-tested with an explicit request).
+2. **Deleted-source evidence stayed clickable.** The cross-meeting evidence
+   jump now requires the source meeting to exist in the client's session list;
+   deleted sources render explanatory text instead of a button.
+3. **Task pagination could duplicate rows.** The card cursor was re-synced on
+   every meeting read — including transcript pages and merged windows whose
+   task payload resets to the first page — regressing the cursor while
+   appended rows remained. The cursor now initializes only from a pristine
+   state; resets belong to invalidation, selection and deletion.
+4. **Malformed legacy owner/due could block migration.** Non-string owner or
+   due values reached SQL binding and aborted the upgrade. The seeding shape
+   check now requires string-or-null owner/due and skips such items with a
+   diagnostic (regression-tested with an owner object).
+
+Verification: **1,045 passed, 2 skipped; ruff clean; the shell compiles, the
+fixture preview app builds and the desktop smoke passes.**
