@@ -124,6 +124,10 @@ def task_row(row, *, today=None):
             task[key] = row[key]
         except IndexError:
             task[key] = None
+    try:
+        task['source_meeting_exists'] = bool(row['source_meeting_exists'])
+    except IndexError:
+        task['source_meeting_exists'] = False
     raw = task.get('source_segment_ids')
     task['source_segment_ids'] = json.loads(raw) if raw else []
     task['owner_removed'] = bool(task.get('owner_removed'))
@@ -347,9 +351,12 @@ class TaskStore:
         count_where = (' WHERE ' + ' AND '.join(scope)) if scope else ''
         # One joined read and one aggregate keep meeting_page bounded: no
         # per-row meeting lookups and no per-status count queries.
+        # Source availability must come from storage, not paged sidebar history.
         rows = self.conn.execute(
-            f'SELECT t.*, s.title AS meeting_title, s.started_at AS meeting_started_at '
-            f'FROM tasks t JOIN sessions s ON s.id=t.session_id{where} '
+            f'SELECT t.*, s.title AS meeting_title, s.started_at AS meeting_started_at, '
+            f'(evidence_session.id IS NOT NULL) AS source_meeting_exists '
+            f'FROM tasks t JOIN sessions s ON s.id=t.session_id '
+            f'LEFT JOIN sessions evidence_session ON evidence_session.id=t.source_session_id{where} '
             f'ORDER BY {ORDER} LIMIT ? OFFSET ?',
             (*params, *status_params, MAX_PAGE + 1, offset)).fetchall()
         tasks = [task_row(row) for row in rows[:MAX_PAGE]]

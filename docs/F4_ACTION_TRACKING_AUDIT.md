@@ -284,3 +284,63 @@ failures. Cover invalid owner/due types, title bounds and citation-array bounds.
 - Additional synthetic probes exercised actual WebSocket error events and a
   malformed legacy migration. Remaining native issues were established by source
   tracing; interactive macOS acceptance was not performed in this recheck.
+
+## Recheck of follow-up commit `55701ba` — 19 November 2026
+
+**One evidence-navigation issue remains.** R1 is corrected: task-read error events
+now carry the request ID required by the recovery handler, with a protocol
+regression test. R3's unconditional task-cursor reset is removed in the native
+source. R4 is corrected for the invalid owner/due types previously reproduced;
+the malformed-owner migration probe now reaches schema 27 and skips the invalid
+suggestion. These checks do not replace interactive native acceptance.
+
+### R2 follow-up. P2 — Valid older source meetings are incorrectly labelled deleted
+
+`shell/macos/Desktop/DesktopApp.swift:1896`
+
+The new availability check uses `core.sessions.contains` to decide whether to
+render an evidence link. That collection contains only loaded sidebar history,
+initially 30 meetings. A source outside those pages can exist in the database and
+be eligible for carryover, yet its destination row now says “The meeting holding
+this evidence was deleted” and hides navigation.
+
+An isolated probe created a cited source meeting followed by 32 meetings, then
+accepted its task into the latest meeting. The source still existed, the copied
+task retained its correct source ID, and the source was absent from the 30-row
+initial history response. This triggers the false-deleted branch without any
+meeting deletion. Loading older sidebar history would change the result despite
+unchanged underlying evidence.
+
+Use a database-backed evidence availability/read contract that returns resolvable
+source context, including segment/revision where available. Avoid using the
+paged sidebar as an existence check. Cover sources outside loaded history,
+genuinely deleted sources and direct source-segment navigation.
+
+### Verification
+
+- **160 tests passed** across the same 11 test files used in the earlier rechecks.
+- The request-correlated task-read error regression passes; a separate malformed
+  owner-object upgrade probe succeeds and skips the invalid suggestion.
+- The older-source probe demonstrates the mismatch between database existence
+  and sidebar membership. The resulting native branch was verified from source;
+  no interactive macOS acceptance was performed.
+- Application code was not changed; this audit record is the only edit.
+
+## Resolution of the older-source availability issue — 19 November 2026
+
+The remaining paginated-history existence check has been replaced. Task-page
+reads now left-join the evidence meeting by `source_session_id` and return
+`source_meeting_exists`. The native cross-meeting evidence control uses this
+database-backed field instead of `core.sessions`. The task-page query remains
+bounded and adds no per-task request or separate existence query.
+
+A desktop protocol regression creates a cited source, 32 intervening meetings and
+a carryover destination. It verifies that the source is absent from the initial
+30-row sidebar page while both meeting/global task reads report its existence.
+After deleting the actual source, the destination task survives and its next
+meeting read reports unavailable evidence.
+
+**161 tests passed** across the same 11 suites used in prior rechecks. Ruff,
+`git diff --check` and Swift frontend parsing passed. This resolves the remaining
+older-source availability finding; it does not claim interactive macOS acceptance
+or change the separate evidence-anchor/revision limitations noted above.

@@ -567,7 +567,9 @@ A re-check of the remediation found four gaps, all fixed:
    handler could never correlate them. Both actions now emit desktop-scoped
    errors with their request ID (regression-tested with an explicit request).
 2. **Deleted-source evidence stayed clickable.** The cross-meeting evidence
-   jump now requires the source meeting to exist in the client's session list;
+   jump initially checked the client's session list. The 19 November follow-up
+   replaces that paginated-list check with `source_meeting_exists`, resolved by a
+   left join in task-page reads; valid older sources remain available and actually
    deleted sources render explanatory text instead of a button.
 3. **Task pagination could duplicate rows.** The card cursor was re-synced on
    every meeting read — including transcript pages and merged windows whose

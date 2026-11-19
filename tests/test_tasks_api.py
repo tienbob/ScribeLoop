@@ -236,3 +236,39 @@ def test_task_read_errors_carry_the_request_id_for_client_recovery(workspace):
             return
         assert value['type'] != 'tasks_page'
     raise AssertionError('error event missing')
+
+
+def test_carryover_evidence_availability_does_not_depend_on_sidebar_history(workspace):
+    app, _client, ws = workspace
+    source = make_meeting(app, items=[action()])
+    source_task = call_tasks(app, 'accept_suggestions', source, [
+        {'suggestion_id': call_tasks(app, 'suggestions', source)[0]['id']}])[0]
+    run(app, lambda: app.state.store.conn.execute(
+        'UPDATE sessions SET started_at=1 WHERE id=?', (source,)))
+    for _ in range(32):
+        make_meeting(app, title='Other meeting', items=[])
+    destination = make_meeting(app, items=[])
+    copied = call_tasks(app, 'accept_carryover', destination, source_task['id'])
+    history = expect(ws, 'history_page', payload={'action': 'history_page'})
+    assert len(history['sessions']) == 30
+    assert source not in {meeting['id'] for meeting in history['sessions']}
+
+    page = expect(ws, 'meeting_page', payload={
+        'action': 'meeting_page', 'session_id': destination})
+    task = page['tasks'][0]
+    assert task['id'] == copied['id']
+    assert task['source_session_id'] == source
+    assert task['source_segment_ids'] == source_task['source_segment_ids']
+    assert task['source_meeting_exists'] is True
+    global_page = expect(ws, 'tasks_page', payload={'action': 'tasks_page'})
+    assert next(row for row in global_page['tasks']
+                if row['id'] == copied['id'])['source_meeting_exists'] is True
+
+    # The same copied task survives actual source deletion, with unavailable
+    # evidence reported by the database rather than inferred from sidebar pages.
+    run(app, app.state.store.finish_delete, source)
+    page = expect(ws, 'meeting_page', payload={
+        'action': 'meeting_page', 'session_id': destination})
+    assert page['tasks'][0]['id'] == copied['id']
+    assert page['tasks'][0]['source_session_id'] == source
+    assert page['tasks'][0]['source_meeting_exists'] is False
